@@ -1,9 +1,9 @@
 {
-    "compilerOptions": {
-      "module": "commonjs",
-      "target": "es2020",
-      "outDir": "lib",
-      "strict": false
-    },
-    "include": ["src"]
-  }
+  "compilerOptions": {
+    "module": "commonjs",
+    "target": "es2020",
+    "outDir": "lib",
+    "strict": false
+  },
+  "include": ["src"]
+}
