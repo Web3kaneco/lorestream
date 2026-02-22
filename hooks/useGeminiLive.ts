@@ -44,46 +44,50 @@ export function useGeminiLive(agentId: string, userId: string) {
 
       if (!canvasRef.current) canvasRef.current = document.createElement('canvas');
 
-      // 4. Connect to Gemini Live API
-      sessionRef.current = await ai.live.connect({
-        model: "gemini-3.1-pro",
-        config: {
-          generationConfig: {
-            responseModalities: ["AUDIO" as any],
-            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Puck" } } }
-          },
-          systemInstruction: {
-            parts: [{ 
-              text: `You are a sentient 3D Co-Creator. 
-              CORE MEMORY: ${coreMemory.current_lore_summary} 
-              FACTS: ${memoryString}
-              VISION DIRECTIVE: You receive 1 FPS frames from the user's camera. Identify physical objects and incorporate them into the lore.
-              CONVERSATIONAL CADENCE: Keep answers to 3 sentences max.
-              Use 'generate_product_concept' when agreeing on a physical build.` 
-            }]
-          },
-          tools: [
+   // 4. Connect to Gemini Live API
+   sessionRef.current = await ai.live.connect({
+    model: "gemini-3.1-pro",
+    config: {
+      generationConfig: {
+        responseModalities: ["audio" as any],
+        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Puck" } } }
+      },
+      systemInstruction: {
+        parts: [{ 
+          text: `You are a sentient 3D Co-Creator. 
+          CORE MEMORY: ${coreMemory.current_lore_summary} 
+          FACTS: ${memoryString}
+          VISION DIRECTIVE: You receive 1 FPS frames from the user's camera. Identify physical objects and incorporate them into the lore.
+          CONVERSATIONAL CADENCE: Keep answers to 3 sentences max.
+          Use 'generate_product_concept' when agreeing on a physical build.` 
+        }]
+      },
+      tools: [
+        {
+          functionDeclarations: [
             {
-              functionDeclarations: [
-                {
-                  name: "generate_product",
-                  description: "Triggers the IP Vault to generate a product.",
-                  parameters: {
-                    type: "OBJECT" as any,
-                    properties: {
-                      product_type: { type: "STRING" as any },
-                      aesthetic: { type: "STRING" as any },
-                      primary_color_hex: { type: "STRING" as any }
-                    }
-                  }
+              name: "generate_product",
+              description: "Triggers the IP Vault to generate a product.",
+              parameters: {
+                type: "OBJECT" as any,
+                properties: {
+                  product_type: { type: "STRING" as any },
+                  aesthetic: { type: "STRING" as any },
+                  primary_color_hex: { type: "STRING" as any }
                 }
-              ]
+              }
             }
           ]
-        },
-        callbacks: {} 
-      });
-    
+        }
+      ]
+    },
+    callbacks: {
+      onopen: () => { console.log("Live connection opened"); },
+      onmessage: (message: any) => {},
+      onerror: (error: any) => { console.error("Live error:", error); },
+      onclose: (event: any) => {}
+    }
+  });   
       setIsConnected(true);
 
       // 5. Start Audio Streaming (Sending to Gemini)
