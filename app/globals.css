@@ -1,0 +1,9 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  background-color: #000000;
+  color: #ffffff;
+  overflow: hidden; /* Prevents scrolling when the 3D canvas is active */
+}
