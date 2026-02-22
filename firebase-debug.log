@@ -1,0 +1,71 @@
+[debug] [2026-02-22T21:21:40.423Z] ----------------------------------------------------------------------
+[debug] [2026-02-22T21:21:40.425Z] Command:       C:\Program Files\nodejs\node.exe C:\Users\1\AppData\Roaming\npm\node_modules\firebase-tools\lib\bin\firebase.js apphosting:secrets:set NEXT_PUBLIC_GEMINI_KEY
+[debug] [2026-02-22T21:21:40.425Z] CLI Version:   15.7.0
+[debug] [2026-02-22T21:21:40.425Z] Platform:      win32
+[debug] [2026-02-22T21:21:40.425Z] Node Version:  v25.5.0
+[debug] [2026-02-22T21:21:40.425Z] Time:          Sun Feb 22 2026 16:21:40 GMT-0500 (Eastern Standard Time)
+[debug] [2026-02-22T21:21:40.425Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-02-22T21:21:40.594Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-02-22T21:21:40.595Z] > authorizing via signed-in user (john@lazylions.co)
+[debug] [2026-02-22T21:21:40.595Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-02-22T21:21:40.595Z] > authorizing via signed-in user (john@lazylions.co)
+[debug] [2026-02-22T21:21:40.595Z] [iam] checking project lorestream-3325c for permissions ["firebase.projects.get","secretmanager.secrets.create","secretmanager.secrets.get","secretmanager.secrets.getIamPolicy","secretmanager.secrets.setIamPolicy","secretmanager.secrets.update","secretmanager.versions.add"]
+[debug] [2026-02-22T21:21:40.596Z] Checked if tokens are valid: true, expires at: 1771798875701
+[debug] [2026-02-22T21:21:40.596Z] Checked if tokens are valid: true, expires at: 1771798875701
+[debug] [2026-02-22T21:21:40.597Z] >>> [apiv2][query] POST https://cloudresourcemanager.googleapis.com/v1/projects/lorestream-3325c:testIamPermissions [none]
+[debug] [2026-02-22T21:21:40.597Z] >>> [apiv2][(partial)header] POST https://cloudresourcemanager.googleapis.com/v1/projects/lorestream-3325c:testIamPermissions  x-goog-user-project=lorestream-3325c
+[debug] [2026-02-22T21:21:40.597Z] >>> [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/lorestream-3325c:testIamPermissions {"permissions":["firebase.projects.get","secretmanager.secrets.create","secretmanager.secrets.get","secretmanager.secrets.getIamPolicy","secretmanager.secrets.setIamPolicy","secretmanager.secrets.update","secretmanager.versions.add"]}
+[debug] [2026-02-22T21:21:40.752Z] <<< [apiv2][status] POST https://cloudresourcemanager.googleapis.com/v1/projects/lorestream-3325c:testIamPermissions 200
+[debug] [2026-02-22T21:21:40.752Z] <<< [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/lorestream-3325c:testIamPermissions {"permissions":["firebase.projects.get","secretmanager.secrets.create","secretmanager.secrets.get","secretmanager.secrets.getIamPolicy","secretmanager.secrets.setIamPolicy","secretmanager.secrets.update","secretmanager.versions.add"]}
+[debug] [2026-02-22T21:21:40.752Z] Checked if tokens are valid: true, expires at: 1771798875701
+[debug] [2026-02-22T21:21:40.752Z] Checked if tokens are valid: true, expires at: 1771798875701
+[debug] [2026-02-22T21:21:40.752Z] >>> [apiv2][query] GET https://cloudresourcemanager.googleapis.com/v1/projects/lorestream-3325c [none]
+[debug] [2026-02-22T21:21:40.840Z] <<< [apiv2][status] GET https://cloudresourcemanager.googleapis.com/v1/projects/lorestream-3325c 200
+[debug] [2026-02-22T21:21:40.840Z] <<< [apiv2][body] GET https://cloudresourcemanager.googleapis.com/v1/projects/lorestream-3325c {"projectNumber":"694967019558","projectId":"lorestream-3325c","lifecycleState":"ACTIVE","name":"LoreStream","labels":{"firebase":"enabled","firebase-core":"disabled"},"createTime":"2026-02-22T00:10:16.461590Z","parent":{"type":"organization","id":"212273473206"}}
+[debug] [2026-02-22T21:21:40.840Z] Checked if tokens are valid: true, expires at: 1771798875701
+[debug] [2026-02-22T21:21:40.840Z] Checked if tokens are valid: true, expires at: 1771798875701
+[debug] [2026-02-22T21:21:40.840Z] >>> [apiv2][query] GET https://secretmanager.googleapis.com/v1/projects/lorestream-3325c/secrets/NEXT_PUBLIC_GEMINI_KEY [none]
+[debug] [2026-02-22T21:21:40.957Z] <<< [apiv2][status] GET https://secretmanager.googleapis.com/v1/projects/lorestream-3325c/secrets/NEXT_PUBLIC_GEMINI_KEY 404
+[debug] [2026-02-22T21:21:40.957Z] <<< [apiv2][body] GET https://secretmanager.googleapis.com/v1/projects/lorestream-3325c/secrets/NEXT_PUBLIC_GEMINI_KEY {"error":{"code":404,"message":"Secret [projects/694967019558/secrets/NEXT_PUBLIC_GEMINI_KEY] not found.","status":"NOT_FOUND"}}
+[debug] [2026-02-22T21:21:40.958Z] Checked if tokens are valid: true, expires at: 1771798875701
+[debug] [2026-02-22T21:21:40.958Z] Checked if tokens are valid: true, expires at: 1771798875701
+[debug] [2026-02-22T21:21:40.958Z] >>> [apiv2][query] POST https://secretmanager.googleapis.com/v1/projects/lorestream-3325c/secrets secretId=NEXT_PUBLIC_GEMINI_KEY
+[debug] [2026-02-22T21:21:40.958Z] >>> [apiv2][body] POST https://secretmanager.googleapis.com/v1/projects/lorestream-3325c/secrets {"name":"NEXT_PUBLIC_GEMINI_KEY","replication":{"automatic":{}},"labels":{"firebase-managed":"apphosting"}}
+[debug] [2026-02-22T21:21:41.186Z] <<< [apiv2][status] POST https://secretmanager.googleapis.com/v1/projects/lorestream-3325c/secrets 200
+[debug] [2026-02-22T21:21:41.186Z] <<< [apiv2][body] POST https://secretmanager.googleapis.com/v1/projects/lorestream-3325c/secrets {"name":"projects/694967019558/secrets/NEXT_PUBLIC_GEMINI_KEY","replication":{"automatic":{}},"createTime":"2026-02-22T21:21:34.989289Z","labels":{"firebase-managed":"apphosting"},"etag":"\"164b703d2e2802\""}
+[info] +  Created new secret projects/lorestream-3325c/secrets/NEXT_PUBLIC_GEMINI_KEY 
+[debug] [2026-02-22T21:21:58.805Z] Checked if tokens are valid: true, expires at: 1771798875701
+[debug] [2026-02-22T21:21:58.806Z] Checked if tokens are valid: true, expires at: 1771798875701
+[debug] [2026-02-22T21:21:58.806Z] >>> [apiv2][query] POST https://secretmanager.googleapis.com/v1/projects/lorestream-3325c/secrets/NEXT_PUBLIC_GEMINI_KEY:addVersion [none]
+[debug] [2026-02-22T21:21:58.806Z] >>> [apiv2][body] POST https://secretmanager.googleapis.com/v1/projects/lorestream-3325c/secrets/NEXT_PUBLIC_GEMINI_KEY:addVersion {"payload":{"data":"QUl6YVN5QUVPZTFIa2dSa1dXV1k2bVJBMDZtMGg3S3FtTXRrWnhZ"}}
+[debug] [2026-02-22T21:21:59.179Z] <<< [apiv2][status] POST https://secretmanager.googleapis.com/v1/projects/lorestream-3325c/secrets/NEXT_PUBLIC_GEMINI_KEY:addVersion 200
+[debug] [2026-02-22T21:21:59.179Z] <<< [apiv2][body] POST https://secretmanager.googleapis.com/v1/projects/lorestream-3325c/secrets/NEXT_PUBLIC_GEMINI_KEY:addVersion {"name":"projects/694967019558/secrets/NEXT_PUBLIC_GEMINI_KEY/versions/1","createTime":"2026-02-22T21:21:53.020329Z","state":"ENABLED","replicationStatus":{"automatic":{}},"etag":"\"164b703e3f4da9\""}
+[info] +  Created new secret version projects/694967019558/secrets/NEXT_PUBLIC_GEMINI_KEY/versions/1 
+[info] i  You can access the contents of the secret's latest value with firebase apphosting:secrets:access NEXT_PUBLIC_GEMINI_KEY
+ 
+[debug] [2026-02-22T21:22:06.677Z] Checked if tokens are valid: true, expires at: 1771798875701
+[debug] [2026-02-22T21:22:06.677Z] Checked if tokens are valid: true, expires at: 1771798875701
+[debug] [2026-02-22T21:22:06.677Z] >>> [apiv2][query] GET https://firebaseapphosting.googleapis.com/v1beta/projects/lorestream-3325c/locations/-/backends 
+[debug] [2026-02-22T21:22:07.034Z] <<< [apiv2][status] GET https://firebaseapphosting.googleapis.com/v1beta/projects/lorestream-3325c/locations/-/backends 200
+[debug] [2026-02-22T21:22:07.035Z] <<< [apiv2][body] GET https://firebaseapphosting.googleapis.com/v1beta/projects/lorestream-3325c/locations/-/backends {"backends":[{"name":"projects/lorestream-3325c/locations/us-east4/backends/lorestream","createTime":"2026-02-22T00:27:10.403660125Z","updateTime":"2026-02-22T21:04:40.311355Z","uri":"lorestream--lorestream-3325c.us-east4.hosted.app","codebase":{"repository":"projects/lorestream-3325c/locations/us-east4/connections/apphosting-github-conn-h78g6bb/gitRepositoryLinks/Web3kaneco-lorestream","rootDirectory":"/"},"uid":"c71ccdf7-f1c7-4e9b-a510-5b35c7c6db1e","etag":"IFMVVxTdX-Y5eMSrRw5xTIfW8ttrZQhJ9LvXT5xCDk4","reconciling":false,"servingLocality":"GLOBAL_ACCESS","serviceAccount":"firebase-app-hosting-compute@lorestream-3325c.iam.gserviceaccount.com","appId":"1:694967019558:web:5081a9ef1aa50362915ee7","environment":"env"}]}
+[debug] [2026-02-22T21:22:11.520Z] Checked if tokens are valid: true, expires at: 1771798875701
+[debug] [2026-02-22T21:22:11.520Z] Checked if tokens are valid: true, expires at: 1771798875701
+[debug] [2026-02-22T21:22:11.520Z] >>> [apiv2][query] GET https://secretmanager.googleapis.com/v1/projects/lorestream-3325c/secrets/NEXT_PUBLIC_GEMINI_KEY:getIamPolicy [none]
+[debug] [2026-02-22T21:22:11.765Z] <<< [apiv2][status] GET https://secretmanager.googleapis.com/v1/projects/lorestream-3325c/secrets/NEXT_PUBLIC_GEMINI_KEY:getIamPolicy 200
+[debug] [2026-02-22T21:22:11.765Z] <<< [apiv2][body] GET https://secretmanager.googleapis.com/v1/projects/lorestream-3325c/secrets/NEXT_PUBLIC_GEMINI_KEY:getIamPolicy {"etag":"ACAB"}
+[debug] [2026-02-22T21:22:11.766Z] Checked if tokens are valid: true, expires at: 1771798875701
+[debug] [2026-02-22T21:22:11.766Z] Checked if tokens are valid: true, expires at: 1771798875701
+[debug] [2026-02-22T21:22:11.766Z] >>> [apiv2][query] POST https://secretmanager.googleapis.com/v1/projects/lorestream-3325c/secrets/NEXT_PUBLIC_GEMINI_KEY:setIamPolicy [none]
+[debug] [2026-02-22T21:22:11.766Z] >>> [apiv2][body] POST https://secretmanager.googleapis.com/v1/projects/lorestream-3325c/secrets/NEXT_PUBLIC_GEMINI_KEY:setIamPolicy {"policy":{"bindings":[{"role":"roles/secretmanager.secretAccessor","members":["serviceAccount:firebase-app-hosting-compute@lorestream-3325c.iam.gserviceaccount.com"]},{"role":"roles/secretmanager.viewer","members":["serviceAccount:firebase-app-hosting-compute@lorestream-3325c.iam.gserviceaccount.com"]},{"role":"roles/secretmanager.secretVersionManager","members":["serviceAccount:service-694967019558@gcp-sa-firebaseapphosting.iam.gserviceaccount.com"]}]},"updateMask":"bindings"}
+[debug] [2026-02-22T21:22:12.084Z] <<< [apiv2][status] POST https://secretmanager.googleapis.com/v1/projects/lorestream-3325c/secrets/NEXT_PUBLIC_GEMINI_KEY:setIamPolicy 200
+[debug] [2026-02-22T21:22:12.084Z] <<< [apiv2][body] POST https://secretmanager.googleapis.com/v1/projects/lorestream-3325c/secrets/NEXT_PUBLIC_GEMINI_KEY:setIamPolicy {"version":1,"etag":"BwZLcD8FgS4=","bindings":[{"role":"roles/secretmanager.secretAccessor","members":["serviceAccount:firebase-app-hosting-compute@lorestream-3325c.iam.gserviceaccount.com"]},{"role":"roles/secretmanager.secretVersionManager","members":["serviceAccount:service-694967019558@gcp-sa-firebaseapphosting.iam.gserviceaccount.com"]},{"role":"roles/secretmanager.viewer","members":["serviceAccount:firebase-app-hosting-compute@lorestream-3325c.iam.gserviceaccount.com"]}]}
+[info] +  Successfully set IAM bindings on secret NEXT_PUBLIC_GEMINI_KEY.
+ 
+[debug] [2026-02-22T21:22:21.988Z] Error: ENOENT: no such file or directory, open 'C:\lorestream\y\apphosting.yaml'
+    at writeFileSync (node:fs:2397:20)
+    at Object.store (C:\Users\1\AppData\Roaming\npm\node_modules\firebase-tools\lib\apphosting\config.js:68:28)
+    at Object.maybeAddSecretToYaml (C:\Users\1\AppData\Roaming\npm\node_modules\firebase-tools\lib\apphosting\config.js:131:21)
+    at async Command.actionFn (C:\Users\1\AppData\Roaming\npm\node_modules\firebase-tools\lib\commands\apphosting-secrets-set.js:77:5)
+[error] 
+[error] Error: An unexpected error has occurred.
