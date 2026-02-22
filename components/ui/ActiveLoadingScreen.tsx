@@ -22,12 +22,12 @@ export function ActiveLoadingScreen({ userId, agentId, onComplete }: ActiveLoadi
         
         // When the Cloud Task finishes Tripo3D generation, it sets this flag
         if (data.extrusionStatus === 'complete') {
-          onComplete(data.modelUrl || ""); // Tells page.tsx to switch to the 'LIVE' view
+          onComplete(data.model3dUrl ||""); // Tells page.tsx to switch to the 'LIVE' view
         }
       }
     });
     return () => unsub();
-  }, [userId, agentId, onComplete(data.model3dUrl)]);
+  }, [userId, agentId, onComplete]);
 
   return (
     <div className="flex flex-col items-center justify-center h-full w-full bg-black text-white p-10 pointer-events-auto z-50">

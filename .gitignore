@@ -8,4 +8,4 @@ functions/.env
 node_modules
 .env.*
 # Next.js Build Output
-.next
+.next*
