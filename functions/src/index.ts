@@ -60,7 +60,7 @@ export const enqueue3DTask = onCall(
              contents: [{ role: 'user', parts: [{ text: prompt }, { inlineData: { mimeType: "image/jpeg", data: imageBase64 } }] }],
              config: { responseMimeType: "application/json" }
            });
-           const data = JSON.parse(response.text());
+           const data = JSON.parse(response.text);
            
            await db.doc(`users/${userId}/agents/${agentId}`).set({
              traits: data.traits, archetype: data.archetype, funFact: data.funFact
@@ -94,7 +94,7 @@ export const process3DExtrusion = onTaskDispatched(
       if (contract && tokenId && !finalImage) {
         const alchemy = new Alchemy({ apiKey: process.env.ALCHEMY_API_KEY, network: Network.ETH_MAINNET });
         const nftMetadata = await alchemy.nft.getNftMetadata(contract, tokenId);
-        const imageUrl = nftMetadata.media[0]?.gateway;
+        const imageUrl = (nftMetadata as any).media[0]?.gateway;
         if (!imageUrl) throw new Error("No image found on NFT contract.");
         
         // Convert URL to Base64 for Tripo3D

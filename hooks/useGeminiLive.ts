@@ -49,7 +49,7 @@ export function useGeminiLive(agentId: string, userId: string) {
         model: "gemini-3.1-pro",
         config: {
           generationConfig: {
-            responseModalities: ["audio"],
+            responseModalities: ["AUDIO" as any],
             speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Puck" } } }
           },
           systemInstruction: {
@@ -67,8 +67,13 @@ export function useGeminiLive(agentId: string, userId: string) {
               name: "generate_product_concept",
               description: "Triggers the IP Vault to generate a product.",
               parameters: {
-                type: "OBJECT",
-                properties: { product_type: { type: "STRING" }, aesthetic: { type: "STRING" }, primary_color_hex: { type: "STRING" } }
+                type: "OBJECT" as any,
+                properties: { 
+                  product_type: { type: "STRING" as any }, 
+                  aesthetic: { type: "STRING" as any }, 
+                  primary_color_hex: { type: "STRING" as any } 
+                }
+              }
               }
             }]
           }]
