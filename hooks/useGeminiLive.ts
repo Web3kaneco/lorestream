@@ -62,22 +62,27 @@ export function useGeminiLive(agentId: string, userId: string) {
               Use 'generate_product_concept' when agreeing on a physical build.` 
             }]
           },
-          tools: [{
-            functionDeclarations: [{
-              name: "generate_product_concept",
-              description: "Triggers the IP Vault to generate a product.",
-              parameters: {
-                type: "OBJECT" as any,
-                properties: { 
-                  product_type: { type: "STRING" as any }, 
-                  aesthetic: { type: "STRING" as any }, 
-                  primary_color_hex: { type: "STRING" as any } 
+          tools: [
+            {
+              functionDeclarations: [
+                {
+                  name: "generate_product",
+                  description: "Triggers the IP Vault to generate a product.",
+                  parameters: {
+                    type: "OBJECT" as any,
+                    properties: {
+                      product_type: { type: "STRING" as any },
+                      aesthetic: { type: "STRING" as any },
+                      primary_color_hex: { type: "STRING" as any }
+                    }
+                  }
                 }
-              }
-            }]
-        }]
+              ]
+            }
+          ]
+        }
       });
-
+    
       setIsConnected(true);
 
       // 5. Start Audio Streaming (Sending to Gemini)
