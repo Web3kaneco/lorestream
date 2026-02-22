@@ -1,18 +1,20 @@
 {
-    "name": "lorestream-functions",
-    "engines": {
-      "node": "18"
-    },
-    "main": "lib/index.js",
-    "dependencies": {
-      "@google/genai": "latest",
-      "alchemy-sdk": "^3.1.2",
-      "firebase-admin": "^12.1.0",
-      "firebase-functions": "^5.0.1",
-      "node-fetch": "^2.7.0"
-    },
-    "devDependencies": {
-      "typescript": "^5.0.0"
-    },
-    "private": true
-  }
+  "name": "lorestream-functions",
+  "engines": {
+    "node": "20"
+  },
+  "main": "lib/index.js",
+  "scripts": {
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@google/genai": "latest",
+    "alchemy-sdk": "^3.1.2",
+    "firebase-admin": "^12.1.0",
+    "firebase-functions": "^5.0.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "private": true
+}

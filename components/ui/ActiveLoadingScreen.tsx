@@ -7,7 +7,7 @@ import { db } from '@/lib/firebase';
 interface ActiveLoadingProps {
   userId: string;
   agentId: string;
-  onComplete: () => void;
+  onComplete: (url: string) => void;
 }
 
 export function ActiveLoadingScreen({ userId, agentId, onComplete }: ActiveLoadingProps) {
