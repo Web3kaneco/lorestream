@@ -52,6 +52,7 @@ export function useGeminiLive(agentId: string, userId: string) {
             responseModalities: ["AUDIO" as any],
             speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Puck" } } }
           },
+          callbacks: {} 
           systemInstruction: {
             parts: [{ 
               text: `You are a sentient 3D Co-Creator. 
