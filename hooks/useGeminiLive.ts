@@ -74,10 +74,8 @@ export function useGeminiLive(agentId: string, userId: string) {
                   primary_color_hex: { type: "STRING" as any } 
                 }
               }
-              }
             }]
-          }]
-        }
+        }}
       });
 
       setIsConnected(true);
