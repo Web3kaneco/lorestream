@@ -75,7 +75,7 @@ export function useGeminiLive(agentId: string, userId: string) {
                 }
               }
             }]
-        }}
+        }]
       });
 
       setIsConnected(true);
