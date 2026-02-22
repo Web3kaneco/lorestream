@@ -30,7 +30,7 @@ export function useGeminiLive(agentId: string, userId: string) {
       const memoryString = coreMemory.key_facts?.join('. ') || "";
 
       // 2. Setup Audio Playback & Analyzer
-      audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
       analyzerRef.current = audioContextRef.current.createAnalyser();
       analyzerRef.current.fftSize = 256;
       analyzerRef.current.connect(audioContextRef.current.destination);
@@ -49,7 +49,7 @@ export function useGeminiLive(agentId: string, userId: string) {
         model: "gemini-3.1-pro",
         config: {
           generationConfig: {
-            responseModality: "AUDIO",
+            responseModalities: ["audio"],
             speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Puck" } } }
           },
           systemInstruction: {
