@@ -4,7 +4,7 @@ Command: npx gltfjsx@6.5.3 public/idlebreathing.glb -t
 */
 
 import * as THREE from 'three'
-import React from 'react'
+import React, { useEffect } from 'react'
 import { useGraph } from '@react-three/fiber'
 import { useGLTF, useAnimations } from '@react-three/drei'
 import { GLTF, SkeletonUtils } from 'three-stdlib'
@@ -34,6 +34,13 @@ export function Model(props: JSX.IntrinsicElements['group']) {
   const clone = React.useMemo(() => SkeletonUtils.clone(scene), [scene])
   const { nodes, materials } = useGraph(clone) as GLTFResult
   const { actions } = useAnimations(animations, group)
+  useEffect(() => {
+    // Check what your action is named! It might be actions['Idle'] or actions['mixamo.com']
+    if (actions) {
+      const action = Object.values(actions)[0]; // Plays the very first animation in the file
+      action?.play();
+    }
+  }, [actions]);
   return (
     <group ref={group} {...props} dispose={null}>
       <group name="Scene">

@@ -2,8 +2,8 @@
 
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Environment } from '@react-three/drei';
-import { Avatar } from './Avatar';
 import { Suspense } from 'react';
+import { Model as Avatar } from './AvatarModel';
 
 interface SceneProps {
   modelUrl: string;
