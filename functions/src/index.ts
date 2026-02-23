@@ -72,16 +72,19 @@ export const enqueue3DTask = onCall(
              funFact: `Forged from smart contract ${contract.slice(0,6)}...`
            }, { merge: true });
 
-        } else if (imageBase64) {
-           // The Fast AI Path: Use Gemini Vision to hallucinate traits
-           const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-           const prompt = `Analyze this character image. Return a strict JSON object with: 1. An array of 3 physical "traits". 2. A 2-word "archetype". 3. A 1-sentence "funFact" about their origin.`;
-           
-           const response = await ai.models.generateContent({
-             model: 'gemini-3.1-pro',
-             contents: [{ role: 'user', parts: [{ text: prompt }, { inlineData: { mimeType: "image/jpeg", data: imageBase64 } }] }],
-             config: { responseMimeType: "application/json" }
-           });
+          } else if (imageBase64) {
+            // The Fast AI Path: Use Gemini Vision to hallucinate traits
+            const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+            const prompt = `Analyze this character image. Return a strict JSON object with: 1. An array of 3 physical "traits". 2. A 2-word "archetype". 3. A 1-sentence "funFact" about their origin.`;
+            
+            // --- NEW: Strip the prefix so Gemini doesn't choke! ---
+            const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, "");
+            
+            const response = await ai.models.generateContent({
+              model: 'gemini-3.1-pro',
+              contents: [{ role: 'user', parts: [{ text: prompt }, { inlineData: { mimeType: "image/jpeg", data: cleanBase64 } }] }], // <-- Use cleanBase64 here
+              config: { responseMimeType: "application/json" }
+            });
            const data = JSON.parse(response.text);
            
            await db.doc(`users/${userId}/agents/${agentId}`).set({
@@ -102,15 +105,14 @@ export const enqueue3DTask = onCall(
 // ============================================================================
 export const process3DExtrusion = onTaskDispatched(
   {
-    retryConfig: { maxAttempts: 3, minBackoffSeconds: 60 }, // Built-in shock absorber
+    retryConfig: { maxAttempts: 1, minBackoffSeconds: 60 }, // Built-in shock absorber
     rateLimits: { maxConcurrentDispatches: 5 }, // Stops Tripo3D API rate limits
     timeoutSeconds: 480, 
     memory: "1GiB"
   },
   async (req) => {
-    // 1. Grab the locker path instead of the giant image string
     const { userId, agentId, imageStoragePath, contract, tokenId } = req.data;
-    let finalImage = "";
+    let imageBuffer: Buffer | null = null; // Store the raw file, not a string!
 
     try {
       const db = admin.firestore();
@@ -118,45 +120,66 @@ export const process3DExtrusion = onTaskDispatched(
 
       // --- THE STORAGE LOCKER RETRIEVAL ---
       if (imageStoragePath) {
-        // Download the file from Firebase Storage
+        // Download the raw file from Firebase Storage
         const file = bucket.file(imageStoragePath);
-        const [buffer] = await file.download();
-        // Convert it back to Base64 so Tripo3D can read it
-        finalImage = buffer.toString('base64');
+        const [downloaded] = await file.download();
+        imageBuffer = downloaded;
       }
       // ------------------------------------
 
       // If Web3, fetch the high-res gateway image from Alchemy first
-      if (contract && tokenId && !finalImage) {
+      if (contract && tokenId && !imageBuffer) {
         const alchemy = new Alchemy({ apiKey: process.env.ALCHEMY_API_KEY, network: Network.ETH_MAINNET });
         const nftMetadata = await alchemy.nft.getNftMetadata(contract, tokenId);
         const imageUrl = (nftMetadata as any).media[0]?.gateway;
         if (!imageUrl) throw new Error("No image found on NFT contract.");
         
-        // Convert URL to Base64 for Tripo3D
+        // Convert URL to a raw Buffer
         const imgRes = await fetch(imageUrl);
         const arrayBuffer = await imgRes.arrayBuffer();
-        finalImage = Buffer.from(arrayBuffer).toString('base64');
+        imageBuffer = Buffer.from(arrayBuffer);
       }
 
-      // Step A: Upload to Tripo3D
+      if (!imageBuffer) throw new Error("No image buffer found.");
+
+      // Step A: Upload to Tripo3D (Using Multipart FormData!)
+      const formData = new FormData();
+      // Wrap the imageBuffer in a Uint8Array to make TypeScript happy!
+      formData.append("file", new Blob([new Uint8Array(imageBuffer)], { type: "image/png" }), "upload.png");
+
       const uploadRes = await fetch("https://api.tripo3d.ai/v2/openapi/upload", {
         method: "POST",
-        headers: { "Authorization": `Bearer ${TRIPO_API_KEY}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ image: finalImage })
+        headers: { 
+          "Authorization": `Bearer ${TRIPO_API_KEY}` 
+          // ⚠️ DO NOT manually set Content-Type here! Fetch sets it automatically with the secret boundary for FormData.
+        },
+        body: formData
       });
-      // --- THIS IS THE LINE THAT WAS MISSING! ---
+      
       const uploadData = await uploadRes.json();
+      console.log("=== TRIPO UPLOAD RESPONSE ===", JSON.stringify(uploadData));
+
       const image_token = uploadData.image_token || uploadData.data?.image_token; 
-      // ------------------------------------------
+      if (!image_token) {
+        throw new Error(`Tripo3D Upload Failed. No token received.`);
+      }
       
       // Step B: Trigger Extrusion
       const taskRes = await fetch("https://api.tripo3d.ai/v2/openapi/task", {
         method: "POST",
         headers: { "Authorization": `Bearer ${TRIPO_API_KEY}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "image_to_model", file: { type: "jpg", file_token: image_token } })
+        body: JSON.stringify({ type: "image_to_model", file: { type: "png", file_token: image_token } }) 
       });
-      const { data: { task_id } } = await taskRes.json();
+      
+      const taskData = await taskRes.json();
+      console.log("=== TRIPO TASK RESPONSE ===", JSON.stringify(taskData));
+
+      if (!taskData.data || !taskData.data.task_id) {
+        throw new Error(`Tripo3D Extrusion Failed.`);
+      }
+      
+      const task_id = taskData.data.task_id;
+
       // Step C: Poll for Completion
       let isComplete = false;
       let glbUrl = "";
@@ -169,7 +192,7 @@ export const process3DExtrusion = onTaskDispatched(
 
         if (statusData.data.status === "success") {
           isComplete = true;
-          glbUrl = statusData.data.model.url;
+          glbUrl = statusData.data.result.model.url;
         } else if (statusData.data.status === "failed") {
           throw new Error("Tripo3D Generation Failed");
         }
