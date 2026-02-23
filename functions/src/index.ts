@@ -101,18 +101,80 @@ export const enqueue3DTask = onCall(
 );
 
 // ============================================================================
+// HELPER: Poll a Tripo3D task until it succeeds or fails
+// ============================================================================
+async function pollTripoTask(taskId: string, label: string): Promise<any> {
+  console.log(`=== Polling Tripo task ${taskId} (${label}) ===`);
+  while (true) {
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+
+    const statusRes = await fetch(`https://api.tripo3d.ai/v2/openapi/task/${taskId}`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${TRIPO_API_KEY}` }
+    });
+
+    if (!statusRes.ok) {
+      console.warn(`Tripo API hiccup on ${label} (Status ${statusRes.status}). Retrying...`);
+      continue;
+    }
+
+    const statusData = await statusRes.json();
+    const status = statusData.data.status;
+
+    if (status === "success") {
+      console.log(`=== TRIPO ${label} SUCCESS ===`, JSON.stringify(statusData.data.output));
+      return statusData.data;
+    } else if (status === "failed") {
+      throw new Error(`Tripo3D ${label} Failed. Response: ${JSON.stringify(statusData.data)}`);
+    }
+    // Otherwise still running — loop again
+  }
+}
+
+// ============================================================================
+// HELPER: Download a GLB from a URL and save to Firebase Storage, return signed URL
+// ============================================================================
+async function downloadAndStoreGlb(
+  sourceUrl: string,
+  storagePath: string,
+  label: string
+): Promise<string> {
+  console.log(`Downloading ${label} GLB to Firebase Storage...`);
+  const glbRes = await fetch(sourceUrl);
+  if (!glbRes.ok) {
+    throw new Error(`Tripo CDN Failed to deliver ${label} file! Status: ${glbRes.status}`);
+  }
+
+  const glbArrayBuffer = await glbRes.arrayBuffer();
+  const bucket = admin.storage().bucket();
+  const file = bucket.file(storagePath);
+
+  await file.save(Buffer.from(new Uint8Array(glbArrayBuffer)), {
+    metadata: { contentType: "model/gltf-binary" }
+  });
+
+  const [permanentUrl] = await file.getSignedUrl({
+    action: "read",
+    expires: "01-01-2100"
+  });
+
+  return permanentUrl;
+}
+
+// ============================================================================
 // 2. THE 3D EXTRUSION WORKER (Cloud Tasks Queue)
+//    Pipeline: Upload → image_to_model → animate_rig (Mixamo) → Store
 // ============================================================================
 export const process3DExtrusion = onTaskDispatched(
   {
-    retryConfig: { maxAttempts: 1, minBackoffSeconds: 60 }, // Built-in shock absorber
-    rateLimits: { maxConcurrentDispatches: 5 }, // Stops Tripo3D API rate limits
-    timeoutSeconds: 480, 
+    retryConfig: { maxAttempts: 1, minBackoffSeconds: 60 },
+    rateLimits: { maxConcurrentDispatches: 5 },
+    timeoutSeconds: 540, // Increased: image_to_model (~2-3min) + animate_rig (~1-2min)
     memory: "1GiB"
   },
   async (req) => {
     const { userId, agentId, imageStoragePath, contract, tokenId } = req.data;
-    let imageBuffer: Buffer | null = null; // Store the raw file, not a string!
+    let imageBuffer: Buffer | null = null;
 
     try {
       const db = admin.firestore();
@@ -120,12 +182,10 @@ export const process3DExtrusion = onTaskDispatched(
 
       // --- THE STORAGE LOCKER RETRIEVAL ---
       if (imageStoragePath) {
-        // Download the raw file from Firebase Storage
         const file = bucket.file(imageStoragePath);
         const [downloaded] = await file.download();
         imageBuffer = downloaded;
       }
-      // ------------------------------------
 
       // If Web3, fetch the high-res gateway image from Alchemy first
       if (contract && tokenId && !imageBuffer) {
@@ -133,8 +193,6 @@ export const process3DExtrusion = onTaskDispatched(
         const nftMetadata = await alchemy.nft.getNftMetadata(contract, tokenId);
         const imageUrl = (nftMetadata as any).media[0]?.gateway;
         if (!imageUrl) throw new Error("No image found on NFT contract.");
-        
-        // Convert URL to a raw Buffer
         const imgRes = await fetch(imageUrl);
         const arrayBuffer = await imgRes.arrayBuffer();
         imageBuffer = Buffer.from(arrayBuffer);
@@ -142,123 +200,138 @@ export const process3DExtrusion = onTaskDispatched(
 
       if (!imageBuffer) throw new Error("No image buffer found.");
 
-      // Step A: Upload to Tripo3D (Using Multipart FormData!)
+      // ================================================================
+      // Step A: Upload image to Tripo3D
+      // ================================================================
       const formData = new FormData();
-      // Wrap the imageBuffer in a Uint8Array to make TypeScript happy!
       formData.append("file", new Blob([new Uint8Array(imageBuffer)], { type: "image/png" }), "upload.png");
 
       const uploadRes = await fetch("https://api.tripo3d.ai/v2/openapi/upload", {
         method: "POST",
-        headers: { 
-          "Authorization": `Bearer ${TRIPO_API_KEY}` 
-          // ⚠️ DO NOT manually set Content-Type here! Fetch sets it automatically with the secret boundary for FormData.
-        },
+        headers: { "Authorization": `Bearer ${TRIPO_API_KEY}` },
         body: formData
       });
-      
+
       const uploadData = await uploadRes.json();
       console.log("=== TRIPO UPLOAD RESPONSE ===", JSON.stringify(uploadData));
 
-      const image_token = uploadData.image_token || uploadData.data?.image_token; 
+      const image_token = uploadData.image_token || uploadData.data?.image_token;
       if (!image_token) {
         throw new Error(`Tripo3D Upload Failed. No token received.`);
       }
-      
-      // Step B: Trigger Extrusion
-      const taskRes = await fetch("https://api.tripo3d.ai/v2/openapi/task", {
+
+      // ================================================================
+      // Step B: Trigger image_to_model (produces unrigged 3D mesh)
+      // ================================================================
+      const modelTaskRes = await fetch("https://api.tripo3d.ai/v2/openapi/task", {
         method: "POST",
         headers: { "Authorization": `Bearer ${TRIPO_API_KEY}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "image_to_model", file: { type: "png", file_token: image_token } }) 
+        body: JSON.stringify({ type: "image_to_model", file: { type: "png", file_token: image_token } })
       });
-      
-      const taskData = await taskRes.json();
-      console.log("=== TRIPO TASK RESPONSE ===", JSON.stringify(taskData));
 
-      if (!taskData.data || !taskData.data.task_id) {
-        throw new Error(`Tripo3D Extrusion Failed.`);
+      const modelTaskData = await modelTaskRes.json();
+      console.log("=== TRIPO image_to_model TASK ===", JSON.stringify(modelTaskData));
+
+      if (!modelTaskData.data?.task_id) {
+        throw new Error(`Tripo3D image_to_model failed to start.`);
       }
-      
-      // Fix 1: Make sure this is camelCase (taskId) so the fetch below can find it!
-      const taskId = taskData.data.task_id;
 
-      // Step C: Poll for Completion
-      let isComplete = false;
-      let glbUrl = "";
-      while (!isComplete) {
-        // Wait 5 seconds between checks
-        await new Promise((resolve) => setTimeout(resolve, 5000));
+      const modelTaskId = modelTaskData.data.task_id;
 
-        // Now this successfully uses the ${taskId} we declared above
-        const statusRes = await fetch(`https://api.tripo3d.ai/v2/openapi/task/${taskId}`, {
-          method: "GET",
-          headers: { Authorization: `Bearer ${process.env.TRIPO_API_KEY}` }
-        });
+      // ================================================================
+      // Step C: Poll image_to_model until complete
+      // ================================================================
+      const modelResult = await pollTripoTask(modelTaskId, "image_to_model");
 
-        // --- NEW SHIELD: If Tripo3D hiccups and returns an HTML error page, ignore it and try again! ---
-        if (!statusRes.ok) {
-          console.warn(`Tripo API hiccup (Status ${statusRes.status}). Retrying...`);
-          continue; // Skips the rest of the loop and starts over!
+      const unriggedUrl = modelResult.output.model || modelResult.output.pbr_model || modelResult.output.base_model;
+      if (!unriggedUrl) {
+        throw new Error(`image_to_model succeeded but no model URL found! Output: ${JSON.stringify(modelResult.output)}`);
+      }
+
+      // Save the unrigged model as a backup
+      const unriggedPermanentUrl = await downloadAndStoreGlb(
+        unriggedUrl,
+        `users/${userId}/agents/${agentId}/model_unrigged.glb`,
+        "unrigged"
+      );
+
+      // Update Firestore: model is built, now rigging
+      await db.doc(`users/${userId}/agents/${agentId}`).set({
+        extrusionStatus: "rigging",
+        model3dUnriggedUrl: unriggedPermanentUrl,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
+
+      // ================================================================
+      // Step D: Trigger animate_rig (adds Mixamo skeleton to the mesh)
+      // ================================================================
+      console.log("=== Starting Tripo animate_rig (Mixamo skeleton) ===");
+
+      const rigTaskRes = await fetch("https://api.tripo3d.ai/v2/openapi/task", {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${TRIPO_API_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "animate_rig",
+          original_model_task_id: modelTaskId,
+          out_format: "glb",
+          spec: "mixamo"
+        })
+      });
+
+      const rigTaskData = await rigTaskRes.json();
+      console.log("=== TRIPO animate_rig TASK ===", JSON.stringify(rigTaskData));
+
+      if (!rigTaskData.data?.task_id) {
+        // Rigging failed to start — fall back to unrigged model
+        console.warn("animate_rig failed to start. Falling back to unrigged model.");
+        await db.doc(`users/${userId}/agents/${agentId}`).set({
+          extrusionStatus: "complete",
+          model3dUrl: unriggedPermanentUrl,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+        return;
+      }
+
+      const rigTaskId = rigTaskData.data.task_id;
+
+      // ================================================================
+      // Step E: Poll animate_rig until complete
+      // ================================================================
+      let riggedPermanentUrl = "";
+      try {
+        const rigResult = await pollTripoTask(rigTaskId, "animate_rig");
+
+        const riggedUrl = rigResult.output.model || rigResult.output.pbr_model || rigResult.output.base_model;
+        if (!riggedUrl) {
+          throw new Error(`animate_rig succeeded but no model URL found! Output: ${JSON.stringify(rigResult.output)}`);
         }
-        
-        // If we get here, the response is safe to parse!
-        const statusData = await statusRes.json();
-        
-        if (statusData.data.status === "success") {
-          isComplete = true;
-          console.log("=== TRIPO SUCCESS OUTPUT ===", JSON.stringify(statusData.data.output));
-          
-          // 1. Get the temporary URL from Tripo3D
-          const temporaryTripoUrl = statusData.data.output.model || statusData.data.output.pbr_model || statusData.data.output.base_model; 
-          
-          if (!temporaryTripoUrl) {
-            throw new Error(`Tripo3D succeeded, but no URL was found! Output: ${JSON.stringify(statusData.data.output)}`);
-          }
 
-          // 2. Download the GLB file into the Cloud Worker's memory
-          console.log("Downloading GLB from Tripo3D to Firebase Storage...");
-          const glbRes = await fetch(temporaryTripoUrl);
-          
-          if (!glbRes.ok) {
-            throw new Error(`Tripo CDN Failed to deliver file! Status: ${glbRes.status}`);
-          }
-          
-          const glbArrayBuffer = await glbRes.arrayBuffer();
+        // Download and store the rigged model
+        riggedPermanentUrl = await downloadAndStoreGlb(
+          riggedUrl,
+          `users/${userId}/agents/${agentId}/model.glb`,
+          "rigged"
+        );
+      } catch (rigError) {
+        // Rigging failed — fall back to unrigged model
+        console.warn("animate_rig failed. Falling back to unrigged model:", rigError);
+        riggedPermanentUrl = unriggedPermanentUrl;
+      }
 
-          // 3. Save it permanently to your Firebase Storage Locker
-          const storagePath = `users/${userId}/agents/${agentId}/model.glb`;
-          const bucket = admin.storage().bucket(); // Explicitly tell Cursor what the bucket is!
-          const file = bucket.file(storagePath);
-          
-          // Wrap it in a Uint8Array to make TypeScript happy!
-          await file.save(Buffer.from(new Uint8Array(glbArrayBuffer)), {
-            metadata: { contentType: "model/gltf-binary" }
-          });
-
-          // --- FIX 2: Added the missing URL signing and loop closing! ---
-          
-          // 4. Generate a permanent Firebase URL (valid until the year 2100!)
-          const [permanentUrl] = await file.getSignedUrl({
-            action: "read",
-            expires: "01-01-2100"
-          });
-
-          // 5. Hand the safe, permanent URL to the database
-          glbUrl = permanentUrl;
-
-        } else if (statusData.data.status === "failed") {
-          throw new Error("Tripo3D Generation Failed");
-        }
-      } // <--- Added the missing bracket to close the while loop!
-
-      // Step D: Unlock the UI
-      await admin.firestore().doc(`users/${userId}/agents/${agentId}`).set({
-        extrusionStatus: "complete", model3dUrl: glbUrl, updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      // ================================================================
+      // Step F: Unlock the UI with the best available model
+      // ================================================================
+      await db.doc(`users/${userId}/agents/${agentId}`).set({
+        extrusionStatus: "complete",
+        model3dUrl: riggedPermanentUrl,
+        model3dUnriggedUrl: unriggedPermanentUrl,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
       }, { merge: true });
 
     } catch (error) {
       console.error("Worker failed:", error);
       await admin.firestore().doc(`users/${userId}/agents/${agentId}`).set({ extrusionStatus: "failed" }, { merge: true });
-      throw error; 
+      throw error;
     }
   }
 );
