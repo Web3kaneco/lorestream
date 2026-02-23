@@ -5,6 +5,7 @@ import { Canvas } from '@react-three/fiber';
 import { Environment, OrbitControls } from '@react-three/drei';
 import { Avatar } from './Avatar'; 
 
+
 // 1. Give Scene its own guest list so it can accept the data from page.tsx!
 interface SceneProps {
   modelUrl: string;

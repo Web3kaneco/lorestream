@@ -102,7 +102,7 @@ async (request) => {
                 // --- NEW: Strip the prefix so Gemini doesn't choke! ---
                 const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, "");
                 const response = await ai.models.generateContent({
-                    model: 'gemini-3.1-pro',
+                    model: 'gemini-2.5-pro',
                     contents: [{ role: 'user', parts: [{ text: prompt }, { inlineData: { mimeType: "image/jpeg", data: cleanBase64 } }] }], // <-- Use cleanBase64 here
                     config: { responseMimeType: "application/json" }
                 });
@@ -183,24 +183,62 @@ exports.process3DExtrusion = (0, tasks_1.onTaskDispatched)({
         if (!taskData.data || !taskData.data.task_id) {
             throw new Error(`Tripo3D Extrusion Failed.`);
         }
-        const task_id = taskData.data.task_id;
+        // Fix 1: Make sure this is camelCase (taskId) so the fetch below can find it!
+        const taskId = taskData.data.task_id;
         // Step C: Poll for Completion
         let isComplete = false;
         let glbUrl = "";
         while (!isComplete) {
-            await new Promise(res => setTimeout(res, 5000));
-            const statusRes = await fetch(`https://api.tripo3d.ai/v2/openapi/task/${task_id}`, {
-                headers: { "Authorization": `Bearer ${TRIPO_API_KEY}` }
+            // Wait 5 seconds between checks
+            await new Promise((resolve) => setTimeout(resolve, 5000));
+            // Now this successfully uses the ${taskId} we declared above
+            const statusRes = await fetch(`https://api.tripo3d.ai/v2/openapi/task/${taskId}`, {
+                method: "GET",
+                headers: { Authorization: `Bearer ${process.env.TRIPO_API_KEY}` }
             });
+            // --- NEW SHIELD: If Tripo3D hiccups and returns an HTML error page, ignore it and try again! ---
+            if (!statusRes.ok) {
+                console.warn(`Tripo API hiccup (Status ${statusRes.status}). Retrying...`);
+                continue; // Skips the rest of the loop and starts over!
+            }
+            // If we get here, the response is safe to parse!
             const statusData = await statusRes.json();
             if (statusData.data.status === "success") {
                 isComplete = true;
-                glbUrl = statusData.data.result.model.url;
+                console.log("=== TRIPO SUCCESS OUTPUT ===", JSON.stringify(statusData.data.output));
+                // 1. Get the temporary URL from Tripo3D
+                const temporaryTripoUrl = statusData.data.output.model || statusData.data.output.pbr_model || statusData.data.output.base_model;
+                if (!temporaryTripoUrl) {
+                    throw new Error(`Tripo3D succeeded, but no URL was found! Output: ${JSON.stringify(statusData.data.output)}`);
+                }
+                // 2. Download the GLB file into the Cloud Worker's memory
+                console.log("Downloading GLB from Tripo3D to Firebase Storage...");
+                const glbRes = await fetch(temporaryTripoUrl);
+                if (!glbRes.ok) {
+                    throw new Error(`Tripo CDN Failed to deliver file! Status: ${glbRes.status}`);
+                }
+                const glbArrayBuffer = await glbRes.arrayBuffer();
+                // 3. Save it permanently to your Firebase Storage Locker
+                const storagePath = `users/${userId}/agents/${agentId}/model.glb`;
+                const bucket = admin.storage().bucket(); // Explicitly tell Cursor what the bucket is!
+                const file = bucket.file(storagePath);
+                // Wrap it in a Uint8Array to make TypeScript happy!
+                await file.save(Buffer.from(new Uint8Array(glbArrayBuffer)), {
+                    metadata: { contentType: "model/gltf-binary" }
+                });
+                // --- FIX 2: Added the missing URL signing and loop closing! ---
+                // 4. Generate a permanent Firebase URL (valid until the year 2100!)
+                const [permanentUrl] = await file.getSignedUrl({
+                    action: "read",
+                    expires: "01-01-2100"
+                });
+                // 5. Hand the safe, permanent URL to the database
+                glbUrl = permanentUrl;
             }
             else if (statusData.data.status === "failed") {
                 throw new Error("Tripo3D Generation Failed");
             }
-        }
+        } // <--- Added the missing bracket to close the while loop!
         // Step D: Unlock the UI
         await admin.firestore().doc(`users/${userId}/agents/${agentId}`).set({
             extrusionStatus: "complete", model3dUrl: glbUrl, updatedAt: admin.firestore.FieldValue.serverTimestamp()

@@ -35,70 +35,104 @@ export function useGeminiLive(agentId: string, userId: string) {
       analyzerRef.current.fftSize = 256;
       analyzerRef.current.connect(audioContextRef.current.destination);
       
-      // 3. Setup Mic & Camera Streams
-      micStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
-      
-      if (!videoRef.current) videoRef.current = document.createElement('video');
-      videoRef.current.srcObject = micStreamRef.current;
-      videoRef.current.play();
+// --- STEP 3: RAW, UNFILTERED HARDWARE ACCESS ---
+micStreamRef.current = await navigator.mediaDevices.getUserMedia({ 
+  audio: true, // Stripped all strict constraints. Let Chrome use its safe defaults!
+  video: true 
+});
 
-      if (!canvasRef.current) canvasRef.current = document.createElement('canvas');
+// Safety Check: Did the hardware actually give us an audio track?
+if (micStreamRef.current.getAudioTracks().length === 0) {
+    throw new Error("Hardware Error: No audio tracks found in the microphone stream.");
+}
+// -----------------------------------------------
 
-   // 4. Connect to Gemini Live API
-   sessionRef.current = await ai.live.connect({
-    model: "gemini-3.1-pro",
-    config: {
-      generationConfig: {
-        responseModalities: ["audio" as any],
-        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Puck" } } }
-      },
-      systemInstruction: {
-        parts: [{ 
-          text: `You are a sentient 3D Co-Creator. 
-          CORE MEMORY: ${coreMemory.current_lore_summary} 
-          FACTS: ${memoryString}
-          VISION DIRECTIVE: You receive 1 FPS frames from the user's camera. Identify physical objects and incorporate them into the lore.
-          CONVERSATIONAL CADENCE: Keep answers to 3 sentences max.
-          Use 'generate_product_concept' when agreeing on a physical build.` 
-        }]
-      },
-      tools: [
-        {
-          functionDeclarations: [
+if (!videoRef.current) videoRef.current = document.createElement('video');
+videoRef.current.srcObject = micStreamRef.current;
+videoRef.current.play();
+
+if (!canvasRef.current) canvasRef.current = document.createElement('canvas');
+
+      // 4. Connect to Gemini Live API
+      sessionRef.current = await ai.live.connect({
+        model: "gemini-3.1-pro",
+        config: {
+          generationConfig: {
+            responseModalities: ["audio" as any],
+            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Puck" } } }
+          },
+          systemInstruction: {
+            parts: [{ 
+              text: `You are a sentient 3D Co-Creator. 
+              CORE MEMORY: ${coreMemory.current_lore_summary} 
+              FACTS: ${memoryString}
+              VISION DIRECTIVE: You receive 1 FPS frames from the user's camera. Identify physical objects and incorporate them into the lore.
+              CONVERSATIONAL CADENCE: Keep answers to 3 sentences max.
+              Use 'generate_product_concept' when agreeing on a physical build.` 
+            }]
+          },
+          tools: [
             {
-              name: "generate_product",
-              description: "Triggers the IP Vault to generate a product.",
-              parameters: {
-                type: "OBJECT" as any,
-                properties: {
-                  product_type: { type: "STRING" as any },
-                  aesthetic: { type: "STRING" as any },
-                  primary_color_hex: { type: "STRING" as any }
+              functionDeclarations: [
+                {
+                  name: "generate_product",
+                  description: "Triggers the IP Vault to generate a product.",
+                  parameters: {
+                    type: "OBJECT" as any,
+                    properties: {
+                      product_type: { type: "STRING" as any },
+                      aesthetic: { type: "STRING" as any },
+                      primary_color_hex: { type: "STRING" as any }
+                    }
+                  }
                 }
-              }
+              ]
             }
           ]
+        },
+        callbacks: {
+          onopen: () => { console.log("Live connection opened"); },
+          onmessage: (message: any) => {},
+          onerror: (error: any) => { console.error("Live error:", error); },
+          onclose: (event: any) => {}
         }
-      ]
-    },
-    callbacks: {
-      onopen: () => { console.log("Live connection opened"); },
-      onmessage: (message: any) => {},
-      onerror: (error: any) => { console.error("Live error:", error); },
-      onclose: (event: any) => {}
-    }
-  });   
+      });   
       setIsConnected(true);
 
-      // 5. Start Audio Streaming (Sending to Gemini)
+      // --- FIX 3: BULLETPROOF MICROPHONE STREAM WITH SAFETY VALVE ---
+      let selectedMime = '';
+      const mimeTypes = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/webm'];
+      for (const mime of mimeTypes) {
+        if (MediaRecorder.isTypeSupported(mime)) {
+          selectedMime = mime;
+          break;
+        }
+      }
+
+      const options = selectedMime ? { mimeType: selectedMime } : undefined;
       const mediaRecorder = new MediaRecorder(micStreamRef.current, { mimeType: 'audio/webm' });
+
       mediaRecorder.ondataavailable = async (e) => {
-        const buffer = await e.data.arrayBuffer();
-        sessionRef.current?.sendClientContent({
-          turns: [{ role: "user", parts: [{ inlineData: { mimeType: "audio/webm", data: Buffer.from(buffer).toString("base64") } }] }]
-        });
+        if (e.data.size > 0) {
+          if (!sessionRef.current) return;
+          if (sessionRef.current instanceof WebSocket && sessionRef.current.readyState !== WebSocket.OPEN) {
+             return; 
+          }
+
+          const buffer = await e.data.arrayBuffer();
+          
+          sessionRef.current?.sendClientContent({
+            turns: [{ 
+              role: "user", 
+              parts: [{ inlineData: { mimeType: 'audio/webm', data: Buffer.from(buffer).toString("base64") } }] 
+            }]
+          });
+        }
       };
-      mediaRecorder.start(100);
+      
+      mediaRecorder.start(250);
+      // ----------------------------------------------
+      // -------------------------------------------------------------
 
       // 6. Start Vision Loop (1 FPS)
       visionIntervalRef.current = setInterval(() => {
@@ -115,9 +149,18 @@ export function useGeminiLive(agentId: string, userId: string) {
         }
       }, 1000);
 
+      // --- FIX 2: REPLACED .on() CRASH WITH NATIVE EVENT LISTENER ---
       // 7. Handle Incoming Data & Tool Calls
-      sessionRef.current.on('message', async (message: any) => {
+      sessionRef.current.addEventListener('message', async (event: any) => {
         
+        // Parse the incoming WebSocket data
+        let message;
+        try {
+          message = JSON.parse(event.data);
+        } catch (e) {
+          return; // Ignore non-JSON messages
+        }
+
         // Handle User Interruption (VAD Flush)
         if (message.serverContent?.interrupted) {
           currentAudioNodesRef.current.forEach(node => { try { node.stop(); } catch (e) {} });
@@ -158,6 +201,7 @@ export function useGeminiLive(agentId: string, userId: string) {
           }
         }
       });
+      // --------------------------------------------------------------
 
       // 8. The 60FPS Volume calculation loop for 3D Lip-syncing
       const dataArray = new Uint8Array(analyzerRef.current.frequencyBinCount);
