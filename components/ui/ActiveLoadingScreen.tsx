@@ -32,7 +32,14 @@ export function ActiveLoadingScreen({ userId, agentId, onComplete }: ActiveLoadi
   return (
     <div className="flex flex-col items-center justify-center h-full w-full bg-black text-white p-10 pointer-events-auto z-50">
       <div className="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-cyan-400 mb-8"></div>
-      <h2 className="text-3xl font-bold animate-pulse mb-12">Synthesizing 3D DNA...</h2>
+      <h2 className="text-3xl font-bold animate-pulse mb-4">
+        {agentData?.extrusionStatus === 'rigging' ? 'Rigging Skeleton...' : 'Synthesizing 3D DNA...'}
+      </h2>
+      <p className="text-sm text-neutral-500 mb-12">
+        {agentData?.extrusionStatus === 'rigging'
+          ? 'Attaching Mixamo skeleton for animation'
+          : 'Generating 3D model from image'}
+      </p>
 
       <div className="w-full max-w-md space-y-6 text-left">
         <div className="border border-neutral-800 p-4 rounded-lg bg-neutral-900/50">
