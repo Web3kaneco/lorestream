@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react';
-import { GoogleGenAI, Modality } from '@google/genai'; // 🚀 THE FIX: Importing the official Modality enum!
+import { GoogleGenAI, Modality } from '@google/genai'; 
 import { doc, getDoc } from 'firebase/firestore';
 import { db, functions } from '@/lib/firebase';
 import { httpsCallable } from 'firebase/functions';
@@ -64,7 +64,6 @@ export function useGeminiLive(agentId: string, userId: string) {
       sessionRef.current = await ai.live.connect({
         model: "gemini-2.5-flash-native-audio-preview-12-2025", 
         config: {
-          // 🚀 THE FIX: Using the strict Modality Enum so Gemini is forced into Voice mode!
           responseModalities: [Modality.AUDIO], 
           speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Puck" } } },
           systemInstruction: {
@@ -72,7 +71,7 @@ export function useGeminiLive(agentId: string, userId: string) {
               text: `You are a helpful AI Co-Creator.
               CORE MEMORY: ${coreMemory?.current_lore_summary || ""} 
               FACTS: ${memoryString}
-              CRITICAL: You are strictly a VOICE assistant. Do not use text thinking blocks. Keep your answers conversational, brief, and natural.` 
+              CRITICAL: Do not output text reasoning or formatting. Speak conversationally and keep answers very brief.` 
             }]
           }
         },
@@ -87,18 +86,11 @@ export function useGeminiLive(agentId: string, userId: string) {
           },
           onerror: (error: any) => { console.error("Live error:", error); },
           onmessage: async (message: any) => {
+            
             if (message.setupComplete) {
-                console.log("✅ Handshake Complete! Safe to stream audio.");
+                console.log("✅ Handshake Complete! Safe to stream audio. Listening...");
                 socketReadyRef.current = true;
-                
-                // 🗣️ THE KICKSTART: Tell it to speak out loud immediately!
-                try {
-                    sessionRef.current.sendClientContent({
-                        turns: "Hello! The microphone is active. Please introduce yourself out loud!",
-                        turnComplete: true
-                    });
-                } catch (e) {}
-                
+                // 🧹 THE FIX: Kickstart deleted! We leave VAD active so it relies purely on your microphone!
                 return; 
             }
 
@@ -110,7 +102,7 @@ export function useGeminiLive(agentId: string, userId: string) {
 
             if (!message.serverContent?.modelTurn) return;
             for (const part of message.serverContent.modelTurn.parts) {
-              if (part.text) console.log("📝 Gemini Transcript:", part.text);
+              if (part.text) console.log("📝 Gemini:", part.text);
               if (part.inlineData?.mimeType?.startsWith('audio/')) {
                  console.log("🔊 RECEIVED AUDIO CHUNK!");
                  playAudioBuffer(part.inlineData.data);
@@ -133,7 +125,6 @@ export function useGeminiLive(agentId: string, userId: string) {
         if (!sessionRef.current || !socketReadyRef.current) return;
         
         const inputData = e.inputBuffer.getChannelData(0);
-        
         const buffer = new ArrayBuffer(inputData.length * 2);
         const view = new DataView(buffer);
         
@@ -147,14 +138,12 @@ export function useGeminiLive(agentId: string, userId: string) {
         
         const now = Date.now();
         if (now - lastLogTimeRef.current > 2000) {
-            console.log(`🎤 Mic Max Amplitude: ${maxAmplitude.toFixed(4)} (Actual Rate: 16000Hz)`);
+            console.log(`🎤 Mic Max Amplitude: ${maxAmplitude.toFixed(4)} (Actual Rate: ${audioCtx.sampleRate}Hz)`);
             lastLogTimeRef.current = now;
         }
         
         const bytes = new Uint8Array(buffer);
         let binary = '';
-        
-        // 🚀 THE FIX: A safer, faster Base64 encoder so we don't drop frames!
         const chunkSize = 1024;
         for (let i = 0; i < bytes.length; i += chunkSize) {
             const chunk = bytes.subarray(i, i + chunkSize);
@@ -163,8 +152,9 @@ export function useGeminiLive(agentId: string, userId: string) {
         const base64Audio = btoa(binary);
 
         try {
+          // 🚀 WE KEPT THIS FIX: Tells Google exactly how to decode your voice so you sound human!
           sessionRef.current.sendRealtimeInput([{ 
-            mimeType: "audio/pcm;rate=16000", 
+            mimeType: `audio/pcm;rate=${audioCtx.sampleRate}`, 
             data: base64Audio 
           }]);
         } catch (err) { }
