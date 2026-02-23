@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, Modality } from '@google/genai'; // 🚀 THE FIX: Importing the official Modality enum!
 import { doc, getDoc } from 'firebase/firestore';
 import { db, functions } from '@/lib/firebase';
 import { httpsCallable } from 'firebase/functions';
@@ -64,15 +64,15 @@ export function useGeminiLive(agentId: string, userId: string) {
       sessionRef.current = await ai.live.connect({
         model: "gemini-2.5-flash-native-audio-preview-12-2025", 
         config: {
-          responseModalities: ["AUDIO" as any],
+          // 🚀 THE FIX: Using the strict Modality Enum so Gemini is forced into Voice mode!
+          responseModalities: [Modality.AUDIO], 
           speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Puck" } } },
           systemInstruction: {
             parts: [{ 
               text: `You are a helpful AI Co-Creator.
               CORE MEMORY: ${coreMemory?.current_lore_summary || ""} 
               FACTS: ${memoryString}
-              Keep your answers conversational, brief, and natural. 
-              IMPORTANT: When the user speaks to you, begin your very first response by explicitly saying "I can hear you clearly!" so we know the microphone is working.` 
+              CRITICAL: You are strictly a VOICE assistant. Do not use text thinking blocks. Keep your answers conversational, brief, and natural.` 
             }]
           }
         },
@@ -90,6 +90,15 @@ export function useGeminiLive(agentId: string, userId: string) {
             if (message.setupComplete) {
                 console.log("✅ Handshake Complete! Safe to stream audio.");
                 socketReadyRef.current = true;
+                
+                // 🗣️ THE KICKSTART: Tell it to speak out loud immediately!
+                try {
+                    sessionRef.current.sendClientContent({
+                        turns: "Hello! The microphone is active. Please introduce yourself out loud!",
+                        turnComplete: true
+                    });
+                } catch (e) {}
+                
                 return; 
             }
 
@@ -138,22 +147,24 @@ export function useGeminiLive(agentId: string, userId: string) {
         
         const now = Date.now();
         if (now - lastLogTimeRef.current > 2000) {
-            // 🚀 THE LOG: Let's see what the browser *actually* set your sample rate to!
-            console.log(`🎤 Mic Max Amplitude: ${maxAmplitude.toFixed(4)} (Actual Rate: ${audioCtx.sampleRate}Hz)`);
+            console.log(`🎤 Mic Max Amplitude: ${maxAmplitude.toFixed(4)} (Actual Rate: 16000Hz)`);
             lastLogTimeRef.current = now;
         }
         
         const bytes = new Uint8Array(buffer);
         let binary = '';
-        for (let i = 0; i < bytes.length; i++) {
-            binary += String.fromCharCode(bytes[i]);
+        
+        // 🚀 THE FIX: A safer, faster Base64 encoder so we don't drop frames!
+        const chunkSize = 1024;
+        for (let i = 0; i < bytes.length; i += chunkSize) {
+            const chunk = bytes.subarray(i, i + chunkSize);
+            binary += String.fromCharCode.apply(null, Array.from(chunk));
         }
         const base64Audio = btoa(binary);
 
         try {
-          // 🚀 THE FIX: Tell Google the TRUE sample rate so your voice isn't distorted!
           sessionRef.current.sendRealtimeInput([{ 
-            mimeType: `audio/pcm;rate=${audioCtx.sampleRate}`, 
+            mimeType: "audio/pcm;rate=16000", 
             data: base64Audio 
           }]);
         } catch (err) { }
