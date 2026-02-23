@@ -53,13 +53,33 @@ async (request) => {
     if (!userId)
         throw new https_1.HttpsError("unauthenticated", "Must be logged in.");
     const db = admin.firestore();
+    const bucket = admin.storage().bucket(); // Access your Firebase Storage
     // Set initial loading state so the UI transitions
     await db.doc(`users/${userId}/agents/${agentId}`).set({
         extrusionStatus: "generating", traits: [], archetype: "", funFact: ""
     }, { merge: true });
-    // Queue the heavy 3D task to run safely in the background
+    // --- THE STORAGE LOCKER FIX ---
+    let imageStoragePath = null;
+    if (imageBase64) {
+        // 1. Strip the "data:image/png;base64," header if the frontend sent it
+        const base64Data = imageBase64.replace(/^data:image\/\w+;base64,/, "");
+        const buffer = Buffer.from(base64Data, 'base64');
+        // 2. Define the locker path and save the file to Firebase Storage
+        imageStoragePath = `users/${userId}/agents/${agentId}/source_image.png`;
+        const file = bucket.file(imageStoragePath);
+        await file.save(buffer, { metadata: { contentType: 'image/png' } });
+    }
+    // ------------------------------
+    // Queue the heavy 3D task safely (passing the path, NOT the giant image!)
+    console.log("=== THE STORAGE LOCKER FIX IS ACTIVE ===");
     const queue = (0, functions_1.getFunctions)().taskQueue("process3DExtrusion");
-    await queue.enqueue({ userId, agentId, imageBase64, contract, tokenId }, { dispatchDeadlineSeconds: 60 * 10 });
+    await queue.enqueue({
+        userId,
+        agentId,
+        imageStoragePath, // <--- Send the tiny text path instead!
+        contract,
+        tokenId
+    }, { dispatchDeadlineSeconds: 60 * 10 });
     // Run Fast AI / Alchemy asynchronously (does not block the frontend)
     (async () => {
         try {
@@ -105,9 +125,21 @@ exports.process3DExtrusion = (0, tasks_1.onTaskDispatched)({
     timeoutSeconds: 480,
     memory: "1GiB"
 }, async (req) => {
-    const { userId, agentId, imageBase64, contract, tokenId } = req.data;
-    let finalImage = imageBase64;
+    // 1. Grab the locker path instead of the giant image string
+    const { userId, agentId, imageStoragePath, contract, tokenId } = req.data;
+    let finalImage = "";
     try {
+        const db = admin.firestore();
+        const bucket = admin.storage().bucket();
+        // --- THE STORAGE LOCKER RETRIEVAL ---
+        if (imageStoragePath) {
+            // Download the file from Firebase Storage
+            const file = bucket.file(imageStoragePath);
+            const [buffer] = await file.download();
+            // Convert it back to Base64 so Tripo3D can read it
+            finalImage = buffer.toString('base64');
+        }
+        // ------------------------------------
         // If Web3, fetch the high-res gateway image from Alchemy first
         if (contract && tokenId && !finalImage) {
             const alchemy = new alchemy_sdk_1.Alchemy({ apiKey: process.env.ALCHEMY_API_KEY, network: alchemy_sdk_1.Network.ETH_MAINNET });
@@ -126,7 +158,10 @@ exports.process3DExtrusion = (0, tasks_1.onTaskDispatched)({
             headers: { "Authorization": `Bearer ${TRIPO_API_KEY}`, "Content-Type": "application/json" },
             body: JSON.stringify({ image: finalImage })
         });
-        const { image_token } = await uploadRes.json();
+        // --- THIS IS THE LINE THAT WAS MISSING! ---
+        const uploadData = await uploadRes.json();
+        const image_token = uploadData.image_token || uploadData.data?.image_token;
+        // ------------------------------------------
         // Step B: Trigger Extrusion
         const taskRes = await fetch("https://api.tripo3d.ai/v2/openapi/task", {
             method: "POST",
