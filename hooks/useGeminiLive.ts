@@ -2,7 +2,6 @@ import { useState, useRef, useCallback } from 'react';
 import { GoogleGenAI, Modality } from '@google/genai'; 
 import { doc, getDoc } from 'firebase/firestore';
 import { db, functions } from '@/lib/firebase';
-import { httpsCallable } from 'firebase/functions';
 
 const ai = new GoogleGenAI({ apiKey: process.env.NEXT_PUBLIC_GEMINI_KEY });
 
@@ -18,7 +17,7 @@ export function useGeminiLive(agentId: string, userId: string) {
   const currentAudioNodesRef = useRef<AudioBufferSourceNode[]>([]);
   const volumeRef = useRef<number>(0);
   
-  const micProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const workletNodeRef = useRef<AudioWorkletNode | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const visionIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -40,17 +39,19 @@ export function useGeminiLive(agentId: string, userId: string) {
       const coreMemory = memorySnap.exists() ? memorySnap.data() : { current_lore_summary: "No prior memories.", key_facts: [] };
       const memoryString = coreMemory.key_facts?.join('. ') || "";
 
-      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+      // 🚀 THE FIX: Let the browser use its native hardware speed!
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      audioContextRef.current = audioCtx;
+      
       if (audioContextRef.current.state === 'suspended') {
           await audioContextRef.current.resume();
       }
 
       analyzerRef.current = audioContextRef.current.createAnalyser();
       analyzerRef.current.fftSize = 256;
-      analyzerRef.current.connect(audioContextRef.current.destination);
       
       micStreamRef.current = await navigator.mediaDevices.getUserMedia({ 
-          audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }, 
+          audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false }, 
           video: true 
       });
       
@@ -71,7 +72,7 @@ export function useGeminiLive(agentId: string, userId: string) {
               text: `You are a helpful AI Co-Creator.
               CORE MEMORY: ${coreMemory?.current_lore_summary || ""} 
               FACTS: ${memoryString}
-              CRITICAL: Do not output text reasoning or formatting. Speak conversationally and keep answers very brief.` 
+              CRITICAL INSTRUCTION: You are strictly a VOICE assistant. Wait for the user to speak, and then reply conversationally and briefly.` 
             }]
           }
         },
@@ -86,11 +87,9 @@ export function useGeminiLive(agentId: string, userId: string) {
           },
           onerror: (error: any) => { console.error("Live error:", error); },
           onmessage: async (message: any) => {
-            
             if (message.setupComplete) {
                 console.log("✅ Handshake Complete! Safe to stream audio. Listening...");
                 socketReadyRef.current = true;
-                // 🧹 THE FIX: Kickstart deleted! We leave VAD active so it relies purely on your microphone!
                 return; 
             }
 
@@ -102,7 +101,7 @@ export function useGeminiLive(agentId: string, userId: string) {
 
             if (!message.serverContent?.modelTurn) return;
             for (const part of message.serverContent.modelTurn.parts) {
-              if (part.text) console.log("📝 Gemini:", part.text);
+              if (part.text) console.log("📝 Gemini Transcript:", part.text);
               if (part.inlineData?.mimeType?.startsWith('audio/')) {
                  console.log("🔊 RECEIVED AUDIO CHUNK!");
                  playAudioBuffer(part.inlineData.data);
@@ -113,55 +112,48 @@ export function useGeminiLive(agentId: string, userId: string) {
       });   
       setIsConnected(true);
 
-      const audioCtx = audioContextRef.current;
       const source = audioCtx.createMediaStreamSource(micStreamRef.current);
-      const processor = audioCtx.createScriptProcessor(4096, 1, 1);
-      micProcessorRef.current = processor;
+      
+      try {
+        await audioCtx.audioWorklet.addModule('/audio-processor.js');
+        // 🚀 THE FIX: Pass the exact native sample rate to the Worklet so it can calculate the ratio
+        const workletNode = new AudioWorkletNode(audioCtx, 'pcm-processor', {
+            processorOptions: { sampleRate: audioCtx.sampleRate }
+        });
+        workletNodeRef.current = workletNode;
 
-      processor.onaudioprocess = (e) => {
-        const outputData = e.outputBuffer.getChannelData(0);
-        outputData.fill(0); 
-        
-        if (!sessionRef.current || !socketReadyRef.current) return;
-        
-        const inputData = e.inputBuffer.getChannelData(0);
-        const buffer = new ArrayBuffer(inputData.length * 2);
-        const view = new DataView(buffer);
-        
-        let maxAmplitude = 0; 
-        for (let i = 0; i < inputData.length; i++) {
-            const val = inputData[i];
-            if (Math.abs(val) > maxAmplitude) maxAmplitude = Math.abs(val);
-            const s = Math.max(-1, Math.min(1, val * 3.0)); 
-            view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true); 
-        }
-        
-        const now = Date.now();
-        if (now - lastLogTimeRef.current > 2000) {
-            console.log(`🎤 Mic Max Amplitude: ${maxAmplitude.toFixed(4)} (Actual Rate: ${audioCtx.sampleRate}Hz)`);
-            lastLogTimeRef.current = now;
-        }
-        
-        const bytes = new Uint8Array(buffer);
-        let binary = '';
-        const chunkSize = 1024;
-        for (let i = 0; i < bytes.length; i += chunkSize) {
-            const chunk = bytes.subarray(i, i + chunkSize);
-            binary += String.fromCharCode.apply(null, Array.from(chunk));
-        }
-        const base64Audio = btoa(binary);
+        workletNode.port.onmessage = (event) => {
+          if (!sessionRef.current || !socketReadyRef.current) return;
 
-        try {
-          // 🚀 WE KEPT THIS FIX: Tells Google exactly how to decode your voice so you sound human!
-          sessionRef.current.sendRealtimeInput([{ 
-            mimeType: `audio/pcm;rate=${audioCtx.sampleRate}`, 
-            data: base64Audio 
-          }]);
-        } catch (err) { }
-      };
+          const { pcmData, maxAmplitude } = event.data;
+          
+          const now = Date.now();
+          if (now - lastLogTimeRef.current > 2000) {
+              console.log(`🎤 Mic Max Amplitude: ${maxAmplitude.toFixed(4)} (Native Rate: ${audioCtx.sampleRate}Hz)`);
+              lastLogTimeRef.current = now;
+          }
 
-      source.connect(processor);
-      processor.connect(audioCtx.destination);
+          const bytes = new Uint8Array(pcmData.buffer);
+          let binary = '';
+          for (let i = 0; i < bytes.length; i += 1024) {
+              binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + 1024)));
+          }
+          const base64Audio = btoa(binary);
+
+          try {
+            // Because the Worklet did the math, this is guaranteed perfectly clean 16000Hz data
+            sessionRef.current.sendRealtimeInput([{ 
+              mimeType: "audio/pcm;rate=16000", 
+              data: base64Audio 
+            }]);
+          } catch (err) { }
+        };
+
+        source.connect(workletNode);
+        workletNode.connect(audioCtx.destination);
+      } catch (err) {
+        console.error("AudioWorklet failed to load.", err);
+      }
 
       const dataArray = new Uint8Array(analyzerRef.current.frequencyBinCount);
       const updateVolume = () => {
@@ -189,9 +181,9 @@ export function useGeminiLive(agentId: string, userId: string) {
         try { sessionRef.current.close(); } catch(e) {}
         sessionRef.current = null;
     }
-    if (micProcessorRef.current) {
-        micProcessorRef.current.disconnect();
-        micProcessorRef.current = null;
+    if (workletNodeRef.current) {
+        workletNodeRef.current.disconnect();
+        workletNodeRef.current = null;
     }
     micStreamRef.current?.getTracks().forEach(track => track.stop());
     audioContextRef.current?.close();
@@ -201,7 +193,7 @@ export function useGeminiLive(agentId: string, userId: string) {
   }, []);
 
   const playAudioBuffer = async (base64Data: string) => {
-     if (!audioContextRef.current || !analyzerRef.current) return;
+     if (!audioContextRef.current) return;
      try {
          const binaryString = window.atob(base64Data);
          const pcmData = new Int16Array(binaryString.length / 2);
@@ -221,7 +213,11 @@ export function useGeminiLive(agentId: string, userId: string) {
          
          const source = audioContextRef.current.createBufferSource();
          source.buffer = audioBuffer;
-         source.connect(analyzerRef.current); 
+         
+         source.connect(audioContextRef.current.destination); 
+         if (analyzerRef.current) {
+             source.connect(analyzerRef.current);
+         }
          
          const currentTime = audioContextRef.current.currentTime;
          if (nextPlayTimeRef.current < currentTime) {
