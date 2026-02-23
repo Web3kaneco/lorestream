@@ -18,192 +18,150 @@ export function useGeminiLive(agentId: string, userId: string) {
   const currentAudioNodesRef = useRef<AudioBufferSourceNode[]>([]);
   const volumeRef = useRef<number>(0);
   
+  const micProcessorRef = useRef<ScriptProcessorNode | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const visionIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const socketReadyRef = useRef<boolean>(false);
+  const isConnectingRef = useRef<boolean>(false);
+
+  const nextPlayTimeRef = useRef<number>(0);
+  const lastLogTimeRef = useRef<number>(0);
 
   const startSession = useCallback(async () => {
+    if (isConnectingRef.current || isConnected) return; 
+    isConnectingRef.current = true;
+    nextPlayTimeRef.current = 0; 
+
     try {
-      // 1. Fetch persistent memory (LoreGraph)
+      socketReadyRef.current = false;
+
       const memorySnap = await getDoc(doc(db, `users/${userId}/agents/${agentId}/lore/core_memory`));
       const coreMemory = memorySnap.exists() ? memorySnap.data() : { current_lore_summary: "No prior memories.", key_facts: [] };
       const memoryString = coreMemory.key_facts?.join('. ') || "";
 
-      // 2. Setup Audio Playback & Analyzer
-      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+      if (audioContextRef.current.state === 'suspended') {
+          await audioContextRef.current.resume();
+      }
+
       analyzerRef.current = audioContextRef.current.createAnalyser();
       analyzerRef.current.fftSize = 256;
       analyzerRef.current.connect(audioContextRef.current.destination);
       
-// --- STEP 3: RAW, UNFILTERED HARDWARE ACCESS ---
-micStreamRef.current = await navigator.mediaDevices.getUserMedia({ 
-  audio: true, // Stripped all strict constraints. Let Chrome use its safe defaults!
-  video: true 
-});
+      micStreamRef.current = await navigator.mediaDevices.getUserMedia({ 
+          audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }, 
+          video: true 
+      });
+      
+      if (!videoRef.current) videoRef.current = document.createElement('video');
+      videoRef.current.srcObject = micStreamRef.current;
+      videoRef.current.muted = true; 
+      videoRef.current.play();
 
-// Safety Check: Did the hardware actually give us an audio track?
-if (micStreamRef.current.getAudioTracks().length === 0) {
-    throw new Error("Hardware Error: No audio tracks found in the microphone stream.");
-}
-// -----------------------------------------------
+      if (!canvasRef.current) canvasRef.current = document.createElement('canvas');
 
-if (!videoRef.current) videoRef.current = document.createElement('video');
-videoRef.current.srcObject = micStreamRef.current;
-videoRef.current.play();
-
-if (!canvasRef.current) canvasRef.current = document.createElement('canvas');
-
-      // 4. Connect to Gemini Live API
       sessionRef.current = await ai.live.connect({
-        model: "gemini-3.1-pro",
+        model: "gemini-2.5-flash-native-audio-preview-12-2025", 
         config: {
-          generationConfig: {
-            responseModalities: ["audio" as any],
-            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Puck" } } }
-          },
+          responseModalities: ["AUDIO" as any],
+          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Puck" } } },
           systemInstruction: {
             parts: [{ 
-              text: `You are a sentient 3D Co-Creator. 
-              CORE MEMORY: ${coreMemory.current_lore_summary} 
+              text: `You are a helpful AI Co-Creator.
+              CORE MEMORY: ${coreMemory?.current_lore_summary || ""} 
               FACTS: ${memoryString}
-              VISION DIRECTIVE: You receive 1 FPS frames from the user's camera. Identify physical objects and incorporate them into the lore.
-              CONVERSATIONAL CADENCE: Keep answers to 3 sentences max.
-              Use 'generate_product_concept' when agreeing on a physical build.` 
+              Keep your answers conversational, brief, and natural. 
+              IMPORTANT: When the user speaks to you, begin your very first response by explicitly saying "I can hear you clearly!" so we know the microphone is working.` 
             }]
-          },
-          tools: [
-            {
-              functionDeclarations: [
-                {
-                  name: "generate_product",
-                  description: "Triggers the IP Vault to generate a product.",
-                  parameters: {
-                    type: "OBJECT" as any,
-                    properties: {
-                      product_type: { type: "STRING" as any },
-                      aesthetic: { type: "STRING" as any },
-                      primary_color_hex: { type: "STRING" as any }
-                    }
-                  }
-                }
-              ]
-            }
-          ]
+          }
         },
         callbacks: {
-          onopen: () => { console.log("Live connection opened"); },
-          onmessage: (message: any) => {},
+          onopen: () => { console.log("🟢 Live connection fully opened!"); },
+          onclose: (e: any) => { 
+            console.log("🔴 Live connection closed."); 
+            sessionRef.current = null;
+            socketReadyRef.current = false;
+            setIsConnected(false);
+            isConnectingRef.current = false;
+          },
           onerror: (error: any) => { console.error("Live error:", error); },
-          onclose: (event: any) => {}
+          onmessage: async (message: any) => {
+            if (message.setupComplete) {
+                console.log("✅ Handshake Complete! Safe to stream audio.");
+                socketReadyRef.current = true;
+                return; 
+            }
+
+            if (message.serverContent?.interrupted) {
+              currentAudioNodesRef.current.forEach(node => { try { node.stop(); } catch (e) {} });
+              currentAudioNodesRef.current = [];
+              nextPlayTimeRef.current = 0; 
+            }
+
+            if (!message.serverContent?.modelTurn) return;
+            for (const part of message.serverContent.modelTurn.parts) {
+              if (part.text) console.log("📝 Gemini Transcript:", part.text);
+              if (part.inlineData?.mimeType?.startsWith('audio/')) {
+                 console.log("🔊 RECEIVED AUDIO CHUNK!");
+                 playAudioBuffer(part.inlineData.data);
+              }
+            }
+          }
         }
       });   
       setIsConnected(true);
 
-      // --- FIX 3: BULLETPROOF MICROPHONE STREAM WITH SAFETY VALVE ---
-      let selectedMime = '';
-      const mimeTypes = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/webm'];
-      for (const mime of mimeTypes) {
-        if (MediaRecorder.isTypeSupported(mime)) {
-          selectedMime = mime;
-          break;
-        }
-      }
+      const audioCtx = audioContextRef.current;
+      const source = audioCtx.createMediaStreamSource(micStreamRef.current);
+      const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+      micProcessorRef.current = processor;
 
-      const options = selectedMime ? { mimeType: selectedMime } : undefined;
-      const mediaRecorder = new MediaRecorder(micStreamRef.current, { mimeType: 'audio/webm' });
-
-      mediaRecorder.ondataavailable = async (e) => {
-        if (e.data.size > 0) {
-          if (!sessionRef.current) return;
-          if (sessionRef.current instanceof WebSocket && sessionRef.current.readyState !== WebSocket.OPEN) {
-             return; 
-          }
-
-          const buffer = await e.data.arrayBuffer();
-          
-          sessionRef.current?.sendClientContent({
-            turns: [{ 
-              role: "user", 
-              parts: [{ inlineData: { mimeType: 'audio/webm', data: Buffer.from(buffer).toString("base64") } }] 
-            }]
-          });
-        }
-      };
-      
-      mediaRecorder.start(250);
-      // ----------------------------------------------
-      // -------------------------------------------------------------
-
-      // 6. Start Vision Loop (1 FPS)
-      visionIntervalRef.current = setInterval(() => {
-        if (!videoRef.current || !canvasRef.current || !sessionRef.current) return;
-        const context = canvasRef.current.getContext('2d');
-        if (context && videoRef.current.readyState >= 2) {
-          canvasRef.current.width = 640;
-          canvasRef.current.height = 480;
-          context.drawImage(videoRef.current, 0, 0, 640, 480);
-          const base64Image = canvasRef.current.toDataURL('image/jpeg', 0.8).split(',')[1];
-          sessionRef.current.sendClientContent({
-            turns: [{ role: "user", parts: [{ inlineData: { mimeType: "image/jpeg", data: base64Image } }] }]
-          });
-        }
-      }, 1000);
-
-      // --- FIX 2: REPLACED .on() CRASH WITH NATIVE EVENT LISTENER ---
-      // 7. Handle Incoming Data & Tool Calls
-      sessionRef.current.addEventListener('message', async (event: any) => {
+      processor.onaudioprocess = (e) => {
+        const outputData = e.outputBuffer.getChannelData(0);
+        outputData.fill(0); 
         
-        // Parse the incoming WebSocket data
-        let message;
+        if (!sessionRef.current || !socketReadyRef.current) return;
+        
+        const inputData = e.inputBuffer.getChannelData(0);
+        
+        const buffer = new ArrayBuffer(inputData.length * 2);
+        const view = new DataView(buffer);
+        
+        let maxAmplitude = 0; 
+        for (let i = 0; i < inputData.length; i++) {
+            const val = inputData[i];
+            if (Math.abs(val) > maxAmplitude) maxAmplitude = Math.abs(val);
+            const s = Math.max(-1, Math.min(1, val * 3.0)); 
+            view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true); 
+        }
+        
+        const now = Date.now();
+        if (now - lastLogTimeRef.current > 2000) {
+            // 🚀 THE LOG: Let's see what the browser *actually* set your sample rate to!
+            console.log(`🎤 Mic Max Amplitude: ${maxAmplitude.toFixed(4)} (Actual Rate: ${audioCtx.sampleRate}Hz)`);
+            lastLogTimeRef.current = now;
+        }
+        
+        const bytes = new Uint8Array(buffer);
+        let binary = '';
+        for (let i = 0; i < bytes.length; i++) {
+            binary += String.fromCharCode(bytes[i]);
+        }
+        const base64Audio = btoa(binary);
+
         try {
-          message = JSON.parse(event.data);
-        } catch (e) {
-          return; // Ignore non-JSON messages
-        }
+          // 🚀 THE FIX: Tell Google the TRUE sample rate so your voice isn't distorted!
+          sessionRef.current.sendRealtimeInput([{ 
+            mimeType: `audio/pcm;rate=${audioCtx.sampleRate}`, 
+            data: base64Audio 
+          }]);
+        } catch (err) { }
+      };
 
-        // Handle User Interruption (VAD Flush)
-        if (message.serverContent?.interrupted) {
-          currentAudioNodesRef.current.forEach(node => { try { node.stop(); } catch (e) {} });
-          currentAudioNodesRef.current = [];
-        }
+      source.connect(processor);
+      processor.connect(audioCtx.destination);
 
-        if (!message.serverContent?.modelTurn) return;
-        const parts = message.serverContent.modelTurn.parts;
-
-        for (const part of parts) {
-          
-          // Play Gemini's Voice
-          if (part.inlineData?.mimeType.startsWith('audio/')) {
-             playAudioBuffer(part.inlineData.data);
-          }
-          
-          // THE UPDATE: Securely triggering the Firebase Cloud Function
-          if (part.functionCall?.name === "generate_product_concept") {
-             const args = part.functionCall.args;
-             setIsGeneratingVaultItem(true);
-             
-             try {
-                const forgeItem = httpsCallable(functions, 'generateProductConcept');
-                const result = await forgeItem(args);
-                const newAsset = result.data; // Result contains the signed URL from Cloud Storage
-                
-                setVaultItems(prev => [...prev, newAsset]);
-             } catch (error) {
-                console.error("Vault Generation Failed:", error);
-             } finally {
-                setIsGeneratingVaultItem(false);
-             }
-             
-             // Tell Gemini the tool is done so it resumes talking
-             sessionRef.current.sendClientContent({
-                turns: [{ role: "user", parts: [{ functionResponse: { name: "generate_product_concept", response: { result: "Added to vault." } } }] }]
-             });
-          }
-        }
-      });
-      // --------------------------------------------------------------
-
-      // 8. The 60FPS Volume calculation loop for 3D Lip-syncing
       const dataArray = new Uint8Array(analyzerRef.current.frequencyBinCount);
       const updateVolume = () => {
          if (analyzerRef.current && sessionRef.current) {
@@ -218,11 +176,22 @@ if (!canvasRef.current) canvasRef.current = document.createElement('canvas');
 
     } catch (error) {
       console.error("Failed to start Live Session:", error);
+      isConnectingRef.current = false;
     }
-  }, [agentId, userId]);
+  }, [agentId, userId, isConnected]);
 
   const stopSession = useCallback(() => {
-    sessionRef.current?.close();
+    socketReadyRef.current = false;
+    isConnectingRef.current = false;
+    nextPlayTimeRef.current = 0;
+    if (sessionRef.current) {
+        try { sessionRef.current.close(); } catch(e) {}
+        sessionRef.current = null;
+    }
+    if (micProcessorRef.current) {
+        micProcessorRef.current.disconnect();
+        micProcessorRef.current = null;
+    }
     micStreamRef.current?.getTracks().forEach(track => track.stop());
     audioContextRef.current?.close();
     if (visionIntervalRef.current) clearInterval(visionIntervalRef.current);
@@ -232,19 +201,40 @@ if (!canvasRef.current) canvasRef.current = document.createElement('canvas');
 
   const playAudioBuffer = async (base64Data: string) => {
      if (!audioContextRef.current || !analyzerRef.current) return;
-     const binaryString = window.atob(base64Data);
-     const bytes = new Uint8Array(binaryString.length);
-     for (let i = 0; i < binaryString.length; i++) { bytes[i] = binaryString.charCodeAt(i); }
-     const audioBuffer = await audioContextRef.current.decodeAudioData(bytes.buffer);
-     const source = audioContextRef.current.createBufferSource();
-     source.buffer = audioBuffer;
-     
-     // Connect audio to our analyzer so the jaw bone moves!
-     source.connect(analyzerRef.current); 
-     
-     currentAudioNodesRef.current.push(source);
-     source.onended = () => { currentAudioNodesRef.current = currentAudioNodesRef.current.filter(n => n !== source); };
-     source.start();
+     try {
+         const binaryString = window.atob(base64Data);
+         const pcmData = new Int16Array(binaryString.length / 2);
+         for (let i = 0; i < pcmData.length; i++) {
+             const byteA = binaryString.charCodeAt(i * 2);
+             const byteB = binaryString.charCodeAt(i * 2 + 1);
+             pcmData[i] = (byteB << 8) | byteA; 
+         }
+         
+         if (pcmData.length === 0) return; 
+         
+         const audioBuffer = audioContextRef.current.createBuffer(1, pcmData.length, 24000);
+         const channelData = audioBuffer.getChannelData(0);
+         for (let i = 0; i < pcmData.length; i++) {
+             channelData[i] = pcmData[i] / 32768.0; 
+         }
+         
+         const source = audioContextRef.current.createBufferSource();
+         source.buffer = audioBuffer;
+         source.connect(analyzerRef.current); 
+         
+         const currentTime = audioContextRef.current.currentTime;
+         if (nextPlayTimeRef.current < currentTime) {
+             nextPlayTimeRef.current = currentTime;
+         }
+         
+         source.start(nextPlayTimeRef.current);
+         nextPlayTimeRef.current += audioBuffer.duration;
+         
+         currentAudioNodesRef.current.push(source);
+         source.onended = () => { 
+             currentAudioNodesRef.current = currentAudioNodesRef.current.filter(n => n !== source); 
+         };
+     } catch (error) {}
   };
 
   return { isConnected, vaultItems, isGeneratingVaultItem, startSession, stopSession, volumeRef };

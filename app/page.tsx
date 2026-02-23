@@ -19,7 +19,6 @@ export default function LoreStreamApp() {
   const [activeAgentId, setActiveAgentId] = useState<string | null>(null);
   const [modelUrl, setModelUrl] = useState<string>('');
   
-  // ---> MOVED INSIDE THE COMPONENT! <---
   const [showLibrary, setShowLibrary] = useState(false);
 
   // The Brain is mounted at the top level
@@ -53,7 +52,7 @@ export default function LoreStreamApp() {
       
       {/* --- TOP RIGHT CORNER: VAULT & LOGIN --- */}
       <div className="absolute top-6 right-6 z-50 flex items-center gap-4">
-        {appState === 'INGESTION' && auth.currentUser && (
+        {appState === 'INGESTION' && (
            <button 
              onClick={() => setShowLibrary(!showLibrary)}
              className="px-4 py-2 bg-gray-800 text-cyan-400 border border-gray-700 rounded hover:border-cyan-500 transition-all font-bold shadow-lg"
@@ -63,15 +62,13 @@ export default function LoreStreamApp() {
         )}
         <LoginButton />
       </div>
-      {/* -------------------------------------- */}
 
       <div className={`absolute inset-0 z-10 flex ${appState === 'LIVE' ? 'pointer-events-none' : 'pointer-events-auto'}`}>
         
         {appState === 'INGESTION' && (
-           // IF LIBRARY IS TOGGLED ON, SHOW IT! OTHERWISE SHOW DROPZONE.
            showLibrary ? (
              <AgentLibrary 
-               userId={auth.currentUser!.uid} 
+               userId={auth.currentUser?.uid || ''} 
                onSelectAgent={(selectedAgentId, url) => {
                  setActiveAgentId(selectedAgentId);
                  setModelUrl(url);
@@ -86,7 +83,7 @@ export default function LoreStreamApp() {
 
         {appState === 'LOADING' && activeAgentId && (
            <ActiveLoadingScreen 
-             userId={auth.currentUser!.uid} 
+             userId={auth.currentUser?.uid || ''} 
              agentId={activeAgentId} 
              onComplete={(url) => {
                setModelUrl(url); 
@@ -97,8 +94,9 @@ export default function LoreStreamApp() {
 
         {appState === 'LIVE' && activeAgentId && (
            <>
-             <div className="w-2/3 h-full flex flex-col justify-end p-12 pointer-events-none">
-                <div className="pointer-events-auto mb-10">
+             {/* THE FIX: Moved the UI to the bottom-center of the 3D space! */}
+             <div className="absolute inset-y-0 left-0 w-2/3 flex flex-col items-center justify-end pb-12 pointer-events-none z-20">
+                <div className="pointer-events-auto">
                   <LiveControls 
                     isConnected={isConnected}
                     isGeneratingVaultItem={isGeneratingVaultItem}
@@ -108,12 +106,12 @@ export default function LoreStreamApp() {
                 </div>
              </div>
 
-             <div className="w-1/3 h-full bg-black/70 backdrop-blur-xl border-l border-white/10 p-6 pointer-events-auto shadow-2xl">
+             <div className="absolute inset-y-0 right-0 w-1/3 bg-black/70 backdrop-blur-xl border-l border-white/10 p-6 pointer-events-auto shadow-2xl z-20">
                <UIOverlay vaultItems={vaultItems} /> 
              </div>
            </>
-        )}
-      </div>
+        )} 
+      </div> {/* <--- RESTORED MISSING CLOSING DIV! */}
 
       {appState === 'LIVE' && activeAgentId && modelUrl && (
         <div className="absolute inset-0 z-0">
