@@ -9,6 +9,7 @@ import { UIOverlay } from '@/components/ui/UIOverlay';
 import { LiveControls } from '@/components/ui/LiveControls';
 import { useGeminiLive } from '@/hooks/useGeminiLive';
 import dynamic from 'next/dynamic';
+import { LoginButton } from '@/components/ui/LoginButton';
 
 const Scene = dynamic(() => import('@/components/3d/Scene'), { ssr: false });
 
@@ -22,9 +23,10 @@ export default function LoreStreamApp() {
 
   const handleAwaken = async (data: any) => {
     if (!auth.currentUser) {
-      alert("You must be logged in to awaken an Agent.");
-      return;
-    }
+    alert("You must be logged in to awaken an Agent.");
+     return;
+   }
+   
     const newAgentId = `agent_${Date.now()}`;
     setActiveAgentId(newAgentId);
     setAppState('LOADING');
@@ -44,18 +46,24 @@ export default function LoreStreamApp() {
 
   return (
     <main className="relative w-screen h-screen bg-neutral-900 overflow-hidden text-white">
+      
+      {/* --- NEW LOGIN BUTTON CORNER --- */}
+      <div className="absolute top-6 right-6 z-50">
+        <LoginButton />
+      </div>
+      {/* ------------------------------- */}
       <div className={`absolute inset-0 z-10 flex ${appState === 'LIVE' ? 'pointer-events-none' : 'pointer-events-auto'}`}>
         
         {appState === 'INGESTION' && (
            <DropZone onAwaken={handleAwaken} />
         )}
 
-        {appState === 'LOADING' && activeAgentId && (
+{appState === 'LOADING' && activeAgentId && (
            <ActiveLoadingScreen 
              userId={auth.currentUser!.uid} 
              agentId={activeAgentId} 
              onComplete={(url) => {
-               setModelUrl(url); // Save the Tripo3D model URL
+               setModelUrl(url); 
                setAppState('LIVE');
              }} 
            />
