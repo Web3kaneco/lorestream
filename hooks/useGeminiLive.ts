@@ -4,8 +4,6 @@ import { doc, getDoc } from 'firebase/firestore';
 import { db, functions } from '@/lib/firebase';
 import { httpsCallable } from 'firebase/functions';
 
-const ai = new GoogleGenAI({ apiKey: process.env.NEXT_PUBLIC_GEMINI_KEY });
-
 export function useGeminiLive(agentId: string, userId: string) {
   const [isConnected, setIsConnected] = useState(false);
   const [vaultItems, setVaultItems] = useState<any[]>([]);
@@ -24,6 +22,12 @@ export function useGeminiLive(agentId: string, userId: string) {
 
   const startSession = useCallback(async () => {
     try {
+      const geminiApiKey = process.env.NEXT_PUBLIC_GEMINI_KEY;
+      if (!geminiApiKey) {
+        throw new Error('Missing NEXT_PUBLIC_GEMINI_KEY environment variable.');
+      }
+      const ai = new GoogleGenAI({ apiKey: geminiApiKey });
+
       // 1. Fetch persistent memory (LoreGraph)
       const memorySnap = await getDoc(doc(db, `users/${userId}/agents/${agentId}/lore/core_memory`));
       const coreMemory = memorySnap.exists() ? memorySnap.data() : { current_lore_summary: "No prior memories.", key_facts: [] };
@@ -66,7 +70,7 @@ export function useGeminiLive(agentId: string, userId: string) {
         {
           functionDeclarations: [
             {
-              name: "generate_product",
+              name: "generate_product_concept",
               description: "Triggers the IP Vault to generate a product.",
               parameters: {
                 type: "OBJECT" as any,
@@ -94,8 +98,10 @@ export function useGeminiLive(agentId: string, userId: string) {
       const mediaRecorder = new MediaRecorder(micStreamRef.current, { mimeType: 'audio/webm' });
       mediaRecorder.ondataavailable = async (e) => {
         const buffer = await e.data.arrayBuffer();
+        const bytes = new Uint8Array(buffer);
+        const binary = Array.from(bytes, (byte) => String.fromCharCode(byte)).join('');
         sessionRef.current?.sendClientContent({
-          turns: [{ role: "user", parts: [{ inlineData: { mimeType: "audio/webm", data: Buffer.from(buffer).toString("base64") } }] }]
+          turns: [{ role: "user", parts: [{ inlineData: { mimeType: "audio/webm", data: window.btoa(binary) } }] }]
         });
       };
       mediaRecorder.start(100);
