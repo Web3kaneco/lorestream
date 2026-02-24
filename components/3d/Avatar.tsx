@@ -18,9 +18,11 @@ interface AvatarProps {
 }
 
 // Arm bones whose quaternions we extract from the reference animation.
-// ONLY actual arm joints — no shoulders (which distort non-humanoid torsos)
-// and no hands (irrelevant for "arms at sides" pose).
+// Includes shoulders — arm quaternions are LOCAL (relative to parent),
+// so we need shoulder rotation for arms to point the right direction.
+// The earlier body-squish was caused by the root position bug, not shoulders.
 const ARM_BONE_NAMES = new Set([
+  'mixamorigLeftShoulder', 'mixamorigRightShoulder',
   'mixamorigLeftArm', 'mixamorigRightArm',
   'mixamorigLeftForeArm', 'mixamorigRightForeArm',
 ]);
