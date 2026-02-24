@@ -17,15 +17,26 @@ interface AvatarProps {
   volumeRef: React.MutableRefObject<VisemeData>;
 }
 
-// Arm bones whose quaternions we extract from the reference animation.
-// Includes shoulders — arm quaternions are LOCAL (relative to parent),
+// Bones whose quaternions we extract from the reference animation.
+// Shoulders are included because arm quaternions are LOCAL (relative to parent),
 // so we need shoulder rotation for arms to point the right direction.
-// The earlier body-squish was caused by the root position bug, not shoulders.
+// However, shoulders are applied at PARTIAL strength (SHOULDER_BLEND) to avoid
+// deforming the torso — the humanoid reference mesh has different proportions
+// than Tripo-generated models (cartoon lion, etc.).
 const ARM_BONE_NAMES = new Set([
   'mixamorigLeftShoulder', 'mixamorigRightShoulder',
   'mixamorigLeftArm', 'mixamorigRightArm',
   'mixamorigLeftForeArm', 'mixamorigRightForeArm',
 ]);
+
+// Shoulder bones get partial slerp to preserve the model's natural torso shape.
+// Full slerp (1.0) forces the lion's shoulders to match the humanoid Beta mesh,
+// which compresses the body. 0.35 gives enough rotation for correct arm direction
+// without visibly distorting the torso.
+const SHOULDER_BONES = new Set([
+  'mixamorigLeftShoulder', 'mixamorigRightShoulder',
+]);
+const SHOULDER_BLEND = 0.35;
 
 export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
   // Load the Tripo model (rigged with Mixamo skeleton via animate_rig)
@@ -254,8 +265,10 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
         const bone = scene.getObjectByName(boneName) as THREE.Bone | undefined;
         const initQ = armInitRef.current!.get(boneName);
         if (bone && initQ) {
-          // Slerp from T-pose quaternion to reference animation quaternion
-          bone.quaternion.copy(initQ).slerp(targetQ, armT);
+          // Shoulders: partial slerp to preserve the model's torso shape.
+          // Arms/forearms: full slerp for correct final pose.
+          const effectiveT = SHOULDER_BONES.has(boneName) ? armT * SHOULDER_BLEND : armT;
+          bone.quaternion.copy(initQ).slerp(targetQ, effectiveT);
         }
       });
     }
