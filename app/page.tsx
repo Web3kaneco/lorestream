@@ -20,8 +20,8 @@ export default function LoreStreamApp() {
   
   const [showLibrary, setShowLibrary] = useState(false);
 
-  // The Brain
-  const { isConnected, vaultItems, isGeneratingVaultItem, startSession, stopSession, volumeRef } = useGeminiLive(activeAgentId || '', auth.currentUser?.uid || '');
+  // 🧠 THE BRAIN: Properly scoped inside the component with 'transcripts' included
+  const { isConnected, vaultItems, isGeneratingVaultItem, startSession, stopSession, volumeRef, transcripts } = useGeminiLive(activeAgentId || '', auth.currentUser?.uid || '');
 
   const handleAwaken = async (data: any) => {
     if (!auth.currentUser) {
@@ -117,7 +117,7 @@ export default function LoreStreamApp() {
               </div>
               <div className="flex-1 flex items-center justify-center overflow-hidden">
                   {isGeneratingVaultItem ? (
-                      <div className="text-cyan-400 animate-pulse border border-cyan-400/50 p-4 rounded">
+                      <div className="text-cyan-400 animate-pulse border border-cyan-400/50 p-4 rounded text-center">
                           [ COMPILING ARTIFACT... ]
                       </div>
                   ) : latestItem ? (
@@ -135,14 +135,23 @@ export default function LoreStreamApp() {
 
             {/* 💬 TOP MIDDLE: Terminal Stream (Transcripts & Code) */}
             <div className="col-span-5 row-span-4 border border-green-500/30 bg-black/50 rounded-md p-4 flex flex-col relative shadow-[0_0_15px_rgba(34,197,94,0.1)]">
-               <div className="text-xs opacity-50 mb-4 border-b border-green-500/30 pb-2">
-                  TERMINAL_STREAM // I-O_LOGS
+               <div className="text-xs opacity-50 mb-4 border-b border-green-500/30 pb-2 flex justify-between">
+                  <span>TERMINAL_STREAM // I-O_LOGS</span>
+                  <span>{transcripts?.length || 0} MESSAGES</span>
               </div>
-              <div className="flex-1 overflow-y-auto font-mono text-sm space-y-3">
-                  {/* PLACEHOLDER: We will wire the actual transcripts here next! */}
+              
+              <div className="flex-1 overflow-y-auto font-mono text-sm space-y-3 flex flex-col-reverse">
+                  <div className="animate-pulse text-cyan-400 mt-2">_</div>
+                  
+                  {transcripts && [...transcripts].reverse().map((msg, idx) => (
+                      <div key={idx} className="border-l-2 border-green-500/30 pl-2">
+                          <span className="text-amber-400 font-bold">{msg.speaker}:</span> 
+                          <span className="text-green-400 ml-2">{msg.text}</span>
+                      </div>
+                  ))}
+                  
                   <p className="opacity-50">Initializing secure connection to Generative Host...</p>
                   <p className="opacity-50">Loading Vector Database constraints...</p>
-                  <div className="animate-pulse text-cyan-400">_</div>
               </div>
             </div>
 
@@ -161,7 +170,6 @@ export default function LoreStreamApp() {
               <div className="text-xs opacity-50 mb-2 border-b border-green-500/30 pb-2 flex justify-between items-center">
                   <span>SYS.DIAGNOSTICS</span>
                   
-                  {/* 🔥 THE NEW MINI-CONTROL BUTTON */}
                   <button 
                     onClick={isConnected ? stopSession : startSession}
                     className={`px-4 py-1 text-xs font-bold rounded border transition-all ${

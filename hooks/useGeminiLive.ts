@@ -20,6 +20,9 @@ export function useGeminiLive(agentId: string, userId: string) {
   const [vaultItems, setVaultItems] = useState<any[]>([]);
   const [isGeneratingVaultItem, setIsGeneratingVaultItem] = useState(false);
   
+  // 🚀 FIXED: Transcripts state safely inside the hook!
+  const [transcripts, setTranscripts] = useState<{speaker: string, text: string}[]>([]);
+  
   const wsRef = useRef<WebSocket | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyzerRef = useRef<AnalyserNode | null>(null);
@@ -86,7 +89,22 @@ export function useGeminiLive(agentId: string, userId: string) {
               parts: [{ 
                 text: `You are a helpful AI Co-Creator.\nCORE MEMORY: ${coreMemory?.current_lore_summary || ""}\nFACTS: ${memoryString}\nCRITICAL INSTRUCTION: You are strictly a VOICE assistant. Wait for the user to speak, and then reply conversationally and briefly.` 
               }]
-            }
+            },
+            // 🚀 RESTORED: Give the agent the Image Generation Tool!
+            tools: [{
+              functionDeclarations: [{
+                name: "create_vault_artifact",
+                description: "Generates a visual artifact or image and saves it to the user's screen. Call this ONLY when the user explicitly asks you to create, generate, draw, or design something.",
+                parameters: {
+                  type: "OBJECT",
+                  properties: {
+                    prompt: { type: "STRING", description: "A highly detailed visual description of what to generate." },
+                    rationale: { type: "STRING", description: "A brief sentence explaining why you are making this." }
+                  },
+                  required: ["prompt", "rationale"]
+                }
+              }]
+            }]
           }
         };
         ws.send(JSON.stringify(setupMessage));
@@ -111,7 +129,7 @@ export function useGeminiLive(agentId: string, userId: string) {
           if (data.setupComplete) {
             console.log("✅ [NATIVE WS] Handshake Complete! Safe to stream audio and video.");
             socketReadyRef.current = true;
-            startVision(); // 👁️ DELEGATED TO MODULE!
+            startVision(); 
             return;
           }
           
@@ -123,13 +141,64 @@ export function useGeminiLive(agentId: string, userId: string) {
           
           if (data.serverContent?.modelTurn) {
             for (const part of data.serverContent.modelTurn.parts) {
+              
+              // 1. Handle Normal Speech
               if (part.text) {
                   console.log("📝 [GEMINI]:", part.text);
-                  saveToMemory(part.text, 'agent'); // 🧠 DELEGATED TO MODULE!
+                  saveToMemory(part.text, 'agent');
+                  setTranscripts(prev => [...prev, { speaker: 'AGENT', text: part.text }]);
               }
+              
+              // 2. Handle Audio
               if (part.inlineData?.data) {
                 playAudioBuffer(part.inlineData.data);
               }
+
+              // 🚀 3. RESTORED: Handle Tool Calls (Image Generation)
+              if (part.functionCall && part.functionCall.name === "create_vault_artifact") {
+                 const { prompt, rationale } = part.functionCall.args;
+                 console.log(`🎨 [AGENT TOOL TRIGGERED] Creating: ${prompt}`);
+                 
+                 setIsGeneratingVaultItem(true);
+                 setTranscripts(prev => [...prev, { speaker: 'SYSTEM', text: `Executing Nano-Banana Tool: Generating "${prompt}"` }]);
+
+                 try {
+                     const res = await fetch('/api/generate-image', {
+                         method: 'POST',
+                         headers: { 'Content-Type': 'application/json' },
+                         body: JSON.stringify({ prompt })
+                     });
+                     
+                     const result = await res.json();
+                     
+                     if (result.imageUrl) {
+                         setVaultItems(prev => [...prev, { prompt, url: result.imageUrl, rationale }]);
+                         const memoryEntry = `I created an image for the user. Rationale: ${rationale}. Visual Prompt used: ${prompt}.`;
+                         saveToMemory(memoryEntry, 'agent');
+                     }
+
+                     const toolResponse = {
+                       toolResponse: {
+                         functionResponses: [{
+                           name: "create_vault_artifact",
+                           response: { result: "Success", action: "Image generated and saved to vault." }
+                         }]
+                       }
+                     };
+                     wsRef.current.send(JSON.stringify(toolResponse));
+
+                 } catch (err) {
+                     console.error("🚨 Tool Execution Failed:", err);
+                     wsRef.current.send(JSON.stringify({
+                         toolResponse: {
+                             functionResponses: [{ name: "create_vault_artifact", response: { error: "Failed to generate image." } }]
+                         }
+                     }));
+                 } finally {
+                     setIsGeneratingVaultItem(false);
+                 }
+              }
+
             }
           }
         } catch (err) {}
@@ -200,14 +269,14 @@ export function useGeminiLive(agentId: string, userId: string) {
     } catch (error) {
       isConnectingRef.current = false;
     }
-  }, [agentId, userId, isConnected, saveToMemory, startVision]); // <-- Added hook dependencies
+  }, [agentId, userId, isConnected, saveToMemory, startVision]); 
 
   const stopSession = useCallback(() => {
     socketReadyRef.current = false;
     isConnectingRef.current = false;
     nextPlayTimeRef.current = 0;
     
-    stopVision(); // 👁️ DELEGATED TO MODULE!
+    stopVision(); 
     
     if (wsRef.current) { try { wsRef.current.close(); } catch(e) {} wsRef.current = null; }
     if (workletNodeRef.current) { workletNodeRef.current.disconnect(); workletNodeRef.current = null; }
@@ -249,5 +318,5 @@ export function useGeminiLive(agentId: string, userId: string) {
      } catch (error) { }
   };
 
-  return { isConnected, vaultItems, isGeneratingVaultItem, startSession, stopSession, volumeRef };
+  return { isConnected, vaultItems, isGeneratingVaultItem, startSession, stopSession, volumeRef, transcripts };
 }
