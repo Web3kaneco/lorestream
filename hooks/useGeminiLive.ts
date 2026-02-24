@@ -1,15 +1,16 @@
+// hooks/useGeminiLive.ts
 import { useState, useRef, useCallback } from 'react';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 
-// =========================================================
-// Viseme data extracted from real-time frequency analysis
-// of Gemini's audio response. Drives lip sync on the avatar.
-// =========================================================
+// 🧩 IMPORT OUR NEW MODULAR HOOKS
+import { useAgentMemory } from './useAgentMemory';
+import { useVisionPipeline } from './useVisionPipeline';
+
 export interface VisemeData {
-  volume: number;      // 0-1 overall energy across all frequencies
-  jawOpen: number;     // 0-1 jaw openness (200-800Hz: vowel formants, fundamental freq)
-  mouthWidth: number;  // 0-1 mouth spread (2000-5500Hz: fricatives "s","sh","ee","f")
+  volume: number;      
+  jawOpen: number;     
+  mouthWidth: number;  
 }
 
 const VISEME_ZERO: VisemeData = { volume: 0, jawOpen: 0, mouthWidth: 0 };
@@ -28,26 +29,13 @@ export function useGeminiLive(agentId: string, userId: string) {
   
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  
-  // 👁️ 1. ADDED FOR VISION: Refs to hold the image canvas and the interval loop
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const visionIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  
   const socketReadyRef = useRef<boolean>(false);
   const isConnectingRef = useRef<boolean>(false);
-
   const nextPlayTimeRef = useRef<number>(0);
 
-  // 🧠 THE CATCHER: Silently sends transcripts to our Vector DB backend
-  const saveToMemory = async (text: string, speaker: 'user' | 'agent') => {
-    try {
-      await fetch('/api/memory', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agentId, userId, transcript: text, speaker })
-      });
-    } catch (err) {}
-  };
+  // 🧩 INITIALIZE OUR MODULES
+  const { saveToMemory } = useAgentMemory(agentId, userId);
+  const { startVision, stopVision } = useVisionPipeline(videoRef, wsRef, socketReadyRef);
 
   const startSession = useCallback(async () => {
     if (isConnectingRef.current || isConnected) return; 
@@ -79,9 +67,6 @@ export function useGeminiLive(agentId: string, userId: string) {
       videoRef.current.srcObject = micStreamRef.current;
       videoRef.current.muted = true; 
       videoRef.current.play();
-
-      // 👁️ 2. ADDED FOR VISION: Initialize the hidden canvas
-      if (!canvasRef.current) canvasRef.current = document.createElement('canvas');
 
       const apiKey = process.env.NEXT_PUBLIC_GEMINI_KEY;
       const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${apiKey}`;
@@ -123,48 +108,10 @@ export function useGeminiLive(agentId: string, userId: string) {
           if (event.data instanceof Blob) msgText = await event.data.text();
           const data = JSON.parse(msgText);
           
-          // 👁️ 3. ADDED FOR VISION: The Interval Loop
           if (data.setupComplete) {
             console.log("✅ [NATIVE WS] Handshake Complete! Safe to stream audio and video.");
             socketReadyRef.current = true;
-            
-            if (visionIntervalRef.current) clearInterval(visionIntervalRef.current);
-            
-            visionIntervalRef.current = setInterval(() => {
-                if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || !socketReadyRef.current) return;
-                if (!videoRef.current || !canvasRef.current || videoRef.current.videoWidth === 0) return;
-
-                const video = videoRef.current;
-                const canvas = canvasRef.current;
-                
-                // Compress to 640x480
-                canvas.width = 640; 
-                canvas.height = 480;
-                const ctx = canvas.getContext('2d');
-                if (!ctx) return;
-
-                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                
-                // Extract JPEG
-                const dataUrl = canvas.toDataURL('image/jpeg', 0.5);
-                const base64Image = dataUrl.split(',')[1]; 
-
-                const payload = {
-                  realtimeInput: {
-                    mediaChunks: [{
-                      mimeType: "image/jpeg",
-                      data: base64Image
-                    }]
-                  }
-                };
-                
-                try {
-                    wsRef.current.send(JSON.stringify(payload));
-                } catch (e) {
-                    console.error("🚨 [VISION] Failed to send frame", e);
-                }
-            }, 2000); // 1 frame every 2 seconds
-
+            startVision(); // 👁️ DELEGATED TO MODULE!
             return;
           }
           
@@ -178,7 +125,7 @@ export function useGeminiLive(agentId: string, userId: string) {
             for (const part of data.serverContent.modelTurn.parts) {
               if (part.text) {
                   console.log("📝 [GEMINI]:", part.text);
-                  saveToMemory(part.text, 'agent'); 
+                  saveToMemory(part.text, 'agent'); // 🧠 DELEGATED TO MODULE!
               }
               if (part.inlineData?.data) {
                 playAudioBuffer(part.inlineData.data);
@@ -210,12 +157,7 @@ export function useGeminiLive(agentId: string, userId: string) {
           }
           
           const payload = {
-            realtimeInput: {
-              mediaChunks: [{
-                mimeType: "audio/pcm;rate=16000",
-                data: btoa(binary)
-              }]
-            }
+            realtimeInput: { mediaChunks: [{ mimeType: "audio/pcm;rate=16000", data: btoa(binary) }] }
           };
           wsRef.current.send(JSON.stringify(payload));
         };
@@ -241,14 +183,8 @@ export function useGeminiLive(agentId: string, userId: string) {
               totalSum += val;
 
               const freqLow = i * binHz;
-              if (freqLow >= 200 && freqLow <= 800) {
-                jawSum += val;
-                jawCount++;
-              }
-              if (freqLow >= 2000 && freqLow <= 5500) {
-                widthSum += val;
-                widthCount++;
-              }
+              if (freqLow >= 200 && freqLow <= 800) { jawSum += val; jawCount++; }
+              if (freqLow >= 2000 && freqLow <= 5500) { widthSum += val; widthCount++; }
             }
 
             const volume = Math.min((totalSum / len) / 80, 1);
@@ -264,15 +200,14 @@ export function useGeminiLive(agentId: string, userId: string) {
     } catch (error) {
       isConnectingRef.current = false;
     }
-  }, [agentId, userId, isConnected]);
+  }, [agentId, userId, isConnected, saveToMemory, startVision]); // <-- Added hook dependencies
 
   const stopSession = useCallback(() => {
     socketReadyRef.current = false;
     isConnectingRef.current = false;
     nextPlayTimeRef.current = 0;
     
-    // 👁️ 4. ADDED FOR VISION: Clean up the interval so it doesn't leak memory!
-    if (visionIntervalRef.current) clearInterval(visionIntervalRef.current);
+    stopVision(); // 👁️ DELEGATED TO MODULE!
     
     if (wsRef.current) { try { wsRef.current.close(); } catch(e) {} wsRef.current = null; }
     if (workletNodeRef.current) { workletNodeRef.current.disconnect(); workletNodeRef.current = null; }
@@ -280,7 +215,7 @@ export function useGeminiLive(agentId: string, userId: string) {
     audioContextRef.current?.close();
     setIsConnected(false);
     volumeRef.current = { ...VISEME_ZERO };
-  }, []);
+  }, [stopVision]);
 
   const playAudioBuffer = async (base64Data: string) => {
      if (!audioContextRef.current) return;
