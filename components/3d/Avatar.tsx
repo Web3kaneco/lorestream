@@ -30,11 +30,15 @@ const SHOULDER_BONE_NAMES = new Set([
   'mixamorigLeftShoulder', 'mixamorigRightShoulder',
 ]);
 // All bones we extract from animations (arms + shoulders for compensation)
-const ALL_POSE_BONES = new Set([...ARM_BONE_NAMES, ...SHOULDER_BONE_NAMES]);
+// Note: Array.from() used instead of spread to avoid needing downlevelIteration
+const ALL_POSE_BONES = new Set(
+  (Array.from(ARM_BONE_NAMES) as string[]).concat(Array.from(SHOULDER_BONE_NAMES))
+);
 
 export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
   // Load the Tripo model (rigged with Mixamo skeleton via animate_rig)
-  const { scene } = useGLTF(modelUrl);
+  // IMPORTANT: animations live on the gltf root, NOT on scene.animations
+  const { scene, animations: modelAnimations } = useGLTF(modelUrl);
 
   // Load the idle breathing animation as a REFERENCE for arm pose quaternions.
   // We do NOT play this animation — we only read frame-0 quaternions for arm bones.
@@ -199,8 +203,9 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
     };
 
     // PRIORITY 1: Try the model's own animation (from retarget)
-    if (scene.animations && scene.animations.length > 0) {
-      const ownClip = scene.animations[0];
+    // Note: useGLTF returns animations on the gltf root, not on scene
+    if (modelAnimations && modelAnimations.length > 0) {
+      const ownClip = modelAnimations[0];
       const found = extractFromClip(ownClip, ARM_BONE_NAMES, "MODEL OWN ANIM");
       if (found >= 2) { // At least LeftArm + RightArm
         usedOwnAnim = true;
@@ -252,7 +257,7 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
         mouthMeshRef.current = null;
       }
     };
-  }, [scene, idleGltf, mouthGeo, mouthMat]);
+  }, [scene, modelAnimations, idleGltf, mouthGeo, mouthMat]);
 
   useFrame(({ clock }, delta) => {
     const t = clock.getElapsedTime();
