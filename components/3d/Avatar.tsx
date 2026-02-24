@@ -296,10 +296,11 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
     //    we apply very subtle blends to nudge arms slightly down
     //    from T-pose without fully matching the reference pose.
     // =====================================================
-    // Fallback blend factors — kept gentle to avoid distortion
-    const FALLBACK_SHOULDER_BLEND = 0.25;  // Minimal shoulder rotation to preserve torso
-    const FALLBACK_ARM_BLEND = 0.4;        // Upper arms: partial move toward resting
-    const FALLBACK_FOREARM_BLEND = 0.3;    // Forearms: even less to avoid weird bends
+    // Fallback blend factors — very subtle to avoid distortion on non-humanoid models.
+    // These just nudge very slightly away from stiff T-pose.
+    const FALLBACK_SHOULDER_BLEND = 0.0;   // Don't touch shoulders at all — protects torso
+    const FALLBACK_ARM_BLEND = 0.15;       // Upper arms: barely perceptible nudge downward
+    const FALLBACK_FOREARM_BLEND = 0.10;   // Forearms: even less to avoid weird bends
 
     // Phase 1: Capture T-pose quaternions and store targets
     if (armPoseRef.current.size > 0 && !targetComputedRef.current) {
@@ -321,9 +322,13 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
           armTargetRef.current = targets;
           console.log(`  Direct arm targets from model's own animation (${targets.size} bones)`);
         } else {
-          // FALLBACK — use all reference quaternions (shoulder blend applied in Phase 2)
-          armTargetRef.current = new Map(armPoseRef.current);
-          console.log(`  Fallback: all reference bones (${armPoseRef.current.size}), shoulders at ${FALLBACK_SHOULDER_BLEND} blend`);
+          // FALLBACK — use arm/forearm quaternions only (skip shoulders to protect torso)
+          const armOnly = new Map<string, THREE.Quaternion>();
+          armPoseRef.current.forEach((q, name) => {
+            if (ARM_BONE_NAMES.has(name)) armOnly.set(name, q);
+          });
+          armTargetRef.current = armOnly;
+          console.log(`  Fallback: ${armOnly.size} arm bones (no shoulders), blend: arms=${FALLBACK_ARM_BLEND} forearms=${FALLBACK_FOREARM_BLEND}`);
         }
         targetComputedRef.current = true;
       }
