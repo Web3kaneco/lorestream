@@ -175,6 +175,11 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
       console.log(`--- Extracting arm pose from ${label}: "${clip.name}" (${clip.tracks.length} tracks) ---`);
       let count = 0;
       for (const track of clip.tracks) {
+        // Parse track name into bone name + property
+        // Formats seen in the wild:
+        //   bones[mixamorigLeftArm].quaternion          (bracket style)
+        //   mixamorigLeftArm.quaternion                  (flat dot style)
+        //   mixamorigHips/mixamorigSpine/.../mixamorigLeftArm.quaternion (hierarchical path)
         let boneName = '';
         let property = '';
 
@@ -185,18 +190,28 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
         } else {
           const dotMatch = track.name.match(/^(.+)\.(\w+)$/);
           if (dotMatch) {
-            boneName = dotMatch[1];
+            const fullPath = dotMatch[1];
             property = dotMatch[2];
+            // Handle hierarchical paths: "Hips/Spine/LeftArm" → "LeftArm"
+            const slashIdx = fullPath.lastIndexOf('/');
+            boneName = slashIdx >= 0 ? fullPath.substring(slashIdx + 1) : fullPath;
           }
         }
 
-        if (property === 'quaternion' && boneFilter.has(boneName)) {
-          const q = new THREE.Quaternion(
-            track.values[0], track.values[1], track.values[2], track.values[3]
-          );
-          poseMap.set(boneName, q);
-          console.log(`  ${label}: ${boneName} → q(${q.x.toFixed(3)}, ${q.y.toFixed(3)}, ${q.z.toFixed(3)}, ${q.w.toFixed(3)})`);
-          count++;
+        // Log ALL quaternion tracks so we can see what names the animation uses
+        if (property === 'quaternion') {
+          const inFilter = boneFilter.has(boneName);
+          if (inFilter) {
+            const q = new THREE.Quaternion(
+              track.values[0], track.values[1], track.values[2], track.values[3]
+            );
+            poseMap.set(boneName, q);
+            console.log(`  ✅ ${label}: ${boneName} → q(${q.x.toFixed(3)}, ${q.y.toFixed(3)}, ${q.z.toFixed(3)}, ${q.w.toFixed(3)})`);
+            count++;
+          } else {
+            // Log unmatched bones so we can diagnose naming issues
+            console.log(`  ── ${label}: ${boneName} (skipped — not in filter) [raw: ${track.name}]`);
+          }
         }
       }
       return count;
@@ -204,16 +219,23 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
 
     // PRIORITY 1: Try the model's own animation (from retarget)
     // Note: useGLTF returns animations on the gltf root, not on scene
+    console.log(`--- Animation Detection ---`);
+    console.log(`  modelAnimations: ${modelAnimations ? modelAnimations.length : 'null/undefined'} clips`);
+    console.log(`  scene.animations: ${scene.animations ? scene.animations.length : 'null/undefined'} clips`);
+
     if (modelAnimations && modelAnimations.length > 0) {
       const ownClip = modelAnimations[0];
+      console.log(`  Model clip: "${ownClip.name}", duration: ${ownClip.duration.toFixed(2)}s, tracks: ${ownClip.tracks.length}`);
       const found = extractFromClip(ownClip, ARM_BONE_NAMES, "MODEL OWN ANIM");
       if (found >= 2) { // At least LeftArm + RightArm
         usedOwnAnim = true;
         console.log(`  ✅ Using model's OWN animation (${found} arm bones) — no shoulder compensation needed`);
       } else {
-        console.log(`  ⚠️ Model has animation but only ${found} arm bones — falling back to reference`);
+        console.log(`  ⚠️ Model has animation but only ${found} arm bones matched — falling back to reference`);
         poseMap.clear();
       }
+    } else {
+      console.log(`  ⚠️ No animations found on model — using fallback reference`);
     }
 
     // PRIORITY 2: Fallback to external reference (idlebreathing.glb)
@@ -269,11 +291,15 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
     // 1. OWN ANIMATION (from animate_retarget): apply arm/forearm
     //    quaternions directly — no compensation needed.
     // 2. FALLBACK (idlebreathing.glb reference): apply ALL bones
-    //    (shoulders + arms + forearms) but shoulders at partial
-    //    blend (0.6) to avoid deforming non-humanoid torsos.
-    //    Arms/forearms get full blend.
+    //    with gentle partial blends. Because the reference skeleton
+    //    (humanoid) has different proportions than the Tripo model,
+    //    we apply very subtle blends to nudge arms slightly down
+    //    from T-pose without fully matching the reference pose.
     // =====================================================
-    const FALLBACK_SHOULDER_BLEND = 0.6;
+    // Fallback blend factors — kept gentle to avoid distortion
+    const FALLBACK_SHOULDER_BLEND = 0.25;  // Minimal shoulder rotation to preserve torso
+    const FALLBACK_ARM_BLEND = 0.4;        // Upper arms: partial move toward resting
+    const FALLBACK_FOREARM_BLEND = 0.3;    // Forearms: even less to avoid weird bends
 
     // Phase 1: Capture T-pose quaternions and store targets
     if (armPoseRef.current.size > 0 && !targetComputedRef.current) {
@@ -312,10 +338,20 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
         const bone = scene.getObjectByName(boneName) as THREE.Bone | undefined;
         const initQ = armInitRef.current!.get(boneName);
         if (bone && initQ) {
-          // Shoulders get partial blend in fallback mode to preserve torso shape.
-          // Own-animation mode never includes shoulders, so this only fires for fallback.
-          const t = SHOULDER_BONE_NAMES.has(boneName) ? armT * FALLBACK_SHOULDER_BLEND : armT;
-          bone.quaternion.copy(initQ).slerp(targetQ, t);
+          let blendFactor = 1.0; // Default: full blend for own animation path
+
+          if (!usingOwnAnimRef.current) {
+            // FALLBACK mode: gentle per-bone blends to avoid distortion
+            if (SHOULDER_BONE_NAMES.has(boneName)) {
+              blendFactor = FALLBACK_SHOULDER_BLEND;
+            } else if (boneName.includes('ForeArm')) {
+              blendFactor = FALLBACK_FOREARM_BLEND;
+            } else {
+              blendFactor = FALLBACK_ARM_BLEND;
+            }
+          }
+
+          bone.quaternion.copy(initQ).slerp(targetQ, armT * blendFactor);
         }
       });
     }
