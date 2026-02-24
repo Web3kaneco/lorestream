@@ -18,25 +18,17 @@ interface AvatarProps {
 }
 
 // Bones whose quaternions we extract from the reference animation.
-// Shoulders are included because arm quaternions are LOCAL (relative to parent),
-// so we need shoulder rotation for arms to point the right direction.
-// However, shoulders are applied at PARTIAL strength (SHOULDER_BLEND) to avoid
-// deforming the torso — the humanoid reference mesh has different proportions
-// than Tripo-generated models (cartoon lion, etc.).
-const ARM_BONE_NAMES = new Set([
+// We extract shoulders + arms + forearms from the reference, but we NEVER
+// modify the Tripo model's shoulder bones (which would deform the torso).
+// Instead, we mathematically compensate: for each arm bone, we compute
+//   arm_corrected = inverse(shoulder_tripo) × shoulder_ref × arm_ref
+// This gives the correct world-space arm direction regardless of shoulder
+// differences between the humanoid reference and the Tripo model.
+const POSE_BONE_NAMES = new Set([
   'mixamorigLeftShoulder', 'mixamorigRightShoulder',
   'mixamorigLeftArm', 'mixamorigRightArm',
   'mixamorigLeftForeArm', 'mixamorigRightForeArm',
 ]);
-
-// Shoulder bones get partial slerp to preserve the model's natural torso shape.
-// Full slerp (1.0) forces the lion's shoulders to match the humanoid Beta mesh,
-// which compresses the body. 0.35 gives enough rotation for correct arm direction
-// without visibly distorting the torso.
-const SHOULDER_BONES = new Set([
-  'mixamorigLeftShoulder', 'mixamorigRightShoulder',
-]);
-const SHOULDER_BLEND = 0.35;
 
 export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
   // Load the Tripo model (rigged with Mixamo skeleton via animate_rig)
@@ -55,10 +47,14 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
   const rootBoneRef = useRef<THREE.Bone | null>(null);
   const jawBoneRef = useRef<THREE.Bone | null>(null);
 
-  // Arm pose: target quaternions extracted from reference animation
+  // Raw reference quaternions extracted from idlebreathing.glb (shoulders + arms + forearms)
   const armPoseRef = useRef<Map<string, THREE.Quaternion>>(new Map());
-  // Arm pose: T-pose quaternions captured on first frame (for slerp)
+  // T-pose quaternions captured on first render frame
   const armInitRef = useRef<Map<string, THREE.Quaternion> | null>(null);
+  // Corrected target quaternions (arms/forearms only — shoulders are never touched)
+  // Computed once on first frame: arm_corrected = inv(shoulder_tripo) × shoulder_ref × arm_ref
+  const armTargetRef = useRef<Map<string, THREE.Quaternion>>(new Map());
+  const targetComputedRef = useRef(false);
 
   // Synthetic mouth overlay
   const mouthMeshRef = useRef<THREE.Mesh | null>(null);
@@ -99,6 +95,8 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
     jawBoneRef.current = null;
     armPoseRef.current = new Map();
     armInitRef.current = null;
+    armTargetRef.current = new Map();
+    targetComputedRef.current = false;
     armLerpRef.current = 0;
     rootOrigYRef.current = null;
 
@@ -182,8 +180,8 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
           }
         }
 
-        // Only quaternion tracks, only arm bones
-        if (property === 'quaternion' && ARM_BONE_NAMES.has(boneName)) {
+        // Only quaternion tracks, only pose bones (shoulders + arms + forearms)
+        if (property === 'quaternion' && POSE_BONE_NAMES.has(boneName)) {
           // Read quaternion at frame 0 → first 4 values (x, y, z, w)
           const q = new THREE.Quaternion(
             track.values[0], track.values[1], track.values[2], track.values[3]
@@ -234,41 +232,83 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
     const t = clock.getElapsedTime();
 
     // =====================================================
-    // IDLE ARM POSE — driven by reference animation quaternions
-    // On first frame, capture the T-pose quaternion for each arm bone.
-    // Then slerp from T-pose → target pose using easeOutCubic.
-    // This uses REAL Mixamo animation data instead of guessing Eulers.
+    // IDLE ARM POSE — shoulder-compensated quaternion transfer
+    //
+    // Problem: arm quaternions are LOCAL to their parent shoulder.
+    // The reference animation (humanoid Beta mesh) has different
+    // shoulder rotations than the Tripo model. Directly applying
+    // reference arm quaternions gives wrong world-space direction.
+    // Directly applying shoulder quaternions deforms the torso.
+    //
+    // Solution: compute corrected arm quaternions that produce the
+    // same world-space arm direction WITHOUT touching shoulders:
+    //   arm_corrected = inv(shoulder_tripo) × shoulder_ref × arm_ref
+    //
+    // Forearms use reference quaternions directly — once the parent
+    // arm bone is at the correct world orientation, forearm local
+    // rotations transfer correctly.
     // =====================================================
 
-    // Capture T-pose quaternions on first frame
-    if (armPoseRef.current.size > 0 && !armInitRef.current) {
+    // Phase 1: Capture T-pose quaternions and compute corrected targets
+    if (armPoseRef.current.size > 0 && !targetComputedRef.current) {
+      // Capture current (T-pose) quaternions for all pose bones
       const initMap = new Map<string, THREE.Quaternion>();
       armPoseRef.current.forEach((_, boneName) => {
         const bone = scene.getObjectByName(boneName) as THREE.Bone | undefined;
-        if (bone) {
-          initMap.set(boneName, bone.quaternion.clone());
-        }
+        if (bone) initMap.set(boneName, bone.quaternion.clone());
       });
+
       if (initMap.size > 0) {
         armInitRef.current = initMap;
-        console.log(`  Captured ${initMap.size} T-pose arm quaternions for slerp`);
+        const targets = new Map<string, THREE.Quaternion>();
+
+        // Process each side (Left, Right)
+        for (const side of ['Left', 'Right']) {
+          const shoulderName = `mixamorig${side}Shoulder`;
+          const armName = `mixamorig${side}Arm`;
+          const forearmName = `mixamorig${side}ForeArm`;
+
+          const shoulderInit = initMap.get(shoulderName);       // Tripo T-pose shoulder
+          const shoulderRef = armPoseRef.current.get(shoulderName); // Reference shoulder
+          const armRef = armPoseRef.current.get(armName);        // Reference arm
+          const forearmRef = armPoseRef.current.get(forearmName); // Reference forearm
+
+          // Arm: compensate for the shoulder rotation we're NOT applying
+          // arm_corrected = inverse(shoulder_tripo) × shoulder_ref × arm_ref
+          if (shoulderInit && shoulderRef && armRef) {
+            const corrected = new THREE.Quaternion()
+              .copy(shoulderInit).invert()      // inv(shoulder_tripo)
+              .multiply(shoulderRef)             // × shoulder_ref
+              .multiply(armRef);                 // × arm_ref
+            targets.set(armName, corrected);
+            console.log(`  ${side} arm: compensated for shoulder delta`);
+          } else if (armRef) {
+            targets.set(armName, armRef); // Fallback: use raw reference
+          }
+
+          // Forearm: use reference directly (parent arm is now world-correct)
+          if (forearmRef) {
+            targets.set(forearmName, forearmRef);
+          }
+        }
+
+        armTargetRef.current = targets;
+        targetComputedRef.current = true;
+        console.log(`  Computed ${targets.size} corrected arm/forearm targets (shoulders untouched)`);
       }
     }
 
-    // Slerp arm bones from T-pose to reference pose
-    if (armPoseRef.current.size > 0 && armInitRef.current) {
+    // Phase 2: Slerp arm/forearm bones from T-pose to corrected targets
+    if (armTargetRef.current.size > 0 && armInitRef.current) {
       armLerpRef.current = Math.min(armLerpRef.current + delta * 1.5, 1); // ~0.67s
       const rawT = armLerpRef.current;
       const armT = 1 - Math.pow(1 - rawT, 3); // easeOutCubic
 
-      armPoseRef.current.forEach((targetQ, boneName) => {
+      armTargetRef.current.forEach((targetQ, boneName) => {
         const bone = scene.getObjectByName(boneName) as THREE.Bone | undefined;
         const initQ = armInitRef.current!.get(boneName);
         if (bone && initQ) {
-          // Shoulders: partial slerp to preserve the model's torso shape.
-          // Arms/forearms: full slerp for correct final pose.
-          const effectiveT = SHOULDER_BONES.has(boneName) ? armT * SHOULDER_BLEND : armT;
-          bone.quaternion.copy(initQ).slerp(targetQ, effectiveT);
+          bone.quaternion.copy(initQ).slerp(targetQ, armT);
         }
       });
     }
