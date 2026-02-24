@@ -6,32 +6,47 @@ import { useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import type { VisemeData } from '@/hooks/useGeminiLive';
 
-// NOTE: We intentionally do NOT load or apply idlebreathing.glb animation.
-// Its quaternion tracks were authored for a different model orientation
-// (Beta mesh with rotation={[Math.PI/2, 0, 0]}) and cause Tripo models
-// to appear upside-down/malformed. Instead we use manual bone manipulation.
+// We load idlebreathing.glb as a REFERENCE for arm pose quaternions only.
+// Full animation playback caused the model to flip upside-down (the Beta mesh
+// uses rotation={[Math.PI/2, 0, 0]}). Instead, we extract only ARM bone
+// quaternions at frame 0 and apply them via slerp — local arm rotations are
+// skeleton-intrinsic and transfer between any two Mixamo-rigged models.
 
 interface AvatarProps {
   modelUrl: string;
   volumeRef: React.MutableRefObject<VisemeData>;
 }
 
+// Arm bones whose quaternions we extract from the reference animation.
+// These are the ONLY bones we copy — no spine/hips (which caused the flip).
+const ARM_BONE_NAMES = new Set([
+  'mixamorigLeftShoulder', 'mixamorigRightShoulder',
+  'mixamorigLeftArm', 'mixamorigRightArm',
+  'mixamorigLeftForeArm', 'mixamorigRightForeArm',
+  'mixamorigLeftHand', 'mixamorigRightHand',
+]);
+
 export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
   // Load the Tripo model (rigged with Mixamo skeleton via animate_rig)
   const { scene } = useGLTF(modelUrl);
 
+  // Load the idle breathing animation as a REFERENCE for arm pose quaternions.
+  // We do NOT play this animation — we only read frame-0 quaternions for arm bones.
+  const idleGltf = useGLTF('/idlebreathing.glb');
+
   const groupRef = useRef<THREE.Group>(null!);
 
-  // Bone refs
+  // Bone refs (for breathing, head, neck)
   const headBoneRef = useRef<THREE.Bone | null>(null);
   const neckBoneRef = useRef<THREE.Bone | null>(null);
   const spineBoneRef = useRef<THREE.Bone | null>(null);
   const rootBoneRef = useRef<THREE.Bone | null>(null);
-  const lArmRef = useRef<THREE.Bone | null>(null);
-  const rArmRef = useRef<THREE.Bone | null>(null);
-  const lForeArmRef = useRef<THREE.Bone | null>(null);
-  const rForeArmRef = useRef<THREE.Bone | null>(null);
   const jawBoneRef = useRef<THREE.Bone | null>(null);
+
+  // Arm pose: target quaternions extracted from reference animation
+  const armPoseRef = useRef<Map<string, THREE.Quaternion>>(new Map());
+  // Arm pose: T-pose quaternions captured on first frame (for slerp)
+  const armInitRef = useRef<Map<string, THREE.Quaternion> | null>(null);
 
   // Synthetic mouth overlay
   const mouthMeshRef = useRef<THREE.Mesh | null>(null);
@@ -41,7 +56,7 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
   const smoothWidthRef = useRef(0);
   const smoothVolRef = useRef(0);
 
-  // Track the arm pose lerp progress (for smooth transition out of T-pose)
+  // Track the arm pose slerp progress (for smooth transition out of T-pose)
   const armLerpRef = useRef(0);
 
   // Mouth geometry — created once
@@ -66,11 +81,9 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
     neckBoneRef.current = null;
     spineBoneRef.current = null;
     rootBoneRef.current = null;
-    lArmRef.current = null;
-    rArmRef.current = null;
-    lForeArmRef.current = null;
-    rForeArmRef.current = null;
     jawBoneRef.current = null;
+    armPoseRef.current = new Map();
+    armInitRef.current = null;
     armLerpRef.current = 0;
 
     if (mouthMeshRef.current) {
@@ -111,22 +124,6 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
         if (name.includes('hips') || name.includes('pelvis') || name.includes('hip') || name.includes('waist')) {
           if (!rootBoneRef.current) rootBoneRef.current = child as THREE.Bone;
         }
-        // Left Arm (upper — skip clavicle/shoulder, skip forearm)
-        if (name.includes('leftarm') && !name.includes('fore')) {
-          if (!lArmRef.current) lArmRef.current = child as THREE.Bone;
-        }
-        // Right Arm (upper)
-        if (name.includes('rightarm') && !name.includes('fore')) {
-          if (!rArmRef.current) rArmRef.current = child as THREE.Bone;
-        }
-        // Left ForeArm
-        if (name.includes('leftforearm')) {
-          if (!lForeArmRef.current) lForeArmRef.current = child as THREE.Bone;
-        }
-        // Right ForeArm
-        if (name.includes('rightforearm')) {
-          if (!rForeArmRef.current) rForeArmRef.current = child as THREE.Bone;
-        }
       }
     });
 
@@ -136,13 +133,56 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
     console.log('  Jaw:', jawBoneRef.current?.name ?? 'MISSING (will create synthetic mouth)');
     console.log('  Spine:', spineBoneRef.current?.name ?? 'MISSING');
     console.log('  Root:', rootBoneRef.current?.name ?? 'MISSING');
-    console.log('  L Arm:', lArmRef.current?.name ?? 'MISSING');
-    console.log('  R Arm:', rArmRef.current?.name ?? 'MISSING');
-    console.log('  L ForeArm:', lForeArmRef.current?.name ?? 'MISSING');
-    console.log('  R ForeArm:', rForeArmRef.current?.name ?? 'MISSING');
 
     // =========================================================
-    // STEP 2: Create synthetic mouth overlay
+    // STEP 2: Extract arm pose from reference animation
+    // We read frame-0 quaternions for ARM bones ONLY from the
+    // idlebreathing.glb animation. Since both models use the
+    // same Mixamo skeleton, local arm quaternions transfer directly.
+    // We skip spine/hips/root (which caused model-flip before).
+    // =========================================================
+    const poseMap = new Map<string, THREE.Quaternion>();
+
+    if (idleGltf.animations.length > 0) {
+      const clip = idleGltf.animations[0];
+      console.log(`--- Extracting arm pose from "${clip.name}" (${clip.tracks.length} tracks) ---`);
+
+      for (const track of clip.tracks) {
+        // Parse bone name + property from track name
+        // Format A: "Armature.bones[BoneName].quaternion"
+        // Format B: "BoneName.quaternion"
+        let boneName = '';
+        let property = '';
+
+        const bracketMatch = track.name.match(/bones\[(\w+)\]\.(\w+)/);
+        if (bracketMatch) {
+          boneName = bracketMatch[1];
+          property = bracketMatch[2];
+        } else {
+          const dotMatch = track.name.match(/^(.+)\.(\w+)$/);
+          if (dotMatch) {
+            boneName = dotMatch[1];
+            property = dotMatch[2];
+          }
+        }
+
+        // Only quaternion tracks, only arm bones
+        if (property === 'quaternion' && ARM_BONE_NAMES.has(boneName)) {
+          // Read quaternion at frame 0 → first 4 values (x, y, z, w)
+          const q = new THREE.Quaternion(
+            track.values[0], track.values[1], track.values[2], track.values[3]
+          );
+          poseMap.set(boneName, q);
+          console.log(`  Arm pose: ${boneName} → q(${q.x.toFixed(3)}, ${q.y.toFixed(3)}, ${q.z.toFixed(3)}, ${q.w.toFixed(3)})`);
+        }
+      }
+    }
+
+    armPoseRef.current = poseMap;
+    console.log(`  Extracted ${poseMap.size} arm bone quaternions`);
+
+    // =========================================================
+    // STEP 3: Create synthetic mouth overlay
     // =========================================================
     if (headBoneRef.current) {
       const headWorldScale = new THREE.Vector3();
@@ -172,33 +212,47 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
         mouthMeshRef.current = null;
       }
     };
-  }, [scene, mouthGeo, mouthMat]);
+  }, [scene, idleGltf, mouthGeo, mouthMat]);
 
   useFrame(({ clock }, delta) => {
     const t = clock.getElapsedTime();
 
     // =====================================================
-    // IDLE ARM POSE — arms down at sides, slight bend
-    // Uses direct time-based blend (not per-frame exponential
-    // which was too slow). easeOutCubic for natural deceleration.
+    // IDLE ARM POSE — driven by reference animation quaternions
+    // On first frame, capture the T-pose quaternion for each arm bone.
+    // Then slerp from T-pose → target pose using easeOutCubic.
+    // This uses REAL Mixamo animation data instead of guessing Eulers.
     // =====================================================
-    armLerpRef.current = Math.min(armLerpRef.current + delta * 2.0, 1); // ~0.5s
-    const rawT = armLerpRef.current;
-    const armT = 1 - Math.pow(1 - rawT, 3); // easeOutCubic: fast start, gentle settle
 
-    if (lArmRef.current) {
-      lArmRef.current.rotation.z = armT * 1.2;   // rotate down to side
-      lArmRef.current.rotation.x = armT * 0.15;   // slight forward angle
+    // Capture T-pose quaternions on first frame
+    if (armPoseRef.current.size > 0 && !armInitRef.current) {
+      const initMap = new Map<string, THREE.Quaternion>();
+      armPoseRef.current.forEach((_, boneName) => {
+        const bone = scene.getObjectByName(boneName) as THREE.Bone | undefined;
+        if (bone) {
+          initMap.set(boneName, bone.quaternion.clone());
+        }
+      });
+      if (initMap.size > 0) {
+        armInitRef.current = initMap;
+        console.log(`  Captured ${initMap.size} T-pose arm quaternions for slerp`);
+      }
     }
-    if (rArmRef.current) {
-      rArmRef.current.rotation.z = armT * -1.2;   // mirror
-      rArmRef.current.rotation.x = armT * 0.15;
-    }
-    if (lForeArmRef.current) {
-      lForeArmRef.current.rotation.y = armT * 0.4; // slight inward bend
-    }
-    if (rForeArmRef.current) {
-      rForeArmRef.current.rotation.y = armT * -0.4; // mirror
+
+    // Slerp arm bones from T-pose to reference pose
+    if (armPoseRef.current.size > 0 && armInitRef.current) {
+      armLerpRef.current = Math.min(armLerpRef.current + delta * 1.5, 1); // ~0.67s
+      const rawT = armLerpRef.current;
+      const armT = 1 - Math.pow(1 - rawT, 3); // easeOutCubic
+
+      armPoseRef.current.forEach((targetQ, boneName) => {
+        const bone = scene.getObjectByName(boneName) as THREE.Bone | undefined;
+        const initQ = armInitRef.current!.get(boneName);
+        if (bone && initQ) {
+          // Slerp from T-pose quaternion to reference animation quaternion
+          bone.quaternion.copy(initQ).slerp(targetQ, armT);
+        }
+      });
     }
 
     // --- Manual breathing (sine-wave chest expansion + subtle root bob) ---
