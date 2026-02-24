@@ -168,7 +168,7 @@ async function downloadAndStoreGlb(sourceUrl, storagePath, label) {
 }
 // ============================================================================
 // 2. THE 3D EXTRUSION WORKER (Cloud Tasks Queue)
-//    Pipeline: Upload → image_to_model → animate_rig (Mixamo) → Store
+//    Pipeline: Upload → image_to_model → animate_rig → animate_retarget → Store
 // ============================================================================
 exports.process3DExtrusion = (0, tasks_1.onTaskDispatched)({
     retryConfig: { maxAttempts: 1, minBackoffSeconds: 60 },
@@ -283,20 +283,70 @@ exports.process3DExtrusion = (0, tasks_1.onTaskDispatched)({
             if (!riggedUrl) {
                 throw new Error(`animate_rig succeeded but no model URL found! Output: ${JSON.stringify(rigResult.output)}`);
             }
-            // Download and store the rigged model
-            riggedPermanentUrl = await downloadAndStoreGlb(riggedUrl, `users/${userId}/agents/${agentId}/model.glb`, "rigged");
+            // Download and store the rigged (T-pose) model as a backup
+            riggedPermanentUrl = await downloadAndStoreGlb(riggedUrl, `users/${userId}/agents/${agentId}/model_rigged.glb`, "rigged");
         }
         catch (rigError) {
             // Rigging failed — fall back to unrigged model
             console.warn("animate_rig failed. Falling back to unrigged model:", rigError);
             riggedPermanentUrl = unriggedPermanentUrl;
+            // Skip retarget if rig failed
+            await db.doc(`users/${userId}/agents/${agentId}`).set({
+                extrusionStatus: "complete",
+                model3dUrl: riggedPermanentUrl,
+                model3dUnriggedUrl: unriggedPermanentUrl,
+                updatedAt: admin.firestore.FieldValue.serverTimestamp()
+            }, { merge: true });
+            return;
         }
         // ================================================================
-        // Step F: Unlock the UI with the best available model
+        // Step F: Retarget idle animation (bakes arms-down pose + breathing)
+        // This gives the model a proper idle animation so the frontend
+        // doesn't need to hack arm poses from a separate reference file.
+        // ================================================================
+        await db.doc(`users/${userId}/agents/${agentId}`).set({
+            extrusionStatus: "animating",
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+        console.log("=== Starting Tripo animate_retarget (preset:idle) ===");
+        let finalModelUrl = riggedPermanentUrl; // Fallback if retarget fails
+        try {
+            const retargetRes = await fetch("https://api.tripo3d.ai/v2/openapi/task", {
+                method: "POST",
+                headers: { "Authorization": `Bearer ${TRIPO_API_KEY}`, "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    type: "animate_retarget",
+                    original_model_task_id: rigTaskId,
+                    out_format: "glb",
+                    animation: "preset:idle"
+                })
+            });
+            const retargetData = await retargetRes.json();
+            console.log("=== TRIPO animate_retarget TASK ===", JSON.stringify(retargetData));
+            if (retargetData.data?.task_id) {
+                const retargetResult = await pollTripoTask(retargetData.data.task_id, "animate_retarget");
+                const retargetUrl = retargetResult.output.model || retargetResult.output.pbr_model || retargetResult.output.base_model;
+                if (retargetUrl) {
+                    finalModelUrl = await downloadAndStoreGlb(retargetUrl, `users/${userId}/agents/${agentId}/model.glb`, "retargeted-idle");
+                    console.log("=== Retarget SUCCESS — idle animation baked ===");
+                }
+                else {
+                    console.warn("animate_retarget succeeded but no model URL. Falling back to rigged model.");
+                }
+            }
+            else {
+                console.warn("animate_retarget failed to start. Falling back to rigged model.");
+            }
+        }
+        catch (retargetError) {
+            console.warn("animate_retarget failed. Falling back to rigged model:", retargetError);
+        }
+        // ================================================================
+        // Step G: Unlock the UI with the best available model
         // ================================================================
         await db.doc(`users/${userId}/agents/${agentId}`).set({
             extrusionStatus: "complete",
-            model3dUrl: riggedPermanentUrl,
+            model3dUrl: finalModelUrl,
             model3dUnriggedUrl: unriggedPermanentUrl,
             updatedAt: admin.firestore.FieldValue.serverTimestamp()
         }, { merge: true });

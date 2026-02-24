@@ -77,6 +77,10 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
   // Original root bone Y position (for additive breathing bob)
   const rootOrigYRef = useRef<number | null>(null);
 
+  // Base rotations for head/neck (captured on first frame, used as anchors)
+  const headBaseRotRef = useRef<{ x: number; y: number; z: number } | null>(null);
+  const neckBaseRotRef = useRef<{ x: number; y: number; z: number } | null>(null);
+
   // Mouth geometry — created once
   const mouthGeo = useMemo(() => {
     const geo = new THREE.SphereGeometry(1, 16, 8);
@@ -103,6 +107,8 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
     armPoseRef.current = new Map();
     armInitRef.current = null;
     armTargetRef.current = new Map();
+    headBaseRotRef.current = null;
+    neckBaseRotRef.current = null;
     targetComputedRef.current = false;
     armLerpRef.current = 0;
     rootOrigYRef.current = null;
@@ -374,15 +380,31 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
       rootBoneRef.current.position.y = rootOrigYRef.current + Math.sin(t * 2) * 0.005;
     }
 
-    // --- Neck subtle sway (additive, always) ---
-    if (neckBoneRef.current) {
-      neckBoneRef.current.rotation.y += Math.sin(t * 0.8) * 0.0006;
+    // --- Capture base rotations on first frame (anchor for all oscillation) ---
+    if (neckBoneRef.current && neckBaseRotRef.current === null) {
+      neckBaseRotRef.current = {
+        x: neckBoneRef.current.rotation.x,
+        y: neckBoneRef.current.rotation.y,
+        z: neckBoneRef.current.rotation.z,
+      };
+    }
+    if (headBoneRef.current && headBaseRotRef.current === null) {
+      headBaseRotRef.current = {
+        x: headBoneRef.current.rotation.x,
+        y: headBoneRef.current.rotation.y,
+        z: headBoneRef.current.rotation.z,
+      };
     }
 
-    // --- Head idle movement (additive, always) ---
-    if (headBoneRef.current) {
-      headBoneRef.current.rotation.z += Math.sin(t * 1.2) * 0.0003;
-      headBoneRef.current.rotation.x += Math.sin(t * 0.7) * 0.0002;
+    // --- Neck subtle sway (absolute from base — no drift) ---
+    if (neckBoneRef.current && neckBaseRotRef.current) {
+      neckBoneRef.current.rotation.y = neckBaseRotRef.current.y + Math.sin(t * 0.8) * 0.015;
+    }
+
+    // --- Head idle movement (absolute from base — no drift) ---
+    if (headBoneRef.current && headBaseRotRef.current) {
+      headBoneRef.current.rotation.z = headBaseRotRef.current.z + Math.sin(t * 1.2) * 0.008;
+      headBoneRef.current.rotation.x = headBaseRotRef.current.x + Math.sin(t * 0.7) * 0.005;
     }
 
     // =====================================================
@@ -422,11 +444,12 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
     }
 
     // --- Conversational head gestures (driven by speech energy) ---
-    if (headBoneRef.current && vol > 0.05) {
+    // These are layered ON TOP of the idle movement set above (absolute, not additive)
+    if (headBoneRef.current && headBaseRotRef.current && vol > 0.05) {
       // Subtle nods on emphasis (jaw energy drives micro-nods)
-      headBoneRef.current.rotation.x += jaw * 0.004;
+      headBoneRef.current.rotation.x += jaw * 0.03;
       // Slight rhythmic tilt on syllables
-      headBoneRef.current.rotation.z += Math.sin(t * 6) * jaw * 0.002;
+      headBoneRef.current.rotation.z += Math.sin(t * 6) * jaw * 0.015;
     }
 
     // --- Synthetic mouth overlay — frequency-driven viseme shapes ---
