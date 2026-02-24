@@ -7,7 +7,10 @@ export function UIOverlay({ vaultItems = [] }: { vaultItems?: any[] }) {
   return (
     <div className="flex flex-col h-full text-white">
       <div className="flex justify-between items-center mb-6">
-        <h2 className="text-2xl font-bold tracking-tight">IP Vault</h2>
+      // ✅ Update to match your site's brand
+<h2 className="text-[#00ff00] font-mono text-sm tracking-widest uppercase">
+  Agent Vault
+</h2>
         <span className="text-xs bg-cyan-400/20 text-cyan-400 px-2 py-1 rounded border border-cyan-400/30">
           Imagen 3 Engine
         </span>
