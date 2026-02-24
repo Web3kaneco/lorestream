@@ -81,6 +81,10 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
   const headBaseRotRef = useRef<{ x: number; y: number; z: number } | null>(null);
   const neckBaseRotRef = useRef<{ x: number; y: number; z: number } | null>(null);
 
+  // AnimationMixer — plays the retarget animation for body sway + arms down
+  const mixerRef = useRef<THREE.AnimationMixer | null>(null);
+  const hasRetargetAnimRef = useRef(false);
+
   // Mouth geometry — created once
   const mouthGeo = useMemo(() => {
     const geo = new THREE.SphereGeometry(1, 16, 8);
@@ -110,6 +114,14 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
     headBaseRotRef.current = null;
     neckBaseRotRef.current = null;
     targetComputedRef.current = false;
+
+    // Clean up previous mixer
+    if (mixerRef.current) {
+      mixerRef.current.stopAllAction();
+      mixerRef.current.uncacheRoot(scene);
+      mixerRef.current = null;
+    }
+    hasRetargetAnimRef.current = false;
     armLerpRef.current = 0;
     rootOrigYRef.current = null;
 
@@ -162,97 +174,58 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
     console.log('  Root:', rootBoneRef.current?.name ?? 'MISSING');
 
     // =========================================================
-    // STEP 2: Extract arm pose from animation data
+    // STEP 2: Set up animation
     //
-    // PRIORITY 1: Use the Tripo model's OWN animation (from
-    //   animate_retarget → preset:idle). Since this animation was
-    //   made for this exact skeleton, no shoulder compensation is
-    //   needed — we apply arm/forearm quaternions directly.
+    // PRIORITY 1: If the model has a retarget animation, PLAY it
+    //   via AnimationMixer. On Tripo's site, the idle animation
+    //   shows the character standing with arms down. We play the
+    //   whole clip as a looping animation — body sway, arms, etc.
     //
-    // PRIORITY 2 (fallback): Use idlebreathing.glb as an external
-    //   reference. Requires shoulder-compensated math because the
-    //   humanoid reference has different skeleton proportions.
+    // PRIORITY 2 (fallback): If no retarget animation exists,
+    //   extract arm pose from idlebreathing.glb reference and
+    //   apply with gentle slerp blend.
     // =========================================================
-    const poseMap = new Map<string, THREE.Quaternion>();
-    let usedOwnAnim = false;
-
-    // Helper: extract quaternions from an animation clip
-    const extractFromClip = (clip: THREE.AnimationClip, boneFilter: Set<string>, label: string) => {
-      console.log(`--- Extracting arm pose from ${label}: "${clip.name}" (${clip.tracks.length} tracks) ---`);
-      let count = 0;
-      for (const track of clip.tracks) {
-        // Parse track name into bone name + property
-        // Formats seen in the wild:
-        //   bones[mixamorigLeftArm].quaternion          (bracket style)
-        //   mixamorigLeftArm.quaternion                  (flat dot style)
-        //   mixamorigHips/mixamorigSpine/.../mixamorigLeftArm.quaternion (hierarchical path)
-        let boneName = '';
-        let property = '';
-
-        const bracketMatch = track.name.match(/bones\[(\w+)\]\.(\w+)/);
-        if (bracketMatch) {
-          boneName = bracketMatch[1];
-          property = bracketMatch[2];
-        } else {
-          const dotMatch = track.name.match(/^(.+)\.(\w+)$/);
-          if (dotMatch) {
-            const fullPath = dotMatch[1];
-            property = dotMatch[2];
-            // Handle hierarchical paths: "Hips/Spine/LeftArm" → "LeftArm"
-            const slashIdx = fullPath.lastIndexOf('/');
-            boneName = slashIdx >= 0 ? fullPath.substring(slashIdx + 1) : fullPath;
-          }
-        }
-
-        // Log ALL quaternion tracks so we can see what names the animation uses
-        if (property === 'quaternion') {
-          const inFilter = boneFilter.has(boneName);
-          if (inFilter) {
-            const q = new THREE.Quaternion(
-              track.values[0], track.values[1], track.values[2], track.values[3]
-            );
-            poseMap.set(boneName, q);
-            console.log(`  ✅ ${label}: ${boneName} → q(${q.x.toFixed(3)}, ${q.y.toFixed(3)}, ${q.z.toFixed(3)}, ${q.w.toFixed(3)})`);
-            count++;
-          } else {
-            // Log unmatched bones so we can diagnose naming issues
-            console.log(`  ── ${label}: ${boneName} (skipped — not in filter) [raw: ${track.name}]`);
-          }
-        }
-      }
-      return count;
-    };
-
-    // PRIORITY 1: Try the model's own animation (from retarget)
-    // Note: useGLTF returns animations on the gltf root, not on scene
     console.log(`--- Animation Detection ---`);
     console.log(`  modelAnimations: ${modelAnimations ? modelAnimations.length : 'null/undefined'} clips`);
-    console.log(`  scene.animations: ${scene.animations ? scene.animations.length : 'null/undefined'} clips`);
 
     if (modelAnimations && modelAnimations.length > 0) {
-      const ownClip = modelAnimations[0];
-      console.log(`  Model clip: "${ownClip.name}", duration: ${ownClip.duration.toFixed(2)}s, tracks: ${ownClip.tracks.length}`);
-      const found = extractFromClip(ownClip, ARM_BONE_NAMES, "MODEL OWN ANIM");
-      if (found >= 2) { // At least LeftArm + RightArm
-        usedOwnAnim = true;
-        console.log(`  ✅ Using model's OWN animation (${found} arm bones) — no shoulder compensation needed`);
-      } else {
-        console.log(`  ⚠️ Model has animation but only ${found} arm bones matched — falling back to reference`);
-        poseMap.clear();
+      // PLAY the retarget animation directly via AnimationMixer
+      const clip = modelAnimations[0];
+      console.log(`  Setting up AnimationMixer for "${clip.name}" (${clip.duration.toFixed(2)}s, ${clip.tracks.length} tracks)`);
+      for (const track of clip.tracks) {
+        console.log(`    Track: ${track.name} (${Math.floor(track.values.length / 4)} keyframes)`);
       }
+
+      const mixer = new THREE.AnimationMixer(scene);
+      const action = mixer.clipAction(clip);
+      action.setLoop(THREE.LoopRepeat, Infinity);
+      action.play();
+
+      mixerRef.current = mixer;
+      hasRetargetAnimRef.current = true;
+      console.log(`  ✅ AnimationMixer playing — retarget animation active`);
     } else {
-      console.log(`  ⚠️ No animations found on model — using fallback reference`);
-    }
+      console.log(`  ⚠️ No animations — using fallback reference for arms`);
 
-    // PRIORITY 2: Fallback to external reference (idlebreathing.glb)
-    if (!usedOwnAnim && idleGltf.animations.length > 0) {
-      extractFromClip(idleGltf.animations[0], ALL_POSE_BONES, "REFERENCE");
-      console.log(`  Using REFERENCE animation (needs shoulder compensation)`);
+      // FALLBACK: Extract arm quaternions from idlebreathing.glb
+      const poseMap = new Map<string, THREE.Quaternion>();
+      if (idleGltf.animations.length > 0) {
+        const refClip = idleGltf.animations[0];
+        for (const track of refClip.tracks) {
+          const dotMatch = track.name.match(/^(.+)\.(\w+)$/);
+          if (!dotMatch) continue;
+          const boneName = dotMatch[1];
+          const property = dotMatch[2];
+          if (property === 'quaternion' && ALL_POSE_BONES.has(boneName)) {
+            poseMap.set(boneName, new THREE.Quaternion(
+              track.values[0], track.values[1], track.values[2], track.values[3]
+            ));
+          }
+        }
+        console.log(`  Extracted ${poseMap.size} arm/shoulder bones from reference`);
+      }
+      armPoseRef.current = poseMap;
     }
-
-    armPoseRef.current = poseMap;
-    usingOwnAnimRef.current = usedOwnAnim;
-    console.log(`  Extracted ${poseMap.size} pose bone quaternions (ownAnim: ${usedOwnAnim})`);
 
     // =========================================================
     // STEP 3: Create synthetic mouth overlay
@@ -262,9 +235,9 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
       headBoneRef.current.getWorldScale(headWorldScale);
       const avgScale = (Math.abs(headWorldScale.x) + Math.abs(headWorldScale.y) + Math.abs(headWorldScale.z)) / 3;
 
-      const mouthSize = Math.max(avgScale * 0.018, 0.005);
-      const mouthOffsetY = -avgScale * 0.035;
-      const mouthOffsetZ = avgScale * 0.055;
+      const mouthSize = Math.max(avgScale * 0.04, 0.008);
+      const mouthOffsetY = -avgScale * 0.04;
+      const mouthOffsetZ = avgScale * 0.07;
 
       console.log(`  Mouth calibration: scale=${avgScale.toFixed(4)}, size=${mouthSize.toFixed(4)}`);
 
@@ -280,6 +253,11 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
     }
 
     return () => {
+      if (mixerRef.current) {
+        mixerRef.current.stopAllAction();
+        mixerRef.current.uncacheRoot(scene);
+        mixerRef.current = null;
+      }
       if (mouthMeshRef.current) {
         mouthMeshRef.current.removeFromParent();
         mouthMeshRef.current = null;
@@ -290,90 +268,67 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
   useFrame(({ clock }, delta) => {
     const t = clock.getElapsedTime();
 
-    // =====================================================
-    // IDLE ARM POSE
-    //
-    // Two paths:
-    // 1. OWN ANIMATION (from animate_retarget): apply arm/forearm
-    //    quaternions directly — no compensation needed.
-    // 2. FALLBACK (idlebreathing.glb reference): apply ALL bones
-    //    with gentle partial blends. Because the reference skeleton
-    //    (humanoid) has different proportions than the Tripo model,
-    //    we apply very subtle blends to nudge arms slightly down
-    //    from T-pose without fully matching the reference pose.
-    // =====================================================
-    // Fallback blend factors — very subtle to avoid distortion on non-humanoid models.
-    // These just nudge very slightly away from stiff T-pose.
-    const FALLBACK_SHOULDER_BLEND = 0.0;   // Don't touch shoulders at all — protects torso
-    const FALLBACK_ARM_BLEND = 0.15;       // Upper arms: barely perceptible nudge downward
-    const FALLBACK_FOREARM_BLEND = 0.10;   // Forearms: even less to avoid weird bends
+    // =======================================================
+    // LAYER 1: AnimationMixer (retarget body animation)
+    // Plays the Tripo idle animation — body sway, arms down.
+    // Must happen FIRST so subsequent layers can override.
+    // =======================================================
+    if (mixerRef.current) {
+      mixerRef.current.update(delta);
+    }
 
-    // Phase 1: Capture T-pose quaternions and store targets
-    if (armPoseRef.current.size > 0 && !targetComputedRef.current) {
-      const initMap = new Map<string, THREE.Quaternion>();
-      armPoseRef.current.forEach((_, boneName) => {
-        const bone = scene.getObjectByName(boneName) as THREE.Bone | undefined;
-        if (bone) initMap.set(boneName, bone.quaternion.clone());
-      });
+    // =======================================================
+    // LAYER 2: Fallback arm pose (ONLY when no retarget anim)
+    // Gently nudges arms from T-pose using idlebreathing.glb.
+    // When the mixer is playing, it handles arms — skip this.
+    // =======================================================
+    if (!hasRetargetAnimRef.current) {
+      const FALLBACK_ARM_BLEND = 0.15;
+      const FALLBACK_FOREARM_BLEND = 0.10;
 
-      if (initMap.size > 0) {
-        armInitRef.current = initMap;
-
-        if (usingOwnAnimRef.current) {
-          // OWN ANIMATION — use arm quaternions directly
-          const targets = new Map<string, THREE.Quaternion>();
-          armPoseRef.current.forEach((q, boneName) => {
-            if (ARM_BONE_NAMES.has(boneName)) targets.set(boneName, q);
-          });
-          armTargetRef.current = targets;
-          console.log(`  Direct arm targets from model's own animation (${targets.size} bones)`);
-        } else {
-          // FALLBACK — use arm/forearm quaternions only (skip shoulders to protect torso)
+      // Capture T-pose quaternions on first frame
+      if (armPoseRef.current.size > 0 && !targetComputedRef.current) {
+        const initMap = new Map<string, THREE.Quaternion>();
+        armPoseRef.current.forEach((_, boneName) => {
+          const bone = scene.getObjectByName(boneName) as THREE.Bone | undefined;
+          if (bone) initMap.set(boneName, bone.quaternion.clone());
+        });
+        if (initMap.size > 0) {
+          armInitRef.current = initMap;
           const armOnly = new Map<string, THREE.Quaternion>();
           armPoseRef.current.forEach((q, name) => {
             if (ARM_BONE_NAMES.has(name)) armOnly.set(name, q);
           });
           armTargetRef.current = armOnly;
-          console.log(`  Fallback: ${armOnly.size} arm bones (no shoulders), blend: arms=${FALLBACK_ARM_BLEND} forearms=${FALLBACK_FOREARM_BLEND}`);
+          targetComputedRef.current = true;
         }
-        targetComputedRef.current = true;
+      }
+
+      // Slerp arm bones from T-pose to targets
+      if (armTargetRef.current.size > 0 && armInitRef.current) {
+        armLerpRef.current = Math.min(armLerpRef.current + delta * 1.5, 1);
+        const armT = 1 - Math.pow(1 - armLerpRef.current, 3);
+        armTargetRef.current.forEach((targetQ, boneName) => {
+          const bone = scene.getObjectByName(boneName) as THREE.Bone | undefined;
+          const initQ = armInitRef.current!.get(boneName);
+          if (bone && initQ) {
+            const blend = boneName.includes('ForeArm') ? FALLBACK_FOREARM_BLEND : FALLBACK_ARM_BLEND;
+            bone.quaternion.copy(initQ).slerp(targetQ, armT * blend);
+          }
+        });
       }
     }
 
-    // Phase 2: Slerp bones from T-pose to targets
-    if (armTargetRef.current.size > 0 && armInitRef.current) {
-      armLerpRef.current = Math.min(armLerpRef.current + delta * 1.5, 1);
-      const armT = 1 - Math.pow(1 - armLerpRef.current, 3); // easeOutCubic
-
-      armTargetRef.current.forEach((targetQ, boneName) => {
-        const bone = scene.getObjectByName(boneName) as THREE.Bone | undefined;
-        const initQ = armInitRef.current!.get(boneName);
-        if (bone && initQ) {
-          let blendFactor = 1.0; // Default: full blend for own animation path
-
-          if (!usingOwnAnimRef.current) {
-            // FALLBACK mode: gentle per-bone blends to avoid distortion
-            if (SHOULDER_BONE_NAMES.has(boneName)) {
-              blendFactor = FALLBACK_SHOULDER_BLEND;
-            } else if (boneName.includes('ForeArm')) {
-              blendFactor = FALLBACK_FOREARM_BLEND;
-            } else {
-              blendFactor = FALLBACK_ARM_BLEND;
-            }
-          }
-
-          bone.quaternion.copy(initQ).slerp(targetQ, armT * blendFactor);
-        }
-      });
-    }
-
-    // --- Manual breathing (sine-wave chest expansion + subtle root bob) ---
+    // =======================================================
+    // LAYER 3: Breathing + root bob
+    // Spine breathing always runs (retarget doesn't touch spine).
+    // Root bob only when no retarget (retarget handles root).
+    // =======================================================
     if (spineBoneRef.current) {
       const breathScale = 1 + Math.sin(t * 2) * 0.008;
       spineBoneRef.current.scale.set(1, breathScale, 1);
     }
-    if (rootBoneRef.current) {
-      // Store original position on first frame, then ADD the bob
+    if (!hasRetargetAnimRef.current && rootBoneRef.current) {
       if (rootOrigYRef.current === null) {
         rootOrigYRef.current = rootBoneRef.current.position.y;
       }
@@ -447,9 +402,9 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
     // These are layered ON TOP of the idle movement set above (absolute, not additive)
     if (headBoneRef.current && headBaseRotRef.current && vol > 0.05) {
       // Subtle nods on emphasis (jaw energy drives micro-nods)
-      headBoneRef.current.rotation.x += jaw * 0.03;
+      headBoneRef.current.rotation.x += jaw * 0.008;
       // Slight rhythmic tilt on syllables
-      headBoneRef.current.rotation.z += Math.sin(t * 6) * jaw * 0.015;
+      headBoneRef.current.rotation.z += Math.sin(t * 6) * jaw * 0.004;
     }
 
     // --- Synthetic mouth overlay — frequency-driven viseme shapes ---
