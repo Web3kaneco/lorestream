@@ -1,9 +1,6 @@
 import { useState, useRef, useCallback } from 'react';
-import { GoogleGenAI, Modality } from '@google/genai'; 
 import { doc, getDoc } from 'firebase/firestore';
-import { db, functions } from '@/lib/firebase';
-
-const ai = new GoogleGenAI({ apiKey: process.env.NEXT_PUBLIC_GEMINI_KEY });
+import { db } from '@/lib/firebase';
 
 // =========================================================
 // Viseme data extracted from real-time frequency analysis
@@ -22,7 +19,7 @@ export function useGeminiLive(agentId: string, userId: string) {
   const [vaultItems, setVaultItems] = useState<any[]>([]);
   const [isGeneratingVaultItem, setIsGeneratingVaultItem] = useState(false);
   
-  const sessionRef = useRef<any>(null);
+  const wsRef = useRef<WebSocket | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyzerRef = useRef<AnalyserNode | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
@@ -31,12 +28,26 @@ export function useGeminiLive(agentId: string, userId: string) {
   
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  
+  // 👁️ 1. ADDED FOR VISION: Refs to hold the image canvas and the interval loop
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const visionIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  
   const socketReadyRef = useRef<boolean>(false);
   const isConnectingRef = useRef<boolean>(false);
 
-  const lastLogTimeRef = useRef<number>(0);
   const nextPlayTimeRef = useRef<number>(0);
+
+  // 🧠 THE CATCHER: Silently sends transcripts to our Vector DB backend
+  const saveToMemory = async (text: string, speaker: 'user' | 'agent') => {
+    try {
+      await fetch('/api/memory', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentId, userId, transcript: text, speaker })
+      });
+    } catch (err) {}
+  };
 
   const startSession = useCallback(async () => {
     if (isConnectingRef.current || isConnected) return; 
@@ -45,25 +56,20 @@ export function useGeminiLive(agentId: string, userId: string) {
 
     try {
       socketReadyRef.current = false;
-      console.log("🔍 [DIAGNOSTIC] Fetching Firebase Lore...");
-
       const memorySnap = await getDoc(doc(db, `users/${userId}/agents/${agentId}/lore/core_memory`));
       const coreMemory = memorySnap.exists() ? memorySnap.data() : { current_lore_summary: "No prior memories.", key_facts: [] };
       const memoryString = coreMemory.key_facts?.join('. ') || "";
 
-      console.log("🔍 [DIAGNOSTIC] Initializing AudioContext at 16000Hz...");
       const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
       audioContextRef.current = audioCtx;
       if (audioCtx.state === 'suspended') await audioCtx.resume();
 
       analyzerRef.current = audioCtx.createAnalyser();
       analyzerRef.current.fftSize = 256;
-      analyzerRef.current.smoothingTimeConstant = 0.4; // Fast response for lip sync
+      analyzerRef.current.smoothingTimeConstant = 0.4; 
       analyzerRef.current.minDecibels = -90;
       analyzerRef.current.maxDecibels = -10;
-      analyzerRef.current.connect(audioContextRef.current.destination);
       
-      console.log("🔍 [DIAGNOSTIC] Requesting Microphone Access...");
       micStreamRef.current = await navigator.mediaDevices.getUserMedia({ 
           audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, 
           video: true 
@@ -74,66 +80,115 @@ export function useGeminiLive(agentId: string, userId: string) {
       videoRef.current.muted = true; 
       videoRef.current.play();
 
-      console.log("🔍 [DIAGNOSTIC] Connecting to Gemini API...");
-      sessionRef.current = await ai.live.connect({
-        model: "gemini-2.5-flash-native-audio-preview-12-2025", 
-        config: {
-          responseModalities: [Modality.AUDIO], 
-          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Puck" } } },
-          systemInstruction: {
-            parts: [{ 
-              text: `You are a helpful AI Co-Creator.
-              CORE MEMORY: ${coreMemory?.current_lore_summary || ""} 
-              FACTS: ${memoryString}
-              CRITICAL INSTRUCTION: You are strictly a VOICE assistant. Wait for the user to speak, and then reply conversationally and briefly.` 
-            }]
-          }
-        },
-        callbacks: {
-          onopen: () => console.log("🟢 [WS] Connection Fully Opened!"),
-          onclose: (e: any) => { 
-            console.warn("🔴 [WS] Connection Closed. Event:", e); 
-            sessionRef.current = null;
-            socketReadyRef.current = false;
-            setIsConnected(false);
-            isConnectingRef.current = false;
-          },
-          onerror: (error: any) => console.error("🚨 [WS] LIVE ERROR CAUGHT:", error),
-          onmessage: async (message: any) => {
-            console.log("📥 [SERVER RESPONSE RAW]:", message);
+      // 👁️ 2. ADDED FOR VISION: Initialize the hidden canvas
+      if (!canvasRef.current) canvasRef.current = document.createElement('canvas');
 
-            if (message.setupComplete) {
-                console.log("✅ [DIAGNOSTIC] Handshake Complete! Safe to stream audio.");
-                socketReadyRef.current = true;
-                return; 
+      const apiKey = process.env.NEXT_PUBLIC_GEMINI_KEY;
+      const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${apiKey}`;
+      
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        const setupMessage = {
+          setup: {
+            model: "models/gemini-2.5-flash-native-audio-preview-12-2025",
+            generationConfig: {
+              responseModalities: ["AUDIO"],
+              speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Puck" } } }
+            },
+            systemInstruction: {
+              parts: [{ 
+                text: `You are a helpful AI Co-Creator.\nCORE MEMORY: ${coreMemory?.current_lore_summary || ""}\nFACTS: ${memoryString}\nCRITICAL INSTRUCTION: You are strictly a VOICE assistant. Wait for the user to speak, and then reply conversationally and briefly.` 
+              }]
             }
-            if (message.serverContent?.interrupted) {
-              console.log("⚠️ [DIAGNOSTIC] AI Interrupted by user.");
-              currentAudioNodesRef.current.forEach(node => { try { node.stop(); } catch (e) {} });
-              currentAudioNodesRef.current = [];
-              nextPlayTimeRef.current = 0; 
-            }
-            if (!message.serverContent?.modelTurn) return;
-            for (const part of message.serverContent.modelTurn.parts) {
-              if (part.text) console.log("📝 [GEMINI TRANSCRIPT]:", part.text);
-              if (part.inlineData?.mimeType?.startsWith('audio/')) {
-                 console.log(`🔊 [DIAGNOSTIC] Audio Received! Size: ${part.inlineData.data.length} bytes`);
-                 playAudioBuffer(part.inlineData.data);
+          }
+        };
+        ws.send(JSON.stringify(setupMessage));
+        setIsConnected(true);
+      };
+
+      ws.onclose = (e) => {
+        wsRef.current = null;
+        socketReadyRef.current = false;
+        setIsConnected(false);
+        isConnectingRef.current = false;
+      };
+
+      ws.onerror = (error) => {};
+
+      ws.onmessage = async (event) => {
+        try {
+          let msgText = event.data;
+          if (event.data instanceof Blob) msgText = await event.data.text();
+          const data = JSON.parse(msgText);
+          
+          // 👁️ 3. ADDED FOR VISION: The Interval Loop
+          if (data.setupComplete) {
+            console.log("✅ [NATIVE WS] Handshake Complete! Safe to stream audio and video.");
+            socketReadyRef.current = true;
+            
+            if (visionIntervalRef.current) clearInterval(visionIntervalRef.current);
+            
+            visionIntervalRef.current = setInterval(() => {
+                if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || !socketReadyRef.current) return;
+                if (!videoRef.current || !canvasRef.current || videoRef.current.videoWidth === 0) return;
+
+                const video = videoRef.current;
+                const canvas = canvasRef.current;
+                
+                // Compress to 640x480
+                canvas.width = 640; 
+                canvas.height = 480;
+                const ctx = canvas.getContext('2d');
+                if (!ctx) return;
+
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                
+                // Extract JPEG
+                const dataUrl = canvas.toDataURL('image/jpeg', 0.5);
+                const base64Image = dataUrl.split(',')[1]; 
+
+                const payload = {
+                  realtimeInput: {
+                    mediaChunks: [{
+                      mimeType: "image/jpeg",
+                      data: base64Image
+                    }]
+                  }
+                };
+                
+                try {
+                    wsRef.current.send(JSON.stringify(payload));
+                } catch (e) {
+                    console.error("🚨 [VISION] Failed to send frame", e);
+                }
+            }, 2000); // 1 frame every 2 seconds
+
+            return;
+          }
+          
+          if (data.serverContent?.interrupted) {
+            currentAudioNodesRef.current.forEach(node => { try { node.stop(); } catch(e) {} });
+            currentAudioNodesRef.current = [];
+            nextPlayTimeRef.current = 0;
+          }
+          
+          if (data.serverContent?.modelTurn) {
+            for (const part of data.serverContent.modelTurn.parts) {
+              if (part.text) {
+                  console.log("📝 [GEMINI]:", part.text);
+                  saveToMemory(part.text, 'agent'); 
+              }
+              if (part.inlineData?.data) {
+                playAudioBuffer(part.inlineData.data);
               }
             }
           }
-        }
-      });   
-      setIsConnected(true);
+        } catch (err) {}
+      };
 
       const source = audioCtx.createMediaStreamSource(micStreamRef.current);
-      const compressor = audioCtx.createDynamicsCompressor();
-      compressor.threshold.value = -24; 
-      compressor.knee.value = 30;       
-      compressor.ratio.value = 12;      
-      compressor.attack.value = 0.003;  
-      compressor.release.value = 0.25;  
-      source.connect(compressor);
       
       try {
         await audioCtx.audioWorklet.addModule('/audio-processor.js');
@@ -144,8 +199,8 @@ export function useGeminiLive(agentId: string, userId: string) {
         workletNodeRef.current = workletNode;
 
         workletNode.port.onmessage = (event) => {
-          if (!sessionRef.current || !socketReadyRef.current) return;
-          const { pcmData, maxAmplitude } = event.data;
+          if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || !socketReadyRef.current) return;
+          const { pcmData } = event.data;
           
           const bytes = new Uint8Array(pcmData.buffer);
           let binary = '';
@@ -153,54 +208,29 @@ export function useGeminiLive(agentId: string, userId: string) {
               const end = Math.min(i + 1024, bytes.byteLength);
               binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, end)));
           }
-          const base64Audio = btoa(binary);
-
-          const now = Date.now();
-          if (now - lastLogTimeRef.current > 2000) {
-              console.log(`📤 [HANDOFF CHECK] Sending Payload... Amplitude: ${maxAmplitude.toFixed(4)} | Base64 Length: ${base64Audio.length} chars | Target: 16000Hz`);
-              lastLogTimeRef.current = now;
-          }
           
-          try {
-            // 🚀 THE FIX: We explicitly wrap the payload in the `mediaChunks` object so the SDK stops dropping it!
-            const payload = {
+          const payload = {
+            realtimeInput: {
               mediaChunks: [{
                 mimeType: "audio/pcm;rate=16000",
-                data: base64Audio
+                data: btoa(binary)
               }]
-            };
-
-            // Raw JSON bypass to guarantee the envelope isn't empty
-            if (typeof sessionRef.current.send === 'function') {
-                sessionRef.current.send({ realtimeInput: payload });
-            } else {
-                sessionRef.current.sendRealtimeInput(payload);
             }
-
-          } catch (err) { 
-            console.error("🚨 [HANDOFF CAUGHT EXCEPTION]:", err);
-          }
+          };
+          wsRef.current.send(JSON.stringify(payload));
         };
 
-        compressor.connect(workletNode);
+        source.connect(workletNode);
         workletNode.connect(audioCtx.destination);
-      } catch (err) { console.error("🚨 [AudioWorklet Load Failed]:", err); }
+      } catch (err) { }
 
-      // =========================================================
-      // Frequency-band viseme extraction
-      // AudioContext runs at 16kHz → fftSize 256 → 128 bins → 62.5Hz/bin
-      // We split into bands that correspond to speech articulation:
-      //   jawOpen:    200-800Hz  (bins 3-12)  — vowel formants, voice fundamental
-      //   mouthWidth: 2000-5500Hz (bins 32-88) — fricatives (s, sh, f), "ee" spread
-      //   volume:     all bins                 — overall energy for gating
-      // =========================================================
       const dataArray = new Uint8Array(analyzerRef.current.frequencyBinCount);
-      const binHz = 62.5; // 16000 / 256
+      const binHz = 62.5; 
 
       const updateVolume = () => {
-         if (analyzerRef.current && sessionRef.current) {
+         if (analyzerRef.current && wsRef.current) {
             analyzerRef.current.getByteFrequencyData(dataArray);
-            const len = dataArray.length; // 128
+            const len = dataArray.length; 
 
             let totalSum = 0;
             let jawSum = 0, jawCount = 0;
@@ -211,20 +241,16 @@ export function useGeminiLive(agentId: string, userId: string) {
               totalSum += val;
 
               const freqLow = i * binHz;
-              // Jaw band: 200-800Hz (vowel openness, fundamental frequency)
               if (freqLow >= 200 && freqLow <= 800) {
                 jawSum += val;
                 jawCount++;
               }
-              // Width band: 2000-5500Hz (fricatives, sibilants, spread vowels)
               if (freqLow >= 2000 && freqLow <= 5500) {
                 widthSum += val;
                 widthCount++;
               }
             }
 
-            // Normalize each band to 0-1
-            // Divisors tuned for typical speech levels from Gemini audio
             const volume = Math.min((totalSum / len) / 80, 1);
             const jawOpen = jawCount > 0 ? Math.min((jawSum / jawCount) / 100, 1) : 0;
             const mouthWidth = widthCount > 0 ? Math.min((widthSum / widthCount) / 80, 1) : 0;
@@ -236,7 +262,6 @@ export function useGeminiLive(agentId: string, userId: string) {
       updateVolume();
 
     } catch (error) {
-      console.error("🚨 [Critical Session Failure]:", error);
       isConnectingRef.current = false;
     }
   }, [agentId, userId, isConnected]);
@@ -245,7 +270,11 @@ export function useGeminiLive(agentId: string, userId: string) {
     socketReadyRef.current = false;
     isConnectingRef.current = false;
     nextPlayTimeRef.current = 0;
-    if (sessionRef.current) { try { sessionRef.current.close(); } catch(e) {} sessionRef.current = null; }
+    
+    // 👁️ 4. ADDED FOR VISION: Clean up the interval so it doesn't leak memory!
+    if (visionIntervalRef.current) clearInterval(visionIntervalRef.current);
+    
+    if (wsRef.current) { try { wsRef.current.close(); } catch(e) {} wsRef.current = null; }
     if (workletNodeRef.current) { workletNodeRef.current.disconnect(); workletNodeRef.current = null; }
     micStreamRef.current?.getTracks().forEach(track => track.stop());
     audioContextRef.current?.close();
@@ -273,14 +302,16 @@ export function useGeminiLive(agentId: string, userId: string) {
          if (analyzerRef.current) source.connect(analyzerRef.current);
          
          const currentTime = audioContextRef.current.currentTime;
-         if (nextPlayTimeRef.current < currentTime) nextPlayTimeRef.current = currentTime;
+         if (nextPlayTimeRef.current < currentTime) {
+             nextPlayTimeRef.current = currentTime + 0.05; 
+         }
          
          source.start(nextPlayTimeRef.current);
          nextPlayTimeRef.current += audioBuffer.duration;
          
          currentAudioNodesRef.current.push(source);
          source.onended = () => { currentAudioNodesRef.current = currentAudioNodesRef.current.filter(n => n !== source); };
-     } catch (error) { console.error("🚨 [Playback Error]:", error); }
+     } catch (error) { }
   };
 
   return { isConnected, vaultItems, isGeneratingVaultItem, startSession, stopSession, volumeRef };
