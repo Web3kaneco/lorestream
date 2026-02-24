@@ -18,12 +18,11 @@ interface AvatarProps {
 }
 
 // Arm bones whose quaternions we extract from the reference animation.
-// These are the ONLY bones we copy — no spine/hips (which caused the flip).
+// ONLY actual arm joints — no shoulders (which distort non-humanoid torsos)
+// and no hands (irrelevant for "arms at sides" pose).
 const ARM_BONE_NAMES = new Set([
-  'mixamorigLeftShoulder', 'mixamorigRightShoulder',
   'mixamorigLeftArm', 'mixamorigRightArm',
   'mixamorigLeftForeArm', 'mixamorigRightForeArm',
-  'mixamorigLeftHand', 'mixamorigRightHand',
 ]);
 
 export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
@@ -59,6 +58,9 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
   // Track the arm pose slerp progress (for smooth transition out of T-pose)
   const armLerpRef = useRef(0);
 
+  // Original root bone Y position (for additive breathing bob)
+  const rootOrigYRef = useRef<number | null>(null);
+
   // Mouth geometry — created once
   const mouthGeo = useMemo(() => {
     const geo = new THREE.SphereGeometry(1, 16, 8);
@@ -85,6 +87,7 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
     armPoseRef.current = new Map();
     armInitRef.current = null;
     armLerpRef.current = 0;
+    rootOrigYRef.current = null;
 
     if (mouthMeshRef.current) {
       mouthMeshRef.current.removeFromParent();
@@ -257,11 +260,15 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
 
     // --- Manual breathing (sine-wave chest expansion + subtle root bob) ---
     if (spineBoneRef.current) {
-      const breathScale = 1 + Math.sin(t * 2) * 0.02;
+      const breathScale = 1 + Math.sin(t * 2) * 0.008;
       spineBoneRef.current.scale.set(1, breathScale, 1);
     }
     if (rootBoneRef.current) {
-      rootBoneRef.current.position.y = Math.sin(t * 2) * 0.01;
+      // Store original position on first frame, then ADD the bob
+      if (rootOrigYRef.current === null) {
+        rootOrigYRef.current = rootBoneRef.current.position.y;
+      }
+      rootBoneRef.current.position.y = rootOrigYRef.current + Math.sin(t * 2) * 0.005;
     }
 
     // --- Neck subtle sway (additive, always) ---
