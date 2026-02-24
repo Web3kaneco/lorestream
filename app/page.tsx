@@ -6,7 +6,6 @@ import { auth, functions } from '@/lib/firebase';
 import { DropZone } from '@/components/ui/DropZone';
 import { ActiveLoadingScreen } from '@/components/ui/ActiveLoadingScreen';
 import { UIOverlay } from '@/components/ui/UIOverlay';
-import { LiveControls } from '@/components/ui/LiveControls';
 import { useGeminiLive } from '@/hooks/useGeminiLive';
 import dynamic from 'next/dynamic';
 import { LoginButton } from '@/components/ui/LoginButton';
@@ -47,11 +46,14 @@ export default function LoreStreamApp() {
     }
   };
 
+  // Grab the absolute newest item for the Active Workspace
+  const latestItem = vaultItems.length > 0 ? vaultItems[vaultItems.length - 1] : null;
+  // The rest of the items go to the Vault
+  const historicalItems = vaultItems.length > 1 ? vaultItems.slice(0, -1) : [];
+
   return (
-    // 🚀 THE THEME: Black background, monospace font, green terminal text
     <main className="relative w-screen h-screen bg-black overflow-hidden text-green-500 font-mono selection:bg-green-500 selection:text-black">
       
-      {/* --- TOP RIGHT CORNER: LOGIN --- */}
       <div className="absolute top-6 right-6 z-50 flex items-center gap-4">
         {appState === 'INGESTION' && (
            <button 
@@ -66,7 +68,6 @@ export default function LoreStreamApp() {
 
       <div className={`absolute inset-0 z-10 flex ${appState === 'LIVE' ? 'pointer-events-none' : 'pointer-events-auto'}`}>
         
-        {/* INGESTION STATE */}
         {appState === 'INGESTION' && (
            showLibrary ? (
              <AgentLibrary 
@@ -78,12 +79,9 @@ export default function LoreStreamApp() {
                  setShowLibrary(false);
                }} 
              />
-           ) : (
-             <DropZone onAwaken={handleAwaken} />
-           )
+           ) : <DropZone onAwaken={handleAwaken} />
         )}
 
-        {/* LOADING STATE */}
         {appState === 'LOADING' && activeAgentId && (
            <ActiveLoadingScreen 
              userId={auth.currentUser?.uid || ''} 
@@ -95,59 +93,88 @@ export default function LoreStreamApp() {
            />
         )}
 
-        {/* 🚀 LIVE STATE: THE COMMAND CENTER GRID */}
+        {/* 🚀 THE NEW COMMAND CENTER GRID */}
         {appState === 'LIVE' && activeAgentId && modelUrl && (
           <div className="w-full h-full p-4 grid grid-cols-12 grid-rows-6 gap-4 pointer-events-auto">
             
-            {/* 🦁 TOP LEFT: The Agent Feed (Constrained 3D Scene) */}
+            {/* 🦁 TOP LEFT: The Agent Feed */}
             <div className="col-span-4 row-span-3 border border-green-500/30 bg-black/50 rounded-md relative shadow-[0_0_15px_rgba(34,197,94,0.1)] overflow-hidden">
               <div className="absolute top-2 left-2 text-xs opacity-50 flex items-center gap-2 z-20">
-                  <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></div>
-                  SYS.AVATAR_FEED // LIVE
+                  <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-red-500 animate-pulse' : 'bg-gray-600'}`}></div>
+                  SYS.AVATAR_FEED // {isConnected ? 'LIVE' : 'STANDBY'}
               </div>
-              
-              {/* Trap the Scene inside this box instead of full screen */}
               <div className="absolute inset-0 z-0">
                   <Scene modelUrl={modelUrl} volumeRef={volumeRef} />
               </div>
-              
-              {/* Scanline Overlay */}
               <div className="pointer-events-none absolute inset-0 z-10 bg-[linear-gradient(transparent_50%,rgba(0,0,0,0.25)_50%)] bg-[length:100%_4px] opacity-20"></div>
             </div>
 
-            {/* 🗂️ TOP RIGHT: The Vault */}
-            <div className="col-span-8 row-span-4 border border-green-500/30 bg-black/50 rounded-md p-4 flex flex-col relative shadow-[0_0_15px_rgba(34,197,94,0.1)]">
-              <div className="text-xs opacity-50 mb-4 border-b border-green-500/30 pb-2 flex justify-between">
-                  <span>SECURE_VAULT // GENERATED_ARTIFACTS</span>
-                  {isGeneratingVaultItem && <span className="text-cyan-400 animate-pulse">PROCESSING_ARTIFACT...</span>}
+            {/* 🎨 BOTTOM LEFT: Active Workspace (Latest Design) */}
+            <div className="col-span-4 row-span-3 border border-green-500/30 bg-black/50 rounded-md p-4 flex flex-col relative shadow-[0_0_15px_rgba(34,197,94,0.1)] overflow-hidden">
+              <div className="text-xs opacity-50 mb-2 border-b border-green-500/30 pb-2 flex justify-between items-center">
+                  <span>ACTIVE_WORKSPACE // LATEST_RENDER</span>
+                  {isGeneratingVaultItem && <span className="text-cyan-400 animate-pulse">PROCESSING...</span>}
+              </div>
+              <div className="flex-1 flex items-center justify-center overflow-hidden">
+                  {isGeneratingVaultItem ? (
+                      <div className="text-cyan-400 animate-pulse border border-cyan-400/50 p-4 rounded">
+                          [ COMPILING ARTIFACT... ]
+                      </div>
+                  ) : latestItem ? (
+                      <div className="flex flex-col items-center h-full w-full">
+                          <img src={latestItem.url} alt="Generated" className="object-contain max-h-[80%] rounded border border-green-500/50 shadow-lg" />
+                          <p className="text-xs text-green-400 mt-2 text-center overflow-hidden text-ellipsis whitespace-nowrap w-full">
+                            &gt; {latestItem.prompt}
+                          </p>
+                      </div>
+                  ) : (
+                      <p className="opacity-20 text-sm">[ WAITING FOR AGENT GENERATION ]</p>
+                  )}
+              </div>
+            </div>
+
+            {/* 💬 TOP MIDDLE: Terminal Stream (Transcripts & Code) */}
+            <div className="col-span-5 row-span-4 border border-green-500/30 bg-black/50 rounded-md p-4 flex flex-col relative shadow-[0_0_15px_rgba(34,197,94,0.1)]">
+               <div className="text-xs opacity-50 mb-4 border-b border-green-500/30 pb-2">
+                  TERMINAL_STREAM // I-O_LOGS
+              </div>
+              <div className="flex-1 overflow-y-auto font-mono text-sm space-y-3">
+                  {/* PLACEHOLDER: We will wire the actual transcripts here next! */}
+                  <p className="opacity-50">Initializing secure connection to Generative Host...</p>
+                  <p className="opacity-50">Loading Vector Database constraints...</p>
+                  <div className="animate-pulse text-cyan-400">_</div>
+              </div>
+            </div>
+
+            {/* 🗂️ TOP RIGHT: The Archive Vault */}
+            <div className="col-span-3 row-span-4 border border-green-500/30 bg-black/50 rounded-md p-4 flex flex-col relative shadow-[0_0_15px_rgba(34,197,94,0.1)]">
+              <div className="text-xs opacity-50 mb-4 border-b border-green-500/30 pb-2">
+                  ARCHIVE_VAULT // OVERFLOW
               </div>
               <div className="flex-1 overflow-y-auto relative">
-                  {/* Your existing UI Overlay dumps images here */}
-                  <UIOverlay vaultItems={vaultItems} />
+                  <UIOverlay vaultItems={historicalItems} />
               </div>
             </div>
 
-            {/* 💬 BOTTOM LEFT: Live Controls */}
-            <div className="col-span-4 row-span-3 border border-green-500/30 bg-black/50 rounded-md p-4 flex flex-col relative shadow-[0_0_15px_rgba(34,197,94,0.1)] overflow-hidden">
-              <div className="text-xs opacity-50 mb-2 border-b border-green-500/30 pb-2">
-                  SYS.CONTROLS // PORT_443
+            {/* ⚙️ BOTTOM RIGHT: System Stats & Mini Controls */}
+            <div className="col-span-8 row-span-2 border border-green-500/30 bg-black/50 rounded-md p-4 relative shadow-[0_0_15px_rgba(34,197,94,0.1)] flex flex-col justify-between">
+              <div className="text-xs opacity-50 mb-2 border-b border-green-500/30 pb-2 flex justify-between items-center">
+                  <span>SYS.DIAGNOSTICS</span>
+                  
+                  {/* 🔥 THE NEW MINI-CONTROL BUTTON */}
+                  <button 
+                    onClick={isConnected ? stopSession : startSession}
+                    className={`px-4 py-1 text-xs font-bold rounded border transition-all ${
+                        isConnected 
+                        ? 'bg-red-900/20 text-red-500 border-red-500/50 hover:bg-red-500/20' 
+                        : 'bg-green-900/20 text-green-500 border-green-500/50 hover:bg-green-500/20 shadow-[0_0_10px_rgba(34,197,94,0.2)]'
+                    }`}
+                  >
+                    {isConnected ? "TERMINATE LINK" : "INITIALIZE LINK"}
+                  </button>
               </div>
-              <div className="flex-1 flex flex-col justify-center items-center">
-                  <LiveControls 
-                    isConnected={isConnected}
-                    isGeneratingVaultItem={isGeneratingVaultItem}
-                    startSession={startSession}
-                    stopSession={stopSession}
-                  />
-              </div>
-            </div>
-
-            {/* 🧠 BOTTOM RIGHT: System Stats */}
-            <div className="col-span-8 row-span-2 border border-green-500/30 bg-black/50 rounded-md p-4 relative shadow-[0_0_15px_rgba(34,197,94,0.1)]">
-              <div className="text-xs opacity-50 mb-4 border-b border-green-500/30 pb-2">
-                  SYS.STATUS // DIAGNOSTICS
-              </div>
-              <div className="grid grid-cols-3 gap-4 text-xs">
+              
+              <div className="grid grid-cols-3 gap-4 text-xs h-full items-center">
                   <div className="p-3 bg-green-900/10 border border-green-500/20 rounded">
                       <p className="opacity-50 mb-1">VECTOR_DB</p>
                       <p className="text-cyan-400">PINECONE // 768-DIM</p>
@@ -159,10 +186,8 @@ export default function LoreStreamApp() {
                       </p>
                   </div>
                   <div className="p-3 bg-green-900/10 border border-green-500/20 rounded">
-                      <p className="opacity-50 mb-1">VISION_NODE</p>
-                      <p className={isConnected ? "text-green-400" : "text-red-400"}>
-                          {isConnected ? "ACTIVE // 0.5 FPS" : "OFFLINE"}
-                      </p>
+                      <p className="opacity-50 mb-1">TOOL_NODE</p>
+                      <p className="text-green-400">NANO-BANANA // ACTIVE</p>
                   </div>
               </div>
             </div>

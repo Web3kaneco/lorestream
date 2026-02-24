@@ -15,7 +15,12 @@ interface SceneProps {
 
 export default function Scene({ modelUrl, volumeRef }: SceneProps) {
   return (
-    <Canvas camera={{ position: [0, 1.5, 4], fov: 50 }}>
+    <Canvas 
+    // 🚀 Push the Z position closer (e.g., from 5 down to 2 or 3)
+    // 🚀 Raise the Y position to frame his torso/head (e.g., 1 or 1.5)
+    camera={{ position: [0, 1.2, 2.5], fov: 45 }} 
+    className="w-full h-full"
+  >
       <Environment preset="city" />
       <Suspense fallback={null}>
          {/* 2. Pass the data straight down into your flawless Avatar component */}
