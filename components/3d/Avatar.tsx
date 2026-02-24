@@ -163,9 +163,12 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
         // Remap track names from the idle breathing GLB format to direct bone references.
         // Tracks come in as: "Armature.bones[mixamorigHips].quaternion"
         // We need:           "mixamorigHips.quaternion"
+        //
+        // CRITICAL: Only apply QUATERNION tracks! The position/scale tracks were
+        // authored for the Beta mesh at 0.01 scale and will collapse the Tripo model
+        // to invisible if applied. Rotations are scale-independent and transfer safely.
         const remappedTracks: THREE.KeyframeTrack[] = [];
         for (const track of clip.tracks) {
-          // Extract bone name and property from various formats
           let boneName = '';
           let property = '';
 
@@ -183,8 +186,9 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
             }
           }
 
-          // Only include tracks for bones that exist in the Tripo model
-          if (boneName && property && tripoBoneNames.has(boneName)) {
+          // Only include QUATERNION tracks for bones that exist in the Tripo model.
+          // Skip position/scale tracks — they're authored for a different model scale.
+          if (boneName && property === 'quaternion' && tripoBoneNames.has(boneName)) {
             track.name = `${boneName}.${property}`;
             remappedTracks.push(track);
           }
