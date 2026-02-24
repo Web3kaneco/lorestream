@@ -36,6 +36,10 @@ export function useGeminiLive(agentId: string, userId: string) {
   const isConnectingRef = useRef<boolean>(false);
   const nextPlayTimeRef = useRef<number>(0);
 
+  // 🛠️ NEW: Buffer and Timeout refs to aggregate memory
+  const agentTranscriptBufferRef = useRef<string>("");
+  const memoryTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
   // 🧩 INITIALIZE OUR MODULES
   const { saveToMemory } = useAgentMemory(agentId, userId);
   const { startVision, stopVision } = useVisionPipeline(videoRef, wsRef, socketReadyRef);
@@ -142,11 +146,27 @@ export function useGeminiLive(agentId: string, userId: string) {
           if (data.serverContent?.modelTurn) {
             for (const part of data.serverContent.modelTurn.parts) {
               
-              // 1. Handle Normal Speech
+              // 1. Handle Normal Speech (🛠️ UPDATED: Aggregated Memory Save)
               if (part.text) {
                   console.log("📝 [GEMINI]:", part.text);
-                  saveToMemory(part.text, 'agent');
                   setTranscripts(prev => [...prev, { speaker: 'AGENT', text: part.text }]);
+
+                  // Gather the chunks into a single string
+                  agentTranscriptBufferRef.current += part.text;
+
+                  // Clear the previous countdown
+                  if (memoryTimeoutRef.current) {
+                      clearTimeout(memoryTimeoutRef.current);
+                  }
+
+                  // Start a new 1.5-second countdown.
+                  memoryTimeoutRef.current = setTimeout(() => {
+                      const completeThought = agentTranscriptBufferRef.current.trim();
+                      if (completeThought) {
+                          saveToMemory(completeThought, 'agent');
+                          agentTranscriptBufferRef.current = ""; // Reset the buffer for the next sentence
+                      }
+                  }, 1500);
               }
               
               // 2. Handle Audio
@@ -277,6 +297,11 @@ export function useGeminiLive(agentId: string, userId: string) {
     nextPlayTimeRef.current = 0;
     
     stopVision(); 
+    
+    // 🛠️ NEW: Clear pending memory saves on stop
+    if (memoryTimeoutRef.current) {
+        clearTimeout(memoryTimeoutRef.current);
+    }
     
     if (wsRef.current) { try { wsRef.current.close(); } catch(e) {} wsRef.current = null; }
     if (workletNodeRef.current) { workletNodeRef.current.disconnect(); workletNodeRef.current = null; }
