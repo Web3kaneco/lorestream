@@ -6,6 +6,18 @@ import { httpsCallable } from 'firebase/functions';
 
 const ai = new GoogleGenAI({ apiKey: process.env.NEXT_PUBLIC_GEMINI_KEY });
 
+// =========================================================
+// Viseme data extracted from real-time frequency analysis
+// of Gemini's audio response. Drives lip sync on the avatar.
+// =========================================================
+export interface VisemeData {
+  volume: number;      // 0-1 overall energy across all frequencies
+  jawOpen: number;     // 0-1 jaw openness (200-800Hz: vowel formants, fundamental freq)
+  mouthWidth: number;  // 0-1 mouth spread (2000-5500Hz: fricatives "s","sh","ee","f")
+}
+
+const VISEME_ZERO: VisemeData = { volume: 0, jawOpen: 0, mouthWidth: 0 };
+
 export function useGeminiLive(agentId: string, userId: string) {
   const [isConnected, setIsConnected] = useState(false);
   const [vaultItems, setVaultItems] = useState<any[]>([]);
@@ -16,7 +28,7 @@ export function useGeminiLive(agentId: string, userId: string) {
   const analyzerRef = useRef<AnalyserNode | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   const currentAudioNodesRef = useRef<AudioBufferSourceNode[]>([]);
-  const volumeRef = useRef<number>(0);
+  const volumeRef = useRef<VisemeData>({ ...VISEME_ZERO });
   
   const micProcessorRef = useRef<ScriptProcessorNode | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -47,6 +59,9 @@ export function useGeminiLive(agentId: string, userId: string) {
 
       analyzerRef.current = audioContextRef.current.createAnalyser();
       analyzerRef.current.fftSize = 256;
+      analyzerRef.current.smoothingTimeConstant = 0.4; // Fast response for lip sync
+      analyzerRef.current.minDecibels = -90;
+      analyzerRef.current.maxDecibels = -10;
       analyzerRef.current.connect(audioContextRef.current.destination);
       
       micStreamRef.current = await navigator.mediaDevices.getUserMedia({ 
@@ -173,13 +188,50 @@ export function useGeminiLive(agentId: string, userId: string) {
       source.connect(processor);
       processor.connect(audioCtx.destination);
 
+      // =========================================================
+      // Frequency-band viseme extraction
+      // AudioContext runs at 16kHz → fftSize 256 → 128 bins → 62.5Hz/bin
+      // We split into bands that correspond to speech articulation:
+      //   jawOpen:    200-800Hz  (bins 3-12)  — vowel formants, voice fundamental
+      //   mouthWidth: 2000-5500Hz (bins 32-88) — fricatives (s, sh, f), "ee" spread
+      //   volume:     all bins                 — overall energy for gating
+      // =========================================================
       const dataArray = new Uint8Array(analyzerRef.current.frequencyBinCount);
+      const binHz = 62.5; // 16000 / 256
+
       const updateVolume = () => {
          if (analyzerRef.current && sessionRef.current) {
             analyzerRef.current.getByteFrequencyData(dataArray);
-            let sum = 0;
-            for(let i=0; i<dataArray.length; i++) sum += dataArray[i];
-            volumeRef.current = sum / dataArray.length;
+            const len = dataArray.length; // 128
+
+            let totalSum = 0;
+            let jawSum = 0, jawCount = 0;
+            let widthSum = 0, widthCount = 0;
+
+            for (let i = 0; i < len; i++) {
+              const val = dataArray[i];
+              totalSum += val;
+
+              const freqLow = i * binHz;
+              // Jaw band: 200-800Hz (vowel openness, fundamental frequency)
+              if (freqLow >= 200 && freqLow <= 800) {
+                jawSum += val;
+                jawCount++;
+              }
+              // Width band: 2000-5500Hz (fricatives, sibilants, spread vowels)
+              if (freqLow >= 2000 && freqLow <= 5500) {
+                widthSum += val;
+                widthCount++;
+              }
+            }
+
+            // Normalize each band to 0-1
+            // Divisors tuned for typical speech levels from Gemini audio
+            const volume = Math.min((totalSum / len) / 80, 1);
+            const jawOpen = jawCount > 0 ? Math.min((jawSum / jawCount) / 100, 1) : 0;
+            const mouthWidth = widthCount > 0 ? Math.min((widthSum / widthCount) / 80, 1) : 0;
+
+            volumeRef.current = { volume, jawOpen, mouthWidth };
             requestAnimationFrame(updateVolume);
          }
       };
@@ -207,7 +259,7 @@ export function useGeminiLive(agentId: string, userId: string) {
     audioContextRef.current?.close();
     if (visionIntervalRef.current) clearInterval(visionIntervalRef.current);
     setIsConnected(false);
-    volumeRef.current = 0;
+    volumeRef.current = { ...VISEME_ZERO };
   }, []);
 
   const playAudioBuffer = async (base64Data: string) => {

@@ -4,6 +4,7 @@ import { useEffect, useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
+import type { VisemeData } from '@/hooks/useGeminiLive';
 
 // NOTE: We intentionally do NOT load or apply idlebreathing.glb animation.
 // Its quaternion tracks were authored for a different model orientation
@@ -12,7 +13,7 @@ import * as THREE from 'three';
 
 interface AvatarProps {
   modelUrl: string;
-  volumeRef: React.MutableRefObject<number>;
+  volumeRef: React.MutableRefObject<VisemeData>;
 }
 
 export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
@@ -34,7 +35,11 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
 
   // Synthetic mouth overlay
   const mouthMeshRef = useRef<THREE.Mesh | null>(null);
-  const smoothVolumeRef = useRef(0);
+
+  // Smoothed viseme channels (asymmetric EMA — fast attack, slow release)
+  const smoothJawRef = useRef(0);
+  const smoothWidthRef = useRef(0);
+  const smoothVolRef = useRef(0);
 
   // Track the arm pose lerp progress (for smooth transition out of T-pose)
   const armLerpRef = useRef(0);
@@ -174,28 +179,26 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
 
     // =====================================================
     // IDLE ARM POSE — arms down at sides, slight bend
-    // Smooth lerp from T-pose on first load.
+    // Uses direct time-based blend (not per-frame exponential
+    // which was too slow). easeOutCubic for natural deceleration.
     // =====================================================
-    armLerpRef.current = Math.min(armLerpRef.current + delta * 0.8, 1); // ~1.25s to reach full pose
-    const armT = armLerpRef.current;
+    armLerpRef.current = Math.min(armLerpRef.current + delta * 2.0, 1); // ~0.5s
+    const rawT = armLerpRef.current;
+    const armT = 1 - Math.pow(1 - rawT, 3); // easeOutCubic: fast start, gentle settle
 
     if (lArmRef.current) {
-      // Left upper arm: rotate down to side (Z), slight forward angle (X)
-      lArmRef.current.rotation.z = THREE.MathUtils.lerp(lArmRef.current.rotation.z, 1.15, armT * 0.08);
-      lArmRef.current.rotation.x = THREE.MathUtils.lerp(lArmRef.current.rotation.x, 0.15, armT * 0.08);
+      lArmRef.current.rotation.z = armT * 1.2;   // rotate down to side
+      lArmRef.current.rotation.x = armT * 0.15;   // slight forward angle
     }
     if (rArmRef.current) {
-      // Right upper arm: mirror
-      rArmRef.current.rotation.z = THREE.MathUtils.lerp(rArmRef.current.rotation.z, -1.15, armT * 0.08);
-      rArmRef.current.rotation.x = THREE.MathUtils.lerp(rArmRef.current.rotation.x, 0.15, armT * 0.08);
+      rArmRef.current.rotation.z = armT * -1.2;   // mirror
+      rArmRef.current.rotation.x = armT * 0.15;
     }
     if (lForeArmRef.current) {
-      // Left forearm: slight bend inward
-      lForeArmRef.current.rotation.y = THREE.MathUtils.lerp(lForeArmRef.current.rotation.y, 0.35, armT * 0.06);
+      lForeArmRef.current.rotation.y = armT * 0.4; // slight inward bend
     }
     if (rForeArmRef.current) {
-      // Right forearm: slight bend inward (mirror)
-      rForeArmRef.current.rotation.y = THREE.MathUtils.lerp(rForeArmRef.current.rotation.y, -0.35, armT * 0.06);
+      rForeArmRef.current.rotation.y = armT * -0.4; // mirror
     }
 
     // --- Manual breathing (sine-wave chest expansion + subtle root bob) ---
@@ -218,36 +221,86 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
       headBoneRef.current.rotation.x += Math.sin(t * 0.7) * 0.0002;
     }
 
+    // =====================================================
+    // FREQUENCY-DRIVEN LIP SYNC
+    // jawOpen  → vertical mouth opening (vowels, voiced sounds)
+    // mouthWidth → horizontal spread (fricatives: s, sh, ee, f)
+    // volume → overall gating (is the AI speaking at all?)
+    //
+    // Asymmetric smoothing: mouth opens fast, closes slowly
+    // — this mimics natural speech where articulation is sharp
+    //   but the jaw doesn't snap shut between syllables.
+    // =====================================================
+    const viseme = volumeRef.current;
+    const jawTarget = viseme.jawOpen;
+    const widthTarget = viseme.mouthWidth;
+    const volTarget = viseme.volume;
+
+    // Asymmetric EMA: fast attack (0.5), slow release (0.12)
+    const jawAlpha = jawTarget > smoothJawRef.current ? 0.5 : 0.12;
+    smoothJawRef.current += (jawTarget - smoothJawRef.current) * jawAlpha;
+
+    const widthAlpha = widthTarget > smoothWidthRef.current ? 0.4 : 0.15;
+    smoothWidthRef.current += (widthTarget - smoothWidthRef.current) * widthAlpha;
+
+    const volAlpha = volTarget > smoothVolRef.current ? 0.45 : 0.1;
+    smoothVolRef.current += (volTarget - smoothVolRef.current) * volAlpha;
+
+    const jaw = smoothJawRef.current;
+    const width = smoothWidthRef.current;
+    const vol = smoothVolRef.current;
+
     // --- Jaw bone animation (if native jaw exists) ---
-    if (jawBoneRef.current && volumeRef?.current !== undefined) {
-      const vol = Math.min(volumeRef.current / 80, 1);
+    if (jawBoneRef.current) {
       jawBoneRef.current.rotation.x = THREE.MathUtils.lerp(
-        jawBoneRef.current.rotation.x, vol * 0.3, 0.4
+        jawBoneRef.current.rotation.x, jaw * 0.35, 0.4
       );
     }
 
-    // --- Mouth overlay animation ---
-    if (mouthMeshRef.current && volumeRef?.current !== undefined) {
-      const rawVol = Math.min(volumeRef.current / 80, 1);
-      smoothVolumeRef.current = THREE.MathUtils.lerp(smoothVolumeRef.current, rawVol, 0.35);
-      const vol = smoothVolumeRef.current;
+    // --- Conversational head gestures (driven by speech energy) ---
+    if (headBoneRef.current && vol > 0.05) {
+      // Subtle nods on emphasis (jaw energy drives micro-nods)
+      headBoneRef.current.rotation.x += jaw * 0.004;
+      // Slight rhythmic tilt on syllables
+      headBoneRef.current.rotation.z += Math.sin(t * 6) * jaw * 0.002;
+    }
 
-      const baseSize = mouthMeshRef.current.userData.baseSize || mouthMeshRef.current.scale.x;
+    // --- Synthetic mouth overlay — frequency-driven viseme shapes ---
+    if (mouthMeshRef.current) {
+      const base = mouthMeshRef.current.userData.baseSize || mouthMeshRef.current.scale.x;
       if (!mouthMeshRef.current.userData.baseSize) {
-        mouthMeshRef.current.userData.baseSize = mouthMeshRef.current.scale.x;
+        mouthMeshRef.current.userData.baseSize = base;
       }
 
-      if (vol > 0.03) {
-        const openY = baseSize * (0.3 + vol * 1.4);
-        const openX = baseSize * (1.0 + vol * 0.3);
-        mouthMeshRef.current.scale.y = THREE.MathUtils.lerp(mouthMeshRef.current.scale.y, openY, 0.4);
-        mouthMeshRef.current.scale.x = THREE.MathUtils.lerp(mouthMeshRef.current.scale.x, openX, 0.3);
-        mouthMat.opacity = THREE.MathUtils.lerp(mouthMat.opacity, 0.9, 0.3);
+      if (vol > 0.02) {
+        // ============ ACTIVE SPEECH ============
+        // Jaw openness drives vertical scale (how open the mouth is)
+        //   "ah" = high jaw → tall opening
+        //   "mm" = low jaw → narrow slit
+        const openY = base * (0.15 + jaw * 2.0);
+
+        // Mouth width drives horizontal scale (spread vs pursed)
+        //   "ee"/"ss" = high width → wide mouth
+        //   "oo"/"oh" = low width → narrow/rounded
+        const openX = base * (0.7 + width * 0.8 + jaw * 0.2);
+
+        // Depth variation for 3D shape (rounded vs flat)
+        //   High jaw + low width → deep rounded ("oh")
+        //   Low jaw + high width → shallow flat ("ee")
+        const openZ = base * (0.7 + jaw * 0.5 - width * 0.15);
+
+        mouthMeshRef.current.scale.y = THREE.MathUtils.lerp(mouthMeshRef.current.scale.y, openY, 0.5);
+        mouthMeshRef.current.scale.x = THREE.MathUtils.lerp(mouthMeshRef.current.scale.x, openX, 0.4);
+        mouthMeshRef.current.scale.z = THREE.MathUtils.lerp(mouthMeshRef.current.scale.z, openZ, 0.35);
+        mouthMat.opacity = THREE.MathUtils.lerp(mouthMat.opacity, 0.92, 0.3);
       } else {
-        const closedY = baseSize * 0.08;
-        mouthMeshRef.current.scale.y = THREE.MathUtils.lerp(mouthMeshRef.current.scale.y, closedY, 0.15);
-        mouthMeshRef.current.scale.x = THREE.MathUtils.lerp(mouthMeshRef.current.scale.x, baseSize, 0.15);
-        mouthMat.opacity = THREE.MathUtils.lerp(mouthMat.opacity, 0.6, 0.1);
+        // ============ SILENT — relaxed closed mouth ============
+        const closedY = base * 0.05;
+        const closedX = base * 0.7;
+        mouthMeshRef.current.scale.y = THREE.MathUtils.lerp(mouthMeshRef.current.scale.y, closedY, 0.08);
+        mouthMeshRef.current.scale.x = THREE.MathUtils.lerp(mouthMeshRef.current.scale.x, closedX, 0.08);
+        mouthMeshRef.current.scale.z = THREE.MathUtils.lerp(mouthMeshRef.current.scale.z, base, 0.08);
+        mouthMat.opacity = THREE.MathUtils.lerp(mouthMat.opacity, 0.5, 0.04);
       }
     }
   });
