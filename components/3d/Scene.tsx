@@ -3,13 +3,14 @@
 import { Suspense } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { Environment, OrbitControls } from '@react-three/drei';
-import { Avatar } from './Avatar'; 
+import { Avatar } from './Avatar';
+import type { VisemeData } from '@/hooks/useGeminiLive';
 
 
 // 1. Give Scene its own guest list so it can accept the data from page.tsx!
 interface SceneProps {
   modelUrl: string;
-  volumeRef: React.MutableRefObject<number>;
+  volumeRef: React.MutableRefObject<VisemeData>;
 }
 
 export default function Scene({ modelUrl, volumeRef }: SceneProps) {
