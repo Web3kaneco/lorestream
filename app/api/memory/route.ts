@@ -32,7 +32,8 @@ export async function POST(req: Request) {
     
     if (data.error) throw new Error(`Google API Error: ${data.error.message}`);
     
-    const vector = data.embedding?.values;
+    // 🛠️ TYPE FIX 1: Explicitly tell TypeScript this is an array of numbers
+    const vector = data.embedding?.values as number[];
     
     // 3. Strict Vector Validation: Ensures it exists AND has numbers
     if (!vector || !Array.isArray(vector) || vector.length === 0) {
@@ -51,13 +52,15 @@ export async function POST(req: Request) {
             agentId: String(agentId || 'unknown_agent'),
             userId: String(userId || 'unknown_user'),
             speaker: String(speaker || 'unknown_speaker'),
-            text: String(transcript).substring(0, 1000), // Safety truncation for Pinecone metadata limits
+            text: String(transcript).substring(0, 1000), 
             timestamp: Date.now()
         }
     };
 
-// Modern v2+ syntax
-await index.upsert([record]);
+    // 🚀 THE ULTIMATE FIX: Pinecone SDK v7+ strictly requires the "records" wrapper
+    await index.upsert({ 
+        records: [record] 
+    });
 
     console.log(`💾 [MEMORY] Vault Saved: "${transcript.substring(0, 30)}..."`);
     return NextResponse.json({ success: true, memoryId });

@@ -87,27 +87,48 @@ export function useGeminiLive(agentId: string, userId: string) {
             model: "models/gemini-2.5-flash-native-audio-preview-12-2025",
             generationConfig: {
               responseModalities: ["AUDIO"],
-              speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Puck" } } }
+              speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Fenrir" } } }
             },
             systemInstruction: {
               parts: [{ 
-                text: `You are a helpful AI Co-Creator.\nCORE MEMORY: ${coreMemory?.current_lore_summary || ""}\nFACTS: ${memoryString}\nCRITICAL INSTRUCTION: You are strictly a VOICE assistant. Wait for the user to speak, and then reply conversationally and briefly.` 
+                text: `You are a real-time voice assistant and co-creator.
+            CORE MEMORY: ${coreMemory?.current_lore_summary || ""}
+            FACTS: ${memoryString}
+            
+            CRITICAL RULES:
+            1. NEVER narrate your internal thoughts. DO NOT use formatting like "**Generating the Image**".
+            2. NEVER say things like "I am crafting the prompt" or "I am ready to call the tool." 
+            3. If the user asks for an image, you must STOP talking about the process and IMMEDIATELY execute the 'create_vault_artifact' function call.
+            4. If the user asks you to remember something from a past conversation, IMMEDIATELY call the 'search_memory' tool.` 
               }]
             },
-            // 🚀 RESTORED: Give the agent the Image Generation Tool!
             tools: [{
-              functionDeclarations: [{
-                name: "create_vault_artifact",
-                description: "Generates a visual artifact or image and saves it to the user's screen. Call this ONLY when the user explicitly asks you to create, generate, draw, or design something.",
-                parameters: {
-                  type: "OBJECT",
-                  properties: {
-                    prompt: { type: "STRING", description: "A highly detailed visual description of what to generate." },
-                    rationale: { type: "STRING", description: "A brief sentence explaining why you are making this." }
-                  },
-                  required: ["prompt", "rationale"]
+              functionDeclarations: [
+                {
+                  name: "create_vault_artifact",
+                  description: "Triggers the image generator. MUST BE CALLED immediately when visual content is requested.",
+                  parameters: {
+                    type: "OBJECT",
+                    properties: {
+                      prompt: { type: "STRING", description: "A highly detailed visual description of the image." },
+                      rationale: { type: "STRING", description: "A short sentence explaining your visual choices." }
+                    },
+                    required: ["prompt", "rationale"]
+                  }
+                },
+                // 🧠 NEW: We added the memory search tool here!
+                {
+                  name: "search_memory",
+                  description: "Searches your Pinecone vector database for past memories. Call this ANY TIME the user asks you to remember something.",
+                  parameters: {
+                    type: "OBJECT",
+                    properties: {
+                      query: { type: "STRING", description: "The specific topic or question to search the database for." }
+                    },
+                    required: ["query"]
+                  }
                 }
-              }]
+              ]
             }]
           }
         };
@@ -146,25 +167,22 @@ export function useGeminiLive(agentId: string, userId: string) {
           if (data.serverContent?.modelTurn) {
             for (const part of data.serverContent.modelTurn.parts) {
               
-              // 1. Handle Normal Speech (🛠️ UPDATED: Aggregated Memory Save)
+              // 1. Handle Normal Speech
               if (part.text) {
                   console.log("📝 [GEMINI]:", part.text);
                   setTranscripts(prev => [...prev, { speaker: 'AGENT', text: part.text }]);
 
-                  // Gather the chunks into a single string
                   agentTranscriptBufferRef.current += part.text;
 
-                  // Clear the previous countdown
                   if (memoryTimeoutRef.current) {
                       clearTimeout(memoryTimeoutRef.current);
                   }
 
-                  // Start a new 1.5-second countdown.
                   memoryTimeoutRef.current = setTimeout(() => {
                       const completeThought = agentTranscriptBufferRef.current.trim();
                       if (completeThought) {
                           saveToMemory(completeThought, 'agent');
-                          agentTranscriptBufferRef.current = ""; // Reset the buffer for the next sentence
+                          agentTranscriptBufferRef.current = ""; 
                       }
                   }, 1500);
               }
@@ -174,7 +192,7 @@ export function useGeminiLive(agentId: string, userId: string) {
                 playAudioBuffer(part.inlineData.data);
               }
 
-              // 🚀 3. RESTORED: Handle Tool Calls (Image Generation)
+              // 🚀 3. Handle Tool Calls (Image Generation)
               if (part.functionCall && part.functionCall.name === "create_vault_artifact") {
                  const { prompt, rationale } = part.functionCall.args;
                  console.log(`🎨 [AGENT TOOL TRIGGERED] Creating: ${prompt}`);
@@ -216,6 +234,49 @@ export function useGeminiLive(agentId: string, userId: string) {
                      }));
                  } finally {
                      setIsGeneratingVaultItem(false);
+                 }
+              }
+
+              // 🧠 4. NEW: Handle Memory Search Tool Call
+              if (part.functionCall && part.functionCall.name === "search_memory") {
+                 const { query } = part.functionCall.args;
+                 console.log(`🧠 [AGENT SEARCHING MEMORY] Query: "${query}"`);
+                 setTranscripts(prev => [...prev, { speaker: 'SYSTEM', text: `Searching Pinecone Memory Vault for: "${query}"...` }]);
+
+                 try {
+                     const res = await fetch('/api/memory/search', {
+                         method: 'POST',
+                         headers: { 'Content-Type': 'application/json' },
+                         body: JSON.stringify({ query, userId, agentId })
+                     });
+                     
+                     const result = await res.json();
+                     
+                     const retrievedMemories = result.memories && result.memories.length > 0 
+                        ? result.memories.join('\n- ') 
+                        : "No relevant memories found in the database for this query.";
+
+                     const toolResponse = {
+                       toolResponse: {
+                         functionResponses: [{
+                           name: "search_memory",
+                           response: { 
+                             result: "Success", 
+                             action: "Retrieved relevant memories.", 
+                             memories_found: retrievedMemories 
+                           }
+                         }]
+                       }
+                     };
+                     wsRef.current.send(JSON.stringify(toolResponse));
+
+                 } catch (err) {
+                     console.error("🚨 Memory Search Failed:", err);
+                     wsRef.current.send(JSON.stringify({
+                         toolResponse: {
+                             functionResponses: [{ name: "search_memory", response: { error: "Failed to access Pinecone memory vault." } }]
+                         }
+                     }));
                  }
               }
 
@@ -298,7 +359,6 @@ export function useGeminiLive(agentId: string, userId: string) {
     
     stopVision(); 
     
-    // 🛠️ NEW: Clear pending memory saves on stop
     if (memoryTimeoutRef.current) {
         clearTimeout(memoryTimeoutRef.current);
     }
