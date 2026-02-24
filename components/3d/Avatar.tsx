@@ -5,15 +5,19 @@ import { useFrame } from '@react-three/fiber';
 import { useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 
+// NOTE: We intentionally do NOT load or apply idlebreathing.glb animation.
+// Its quaternion tracks were authored for a different model orientation
+// (Beta mesh with rotation={[Math.PI/2, 0, 0]}) and cause Tripo models
+// to appear upside-down/malformed. Instead we use manual bone manipulation.
+
 interface AvatarProps {
   modelUrl: string;
   volumeRef: React.MutableRefObject<number>;
 }
 
 export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
-  // Load both: the Tripo model (rigged with Mixamo skeleton) and the idle breathing anim
+  // Load the Tripo model (rigged with Mixamo skeleton via animate_rig)
   const { scene } = useGLTF(modelUrl);
-  const idleGltf = useGLTF('/idlebreathing.glb');
 
   const groupRef = useRef<THREE.Group>(null!);
 
@@ -31,10 +35,6 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
   // Synthetic mouth overlay
   const mouthMeshRef = useRef<THREE.Mesh | null>(null);
   const smoothVolumeRef = useRef(0);
-
-  // Animation mixer for the idle breathing clip
-  const mixerRef = useRef<THREE.AnimationMixer | null>(null);
-  const animAppliedRef = useRef(false);
 
   // Track the arm pose lerp progress (for smooth transition out of T-pose)
   const armLerpRef = useRef(0);
@@ -66,13 +66,8 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
     lForeArmRef.current = null;
     rForeArmRef.current = null;
     jawBoneRef.current = null;
-    animAppliedRef.current = false;
     armLerpRef.current = 0;
 
-    if (mixerRef.current) {
-      mixerRef.current.stopAllAction();
-      mixerRef.current = null;
-    }
     if (mouthMeshRef.current) {
       mouthMeshRef.current.removeFromParent();
       mouthMeshRef.current = null;
@@ -142,78 +137,7 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
     console.log('  R ForeArm:', rForeArmRef.current?.name ?? 'MISSING');
 
     // =========================================================
-    // STEP 2: Apply the idle breathing animation
-    // Both skeletons use Mixamo bone names, so we remap the
-    // animation track names to point directly at bone objects
-    // in the Tripo scene graph. No retargetClip needed!
-    // =========================================================
-    if (idleGltf.animations.length > 0) {
-      try {
-        const sourceClip = idleGltf.animations[0];
-        const clip = sourceClip.clone();
-
-        console.log(`--- Applying animation "${sourceClip.name}" (${sourceClip.duration.toFixed(2)}s, ${sourceClip.tracks.length} tracks) ---`);
-
-        // Build a set of bone names that actually exist in the Tripo scene
-        const tripoBoneNames = new Set<string>();
-        scene.traverse((child) => {
-          if ((child as THREE.Bone).isBone) tripoBoneNames.add(child.name);
-        });
-
-        // Remap track names from the idle breathing GLB format to direct bone references.
-        // Tracks come in as: "Armature.bones[mixamorigHips].quaternion"
-        // We need:           "mixamorigHips.quaternion"
-        //
-        // CRITICAL: Only apply QUATERNION tracks! The position/scale tracks were
-        // authored for the Beta mesh at 0.01 scale and will collapse the Tripo model
-        // to invisible if applied. Rotations are scale-independent and transfer safely.
-        const remappedTracks: THREE.KeyframeTrack[] = [];
-        for (const track of clip.tracks) {
-          let boneName = '';
-          let property = '';
-
-          // Format: "Something.bones[BoneName].property"
-          const bracketMatch = track.name.match(/bones\[(\w+)\]\.(\w+)/);
-          if (bracketMatch) {
-            boneName = bracketMatch[1];
-            property = bracketMatch[2];
-          } else {
-            // Format: "BoneName.property" (already simple)
-            const dotMatch = track.name.match(/^(.+)\.(\w+)$/);
-            if (dotMatch) {
-              boneName = dotMatch[1];
-              property = dotMatch[2];
-            }
-          }
-
-          // Only include QUATERNION tracks for bones that exist in the Tripo model.
-          // Skip position/scale tracks — they're authored for a different model scale.
-          if (boneName && property === 'quaternion' && tripoBoneNames.has(boneName)) {
-            track.name = `${boneName}.${property}`;
-            remappedTracks.push(track);
-          }
-        }
-
-        clip.tracks = remappedTracks;
-        console.log(`  Remapped ${remappedTracks.length} / ${sourceClip.tracks.length} tracks to Tripo skeleton`);
-
-        if (remappedTracks.length > 0) {
-          const mixer = new THREE.AnimationMixer(scene);
-          const action = mixer.clipAction(clip);
-          action.play();
-          mixerRef.current = mixer;
-          animAppliedRef.current = true;
-          console.log('  Idle breathing animation playing!');
-        } else {
-          console.warn('  No tracks matched — falling back to manual animation');
-        }
-      } catch (err) {
-        console.warn('  Animation application failed, falling back to manual pose:', err);
-      }
-    }
-
-    // =========================================================
-    // STEP 3: Create synthetic mouth overlay
+    // STEP 2: Create synthetic mouth overlay
     // =========================================================
     if (headBoneRef.current) {
       const headWorldScale = new THREE.Vector3();
@@ -238,28 +162,18 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
     }
 
     return () => {
-      if (mixerRef.current) {
-        mixerRef.current.stopAllAction();
-        mixerRef.current = null;
-      }
       if (mouthMeshRef.current) {
         mouthMeshRef.current.removeFromParent();
         mouthMeshRef.current = null;
       }
     };
-  }, [scene, idleGltf, mouthGeo, mouthMat]);
+  }, [scene, mouthGeo, mouthMat]);
 
   useFrame(({ clock }, delta) => {
     const t = clock.getElapsedTime();
 
-    // Advance idle breathing animation
-    if (mixerRef.current) {
-      mixerRef.current.update(delta);
-    }
-
     // =====================================================
     // IDLE ARM POSE — arms down at sides, slight bend
-    // Applied AFTER mixer update so we override the T-pose.
     // Smooth lerp from T-pose on first load.
     // =====================================================
     armLerpRef.current = Math.min(armLerpRef.current + delta * 0.8, 1); // ~1.25s to reach full pose
@@ -284,15 +198,13 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
       rForeArmRef.current.rotation.y = THREE.MathUtils.lerp(rForeArmRef.current.rotation.y, -0.35, armT * 0.06);
     }
 
-    // --- Manual breathing fallback (only if animation didn't apply) ---
-    if (!animAppliedRef.current) {
-      if (spineBoneRef.current) {
-        const breathScale = 1 + Math.sin(t * 2) * 0.02;
-        spineBoneRef.current.scale.set(1, breathScale, 1);
-      }
-      if (rootBoneRef.current) {
-        rootBoneRef.current.position.y = Math.sin(t * 2) * 0.01;
-      }
+    // --- Manual breathing (sine-wave chest expansion + subtle root bob) ---
+    if (spineBoneRef.current) {
+      const breathScale = 1 + Math.sin(t * 2) * 0.02;
+      spineBoneRef.current.scale.set(1, breathScale, 1);
+    }
+    if (rootBoneRef.current) {
+      rootBoneRef.current.position.y = Math.sin(t * 2) * 0.01;
     }
 
     // --- Neck subtle sway (additive, always) ---
