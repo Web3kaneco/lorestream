@@ -35,6 +35,10 @@ const ALL_POSE_BONES = new Set(
   (Array.from(ARM_BONE_NAMES) as string[]).concat(Array.from(SHOULDER_BONE_NAMES))
 );
 
+// Fallback blend factors (module-scope to avoid per-frame allocation)
+const FALLBACK_ARM_BLEND = 0.15;
+const FALLBACK_FOREARM_BLEND = 0.10;
+
 export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
   // Load the Tripo model (rigged with Mixamo skeleton via animate_rig)
   // IMPORTANT: animations live on the gltf root, NOT on scene.animations
@@ -262,10 +266,16 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
         mouthMeshRef.current.removeFromParent();
         mouthMeshRef.current = null;
       }
+      // Dispose GPU resources
+      mouthGeo.dispose();
+      mouthMat.dispose();
     };
   }, [scene, modelAnimations, idleGltf, mouthGeo, mouthMat]);
 
   useFrame(({ clock }, delta) => {
+    // Early exit if nothing to animate
+    if (!headBoneRef.current && !neckBoneRef.current && !mixerRef.current && !spineBoneRef.current) return;
+
     const t = clock.getElapsedTime();
 
     // =======================================================
@@ -283,9 +293,6 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
     // When the mixer is playing, it handles arms — skip this.
     // =======================================================
     if (!hasRetargetAnimRef.current) {
-      const FALLBACK_ARM_BLEND = 0.15;
-      const FALLBACK_FOREARM_BLEND = 0.10;
-
       // Capture T-pose quaternions on first frame
       if (armPoseRef.current.size > 0 && !targetComputedRef.current) {
         const initMap = new Map<string, THREE.Quaternion>();
