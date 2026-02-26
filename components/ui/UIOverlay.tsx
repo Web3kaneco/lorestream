@@ -7,7 +7,6 @@ export function UIOverlay({ vaultItems = [] }: { vaultItems?: any[] }) {
   return (
     <div className="flex flex-col h-full text-white">
       <div className="flex justify-between items-center mb-6">
-      // ✅ Update to match your site's brand
 <h2 className="text-[#00ff00] font-mono text-sm tracking-widest uppercase">
   Agent Vault
 </h2>
