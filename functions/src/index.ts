@@ -20,6 +20,17 @@ export const enqueue3DTask = onCall(
     const userId = request.auth?.uid;
     if (!userId) throw new HttpsError("unauthenticated", "Must be logged in.");
 
+    // Input validation
+    if (!agentId || typeof agentId !== 'string') {
+      throw new HttpsError("invalid-argument", "Missing or invalid agentId.");
+    }
+    if (!imageBase64 && (!contract || !tokenId)) {
+      throw new HttpsError("invalid-argument", "Must provide either an image or contract+tokenId.");
+    }
+    if (imageBase64 && typeof imageBase64 === 'string' && imageBase64.length > 15_000_000) {
+      throw new HttpsError("invalid-argument", "Image too large (max ~10MB).");
+    }
+
     const db = admin.firestore();
     const bucket = admin.storage().bucket(); // Access your Firebase Storage
 
@@ -85,14 +96,28 @@ export const enqueue3DTask = onCall(
               contents: [{ role: 'user', parts: [{ text: prompt }, { inlineData: { mimeType: "image/jpeg", data: cleanBase64 } }] }], // <-- Use cleanBase64 here
               config: { responseMimeType: "application/json" }
             });
-           const data = JSON.parse(response.text);
-           
+           let data: any;
+           try {
+             data = JSON.parse(response.text);
+           } catch (parseErr) {
+             console.error("Gemini returned invalid JSON:", response.text?.substring(0, 200));
+             data = { traits: ["Unknown"], archetype: "Unknown", funFact: "Analysis incomplete" };
+           }
+
            await db.doc(`users/${userId}/agents/${agentId}`).set({
-             traits: data.traits, archetype: data.archetype, funFact: data.funFact
+             traits: data.traits || ["Unknown"], archetype: data.archetype || "Unknown", funFact: data.funFact || ""
            }, { merge: true });
         }
-      } catch (error) { 
-        console.error("Fast analysis failed", error); 
+      } catch (error) {
+        console.error("Fast analysis failed:", error);
+        // Write fallback so UI isn't stuck on "Scanning..."
+        try {
+          await db.doc(`users/${userId}/agents/${agentId}`).set({
+            traits: ["Analysis unavailable"], archetype: "Unknown", funFact: ""
+          }, { merge: true });
+        } catch (writeErr) {
+          console.error("Failed to write fallback traits:", writeErr);
+        }
       }
     })();
 
@@ -103,23 +128,70 @@ export const enqueue3DTask = onCall(
 // ============================================================================
 // HELPER: Poll a Tripo3D task until it succeeds or fails
 // ============================================================================
+const POLL_MAX_ATTEMPTS = 60; // ~5 minutes at base 5s interval
+const POLL_BASE_DELAY = 5000;
+const POLL_MAX_DELAY = 30000;
+
 async function pollTripoTask(taskId: string, label: string): Promise<any> {
   console.log(`=== Polling Tripo task ${taskId} (${label}) ===`);
-  while (true) {
-    await new Promise((resolve) => setTimeout(resolve, 5000));
+  let errorCount = 0;
+  let delay = POLL_BASE_DELAY;
 
-    const statusRes = await fetch(`https://api.tripo3d.ai/v2/openapi/task/${taskId}`, {
-      method: "GET",
-      headers: { Authorization: `Bearer ${TRIPO_API_KEY}` }
-    });
+  for (let attempt = 0; attempt < POLL_MAX_ATTEMPTS; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, delay));
 
-    if (!statusRes.ok) {
-      console.warn(`Tripo API hiccup on ${label} (Status ${statusRes.status}). Retrying...`);
+    let statusRes: Response;
+    try {
+      statusRes = await fetch(`https://api.tripo3d.ai/v2/openapi/task/${taskId}`, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${TRIPO_API_KEY}` },
+        signal: AbortSignal.timeout(30000)
+      });
+    } catch (fetchErr) {
+      errorCount++;
+      console.warn(`Tripo API fetch error on ${label} (attempt ${attempt + 1}):`, fetchErr);
+      delay = Math.min(POLL_BASE_DELAY * Math.pow(2, errorCount), POLL_MAX_DELAY);
       continue;
     }
 
-    const statusData = await statusRes.json();
-    const status = statusData.data.status;
+    if (!statusRes.ok) {
+      const httpStatus = statusRes.status;
+
+      // Auth errors — fail immediately
+      if (httpStatus === 401 || httpStatus === 403) {
+        throw new Error(`Tripo3D auth error on ${label} (HTTP ${httpStatus}). Check API key.`);
+      }
+
+      // Rate limit — long backoff
+      if (httpStatus === 429) {
+        console.warn(`Tripo rate limited on ${label}. Waiting 30s...`);
+        delay = POLL_MAX_DELAY;
+        continue;
+      }
+
+      // Other errors — exponential backoff, fail after 3 consecutive
+      errorCount++;
+      console.warn(`Tripo API hiccup on ${label} (HTTP ${httpStatus}, error ${errorCount}/3).`);
+      if (errorCount >= 3) {
+        throw new Error(`Tripo3D ${label} failed after ${errorCount} consecutive HTTP errors (last: ${httpStatus}).`);
+      }
+      delay = Math.min(POLL_BASE_DELAY * Math.pow(2, errorCount), POLL_MAX_DELAY);
+      continue;
+    }
+
+    // Successful response — reset error tracking
+    errorCount = 0;
+    delay = POLL_BASE_DELAY;
+
+    let statusData: any;
+    try {
+      statusData = await statusRes.json();
+    } catch (parseErr) {
+      console.warn(`Tripo API returned invalid JSON on ${label}. Retrying...`);
+      continue;
+    }
+
+    const status = statusData.data?.status;
 
     if (status === "success") {
       console.log(`=== TRIPO ${label} SUCCESS ===`, JSON.stringify(statusData.data.output));
@@ -129,6 +201,8 @@ async function pollTripoTask(taskId: string, label: string): Promise<any> {
     }
     // Otherwise still running — loop again
   }
+
+  throw new Error(`Tripo3D ${label} timed out after ${POLL_MAX_ATTEMPTS} polling attempts.`);
 }
 
 // ============================================================================
@@ -140,7 +214,7 @@ async function downloadAndStoreGlb(
   label: string
 ): Promise<string> {
   console.log(`Downloading ${label} GLB to Firebase Storage...`);
-  const glbRes = await fetch(sourceUrl);
+  const glbRes = await fetch(sourceUrl, { signal: AbortSignal.timeout(60000) });
   if (!glbRes.ok) {
     throw new Error(`Tripo CDN Failed to deliver ${label} file! Status: ${glbRes.status}`);
   }
@@ -286,6 +360,7 @@ export const process3DExtrusion = onTaskDispatched(
         console.warn("animate_rig failed to start. Falling back to unrigged model.");
         await db.doc(`users/${userId}/agents/${agentId}`).set({
           extrusionStatus: "complete",
+          extrusionWarning: "rigging_failed",
           model3dUrl: unriggedPermanentUrl,
           updatedAt: admin.firestore.FieldValue.serverTimestamp()
         }, { merge: true });
@@ -320,6 +395,7 @@ export const process3DExtrusion = onTaskDispatched(
         // Skip retarget if rig failed
         await db.doc(`users/${userId}/agents/${agentId}`).set({
           extrusionStatus: "complete",
+          extrusionWarning: "rigging_failed",
           model3dUrl: riggedPermanentUrl,
           model3dUnriggedUrl: unriggedPermanentUrl,
           updatedAt: admin.firestore.FieldValue.serverTimestamp()
@@ -387,9 +463,14 @@ export const process3DExtrusion = onTaskDispatched(
         updatedAt: admin.firestore.FieldValue.serverTimestamp()
       }, { merge: true });
 
-    } catch (error) {
+    } catch (error: any) {
       console.error("Worker failed:", error);
-      await admin.firestore().doc(`users/${userId}/agents/${agentId}`).set({ extrusionStatus: "failed" }, { merge: true });
+      const errorMessage = error?.message || "Unknown error during 3D generation";
+      await admin.firestore().doc(`users/${userId}/agents/${agentId}`).set({
+        extrusionStatus: "error",
+        extrusionError: errorMessage.substring(0, 500),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
       throw error;
     }
   }

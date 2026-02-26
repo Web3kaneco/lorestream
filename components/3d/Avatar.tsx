@@ -105,38 +105,18 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
     });
   }, []);
 
+  // =========================================================
+  // EFFECT 1: Scan the Tripo model's skeleton for bones
+  // =========================================================
   useEffect(() => {
-    // Reset everything on model change
     headBoneRef.current = null;
     neckBoneRef.current = null;
     spineBoneRef.current = null;
     rootBoneRef.current = null;
     jawBoneRef.current = null;
-    armPoseRef.current = new Map();
-    armInitRef.current = null;
-    armTargetRef.current = new Map();
     headBaseRotRef.current = null;
     neckBaseRotRef.current = null;
-    targetComputedRef.current = false;
 
-    // Clean up previous mixer
-    if (mixerRef.current) {
-      mixerRef.current.stopAllAction();
-      mixerRef.current.uncacheRoot(scene);
-      mixerRef.current = null;
-    }
-    hasRetargetAnimRef.current = false;
-    armLerpRef.current = 0;
-    rootOrigYRef.current = null;
-
-    if (mouthMeshRef.current) {
-      mouthMeshRef.current.removeFromParent();
-      mouthMeshRef.current = null;
-    }
-
-    // =========================================================
-    // STEP 1: Scan the Tripo model's skeleton
-    // =========================================================
     console.log('--- Skeleton Bone Scan (Tripo Model) ---');
 
     scene.traverse((child) => {
@@ -144,26 +124,21 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
         const name = child.name.toLowerCase();
         console.log('  Bone:', child.name);
 
-        // Head (skip HeadTop_End)
         if (name.includes('head') && !name.includes('headtop') && !name.includes('head_end')) {
           if (!headBoneRef.current) headBoneRef.current = child as THREE.Bone;
         }
-        // Neck
         if (name.includes('neck')) {
           if (!neckBoneRef.current) neckBoneRef.current = child as THREE.Bone;
         }
-        // Jaw
         if (name.includes('jaw') || name.includes('chin') || name.includes('mandible')) {
           if (!jawBoneRef.current) {
             jawBoneRef.current = child as THREE.Bone;
             console.log('  -> Native jaw bone found:', child.name);
           }
         }
-        // Spine (first spine bone for breathing)
         if (name.includes('spine') || name.includes('chest')) {
           if (!spineBoneRef.current) spineBoneRef.current = child as THREE.Bone;
         }
-        // Root/Hips
         if (name.includes('hips') || name.includes('pelvis') || name.includes('hip') || name.includes('waist')) {
           if (!rootBoneRef.current) rootBoneRef.current = child as THREE.Bone;
         }
@@ -176,24 +151,30 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
     console.log('  Jaw:', jawBoneRef.current?.name ?? 'MISSING (will create synthetic mouth)');
     console.log('  Spine:', spineBoneRef.current?.name ?? 'MISSING');
     console.log('  Root:', rootBoneRef.current?.name ?? 'MISSING');
+  }, [scene]);
 
-    // =========================================================
-    // STEP 2: Set up animation
-    //
-    // PRIORITY 1: If the model has a retarget animation, PLAY it
-    //   via AnimationMixer. On Tripo's site, the idle animation
-    //   shows the character standing with arms down. We play the
-    //   whole clip as a looping animation — body sway, arms, etc.
-    //
-    // PRIORITY 2 (fallback): If no retarget animation exists,
-    //   extract arm pose from idlebreathing.glb reference and
-    //   apply with gentle slerp blend.
-    // =========================================================
+  // =========================================================
+  // EFFECT 2: Set up animation (AnimationMixer or fallback arm pose)
+  // =========================================================
+  useEffect(() => {
+    // Reset animation state
+    if (mixerRef.current) {
+      mixerRef.current.stopAllAction();
+      mixerRef.current.uncacheRoot(scene);
+      mixerRef.current = null;
+    }
+    hasRetargetAnimRef.current = false;
+    armPoseRef.current = new Map();
+    armInitRef.current = null;
+    armTargetRef.current = new Map();
+    targetComputedRef.current = false;
+    armLerpRef.current = 0;
+    rootOrigYRef.current = null;
+
     console.log(`--- Animation Detection ---`);
     console.log(`  modelAnimations: ${modelAnimations ? modelAnimations.length : 'null/undefined'} clips`);
 
     if (modelAnimations && modelAnimations.length > 0) {
-      // PLAY the retarget animation directly via AnimationMixer
       const clip = modelAnimations[0];
       console.log(`  Setting up AnimationMixer for "${clip.name}" (${clip.duration.toFixed(2)}s, ${clip.tracks.length} tracks)`);
       for (const track of clip.tracks) {
@@ -207,11 +188,10 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
 
       mixerRef.current = mixer;
       hasRetargetAnimRef.current = true;
-      console.log(`  ✅ AnimationMixer playing — retarget animation active`);
+      console.log(`  AnimationMixer playing — retarget animation active`);
     } else {
-      console.log(`  ⚠️ No animations — using fallback reference for arms`);
+      console.log(`  No animations — using fallback reference for arms`);
 
-      // FALLBACK: Extract arm quaternions from idlebreathing.glb
       const poseMap = new Map<string, THREE.Quaternion>();
       if (idleGltf.animations.length > 0) {
         const refClip = idleGltf.animations[0];
@@ -231,46 +211,55 @@ export function Avatar({ modelUrl, volumeRef }: AvatarProps) {
       armPoseRef.current = poseMap;
     }
 
-    // =========================================================
-    // STEP 3: Create synthetic mouth overlay
-    // =========================================================
-    if (headBoneRef.current) {
-      const headWorldScale = new THREE.Vector3();
-      headBoneRef.current.getWorldScale(headWorldScale);
-      const avgScale = (Math.abs(headWorldScale.x) + Math.abs(headWorldScale.y) + Math.abs(headWorldScale.z)) / 3;
-
-      const mouthSize = Math.max(avgScale * 0.04, 0.008);
-      const mouthOffsetY = -avgScale * 0.04;
-      const mouthOffsetZ = avgScale * 0.07;
-
-      console.log(`  Mouth calibration: scale=${avgScale.toFixed(4)}, size=${mouthSize.toFixed(4)}`);
-
-      const mouthMesh = new THREE.Mesh(mouthGeo, mouthMat);
-      mouthMesh.name = 'SyntheticMouth';
-      mouthMesh.scale.set(mouthSize, mouthSize * 0.1, mouthSize);
-      mouthMesh.position.set(0, mouthOffsetY, mouthOffsetZ);
-      mouthMesh.renderOrder = 1;
-
-      headBoneRef.current.add(mouthMesh);
-      mouthMeshRef.current = mouthMesh;
-      console.log('  Synthetic mouth attached to head bone');
-    }
-
     return () => {
       if (mixerRef.current) {
         mixerRef.current.stopAllAction();
         mixerRef.current.uncacheRoot(scene);
         mixerRef.current = null;
       }
+    };
+  }, [scene, modelAnimations, idleGltf]);
+
+  // =========================================================
+  // EFFECT 3: Create synthetic mouth overlay (needs head bone from Effect 1)
+  // =========================================================
+  useEffect(() => {
+    if (mouthMeshRef.current) {
+      mouthMeshRef.current.removeFromParent();
+      mouthMeshRef.current = null;
+    }
+
+    if (!headBoneRef.current) return;
+
+    const headWorldScale = new THREE.Vector3();
+    headBoneRef.current.getWorldScale(headWorldScale);
+    const avgScale = (Math.abs(headWorldScale.x) + Math.abs(headWorldScale.y) + Math.abs(headWorldScale.z)) / 3;
+
+    const mouthSize = Math.max(avgScale * 0.04, 0.008);
+    const mouthOffsetY = -avgScale * 0.04;
+    const mouthOffsetZ = avgScale * 0.07;
+
+    console.log(`  Mouth calibration: scale=${avgScale.toFixed(4)}, size=${mouthSize.toFixed(4)}`);
+
+    const mouthMesh = new THREE.Mesh(mouthGeo, mouthMat);
+    mouthMesh.name = 'SyntheticMouth';
+    mouthMesh.scale.set(mouthSize, mouthSize * 0.1, mouthSize);
+    mouthMesh.position.set(0, mouthOffsetY, mouthOffsetZ);
+    mouthMesh.renderOrder = 1;
+
+    headBoneRef.current.add(mouthMesh);
+    mouthMeshRef.current = mouthMesh;
+    console.log('  Synthetic mouth attached to head bone');
+
+    return () => {
       if (mouthMeshRef.current) {
         mouthMeshRef.current.removeFromParent();
         mouthMeshRef.current = null;
       }
-      // Dispose GPU resources
       mouthGeo.dispose();
       mouthMat.dispose();
     };
-  }, [scene, modelAnimations, idleGltf, mouthGeo, mouthMat]);
+  }, [scene, mouthGeo, mouthMat]);
 
   useFrame(({ clock }, delta) => {
     // Early exit if nothing to animate

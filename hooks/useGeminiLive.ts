@@ -3,54 +3,52 @@ import { useState, useRef, useCallback } from 'react';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 
-// 🧩 IMPORT OUR NEW MODULAR HOOKS
 import { useAgentMemory } from './useAgentMemory';
 import { useVisionPipeline } from './useVisionPipeline';
+import { useFrequencyAnalysis } from './useFrequencyAnalysis';
+import { useAudioPlayback } from './useAudioPlayback';
+import { useToolHandlers } from './useToolHandlers';
 
 export interface VisemeData {
-  volume: number;      
-  jawOpen: number;     
-  mouthWidth: number;  
+  volume: number;
+  jawOpen: number;
+  mouthWidth: number;
 }
-
-const VISEME_ZERO: VisemeData = { volume: 0, jawOpen: 0, mouthWidth: 0 };
 
 export function useGeminiLive(agentId: string, userId: string) {
   const [isConnected, setIsConnected] = useState(false);
   const [vaultItems, setVaultItems] = useState<any[]>([]);
   const [isGeneratingVaultItem, setIsGeneratingVaultItem] = useState(false);
-  
-  // 🚀 FIXED: Transcripts state safely inside the hook!
   const [transcripts, setTranscripts] = useState<{speaker: string, text: string}[]>([]);
-  
+
   const wsRef = useRef<WebSocket | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyzerRef = useRef<AnalyserNode | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
-  const currentAudioNodesRef = useRef<AudioBufferSourceNode[]>([]);
-  const volumeRef = useRef<VisemeData>({ ...VISEME_ZERO });
-
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const socketReadyRef = useRef<boolean>(false);
   const isConnectingRef = useRef<boolean>(false);
-  const nextPlayTimeRef = useRef<number>(0);
-  const rafIdRef = useRef<number | null>(null);
 
-  // Buffer and Timeout refs to aggregate memory
+  // Memory transcript buffering
   const agentTranscriptBufferRef = useRef<string>("");
   const userTranscriptBufferRef = useRef<string>("");
   const memoryTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const userMemoryTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // 🧩 INITIALIZE OUR MODULES
+  // Modular hooks
   const { saveToMemory } = useAgentMemory(agentId, userId);
   const { startVision, stopVision } = useVisionPipeline(videoRef, wsRef, socketReadyRef);
+  const { volumeRef, startAnalysis, stopAnalysis } = useFrequencyAnalysis();
+  const { playAudioBuffer, stopAllPlayback, interruptPlayback } = useAudioPlayback();
+  const { handleToolCall } = useToolHandlers({
+    wsRef, userId, agentId, saveToMemory,
+    setVaultItems, setIsGeneratingVaultItem, setTranscripts
+  });
 
   const startSession = useCallback(async () => {
-    if (isConnectingRef.current || isConnected) return; 
+    if (isConnectingRef.current || isConnected) return;
     isConnectingRef.current = true;
-    nextPlayTimeRef.current = 0; 
 
     try {
       socketReadyRef.current = false;
@@ -74,29 +72,32 @@ export function useGeminiLive(agentId: string, userId: string) {
         console.warn("[SESSION] Could not load Pinecone memories:", e);
       }
 
+      // Audio context setup
       const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
       audioContextRef.current = audioCtx;
       if (audioCtx.state === 'suspended') await audioCtx.resume();
 
       analyzerRef.current = audioCtx.createAnalyser();
       analyzerRef.current.fftSize = 256;
-      analyzerRef.current.smoothingTimeConstant = 0.4; 
+      analyzerRef.current.smoothingTimeConstant = 0.4;
       analyzerRef.current.minDecibels = -90;
       analyzerRef.current.maxDecibels = -10;
-      
-      micStreamRef.current = await navigator.mediaDevices.getUserMedia({ 
-          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, 
-          video: true 
+
+      // Mic + video setup
+      micStreamRef.current = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+          video: true
       });
-      
+
       if (!videoRef.current) videoRef.current = document.createElement('video');
       videoRef.current.srcObject = micStreamRef.current;
-      videoRef.current.muted = true; 
+      videoRef.current.muted = true;
       videoRef.current.play();
 
+      // WebSocket connection
       const apiKey = process.env.NEXT_PUBLIC_GEMINI_KEY;
       const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${apiKey}`;
-      
+
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
@@ -109,7 +110,7 @@ export function useGeminiLive(agentId: string, userId: string) {
               speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Fenrir" } } }
             },
             systemInstruction: {
-              parts: [{ 
+              parts: [{
                 text: `You are a real-time voice assistant and co-creator.
             CORE MEMORY: ${coreMemory?.current_lore_summary || ""}
             FACTS: ${memoryString}
@@ -117,9 +118,9 @@ export function useGeminiLive(agentId: string, userId: string) {
 
             CRITICAL RULES:
             1. NEVER narrate your internal thoughts. DO NOT use formatting like "**Generating the Image**".
-            2. NEVER say things like "I am crafting the prompt" or "I am ready to call the tool." 
+            2. NEVER say things like "I am crafting the prompt" or "I am ready to call the tool."
             3. If the user asks for an image, you must STOP talking about the process and IMMEDIATELY execute the 'create_vault_artifact' function call.
-            4. If the user asks you to remember something from a past conversation, IMMEDIATELY call the 'search_memory' tool.` 
+            4. If the user asks you to remember something from a past conversation, IMMEDIATELY call the 'search_memory' tool.`
               }]
             },
             tools: [{
@@ -136,7 +137,6 @@ export function useGeminiLive(agentId: string, userId: string) {
                     required: ["prompt", "rationale"]
                   }
                 },
-                // 🧠 NEW: We added the memory search tool here!
                 {
                   name: "search_memory",
                   description: "Searches your Pinecone vector database for past memories. Call this ANY TIME the user asks you to remember something.",
@@ -156,7 +156,7 @@ export function useGeminiLive(agentId: string, userId: string) {
         setIsConnected(true);
       };
 
-      ws.onclose = (e) => {
+      ws.onclose = () => {
         wsRef.current = null;
         socketReadyRef.current = false;
         setIsConnected(false);
@@ -167,157 +167,57 @@ export function useGeminiLive(agentId: string, userId: string) {
         console.error("[WS ERROR]", error);
       };
 
+      // Message handler — delegates to modular hooks
       ws.onmessage = async (event) => {
         try {
           let msgText = event.data;
           if (event.data instanceof Blob) msgText = await event.data.text();
           const data = JSON.parse(msgText);
-          
+
           if (data.setupComplete) {
-            console.log("✅ [NATIVE WS] Handshake Complete! Safe to stream audio and video.");
+            console.log("[NATIVE WS] Handshake Complete! Safe to stream audio and video.");
             socketReadyRef.current = true;
-            startVision(); 
+            startVision();
             return;
           }
-          
+
           if (data.serverContent?.interrupted) {
-            currentAudioNodesRef.current.forEach(node => { try { node.stop(); } catch(e) {} });
-            currentAudioNodesRef.current = [];
-            nextPlayTimeRef.current = 0;
+            interruptPlayback();
           }
-          
+
           if (data.serverContent?.modelTurn) {
             for (const part of data.serverContent.modelTurn.parts) {
-              
-              // 1. Handle Normal Speech
+              // 1. Text transcripts + memory buffering
               if (part.text) {
-                  console.log("📝 [GEMINI]:", part.text);
                   setTranscripts(prev => {
                     const updated = [...prev, { speaker: 'AGENT', text: part.text }];
                     return updated.length > 500 ? updated.slice(-500) : updated;
                   });
 
                   agentTranscriptBufferRef.current += part.text;
-
-                  if (memoryTimeoutRef.current) {
-                      clearTimeout(memoryTimeoutRef.current);
-                  }
-
+                  if (memoryTimeoutRef.current) clearTimeout(memoryTimeoutRef.current);
                   memoryTimeoutRef.current = setTimeout(() => {
                       const completeThought = agentTranscriptBufferRef.current.trim();
                       if (completeThought) {
                           saveToMemory(completeThought, 'agent');
-                          agentTranscriptBufferRef.current = ""; 
+                          agentTranscriptBufferRef.current = "";
                       }
                   }, 1500);
               }
-              
-              // 2. Handle Audio
-              if (part.inlineData?.data) {
-                playAudioBuffer(part.inlineData.data);
+
+              // 2. Audio playback (delegated)
+              if (part.inlineData?.data && audioContextRef.current) {
+                playAudioBuffer(part.inlineData.data, audioContextRef.current, analyzerRef.current);
               }
 
-              // 🚀 3. Handle Tool Calls (Image Generation)
-              if (part.functionCall && part.functionCall.name === "create_vault_artifact") {
-                 const { prompt, rationale } = part.functionCall.args;
-                 console.log(`🎨 [AGENT TOOL TRIGGERED] Creating: ${prompt}`);
-                 
-                 setIsGeneratingVaultItem(true);
-                 setTranscripts(prev => {
-                   const updated = [...prev, { speaker: 'SYSTEM', text: `Executing Nano-Banana Tool: Generating "${prompt}"` }];
-                   return updated.length > 500 ? updated.slice(-500) : updated;
-                 });
-
-                 try {
-                     const res = await fetch('/api/generate-image', {
-                         method: 'POST',
-                         headers: { 'Content-Type': 'application/json' },
-                         body: JSON.stringify({ prompt })
-                     });
-                     
-                     const result = await res.json();
-                     
-                     if (result.imageUrl) {
-                         setVaultItems(prev => {
-                           const updated = [...prev, { prompt, url: result.imageUrl, rationale }];
-                           return updated.length > 100 ? updated.slice(-100) : updated;
-                         });
-                         const memoryEntry = `I created an image for the user. Rationale: ${rationale}. Visual Prompt used: ${prompt}.`;
-                         saveToMemory(memoryEntry, 'agent');
-                     }
-
-                     const toolResponse = {
-                       toolResponse: {
-                         functionResponses: [{
-                           name: "create_vault_artifact",
-                           response: { result: "Success", action: "Image generated and saved to vault." }
-                         }]
-                       }
-                     };
-                     wsRef.current.send(JSON.stringify(toolResponse));
-
-                 } catch (err) {
-                     console.error("🚨 Tool Execution Failed:", err);
-                     wsRef.current.send(JSON.stringify({
-                         toolResponse: {
-                             functionResponses: [{ name: "create_vault_artifact", response: { error: "Failed to generate image." } }]
-                         }
-                     }));
-                 } finally {
-                     setIsGeneratingVaultItem(false);
-                 }
+              // 3. Tool calls (delegated)
+              if (part.functionCall) {
+                handleToolCall(part.functionCall);
               }
-
-              // 🧠 4. NEW: Handle Memory Search Tool Call
-              if (part.functionCall && part.functionCall.name === "search_memory") {
-                 const { query } = part.functionCall.args;
-                 console.log(`🧠 [AGENT SEARCHING MEMORY] Query: "${query}"`);
-                 setTranscripts(prev => {
-                   const updated = [...prev, { speaker: 'SYSTEM', text: `Searching Pinecone Memory Vault for: "${query}"...` }];
-                   return updated.length > 500 ? updated.slice(-500) : updated;
-                 });
-
-                 try {
-                     const res = await fetch('/api/memory/search', {
-                         method: 'POST',
-                         headers: { 'Content-Type': 'application/json' },
-                         body: JSON.stringify({ query, userId, agentId })
-                     });
-                     
-                     const result = await res.json();
-                     
-                     const retrievedMemories = result.memories && result.memories.length > 0 
-                        ? result.memories.join('\n- ') 
-                        : "No relevant memories found in the database for this query.";
-
-                     const toolResponse = {
-                       toolResponse: {
-                         functionResponses: [{
-                           name: "search_memory",
-                           response: { 
-                             result: "Success", 
-                             action: "Retrieved relevant memories.", 
-                             memories_found: retrievedMemories 
-                           }
-                         }]
-                       }
-                     };
-                     wsRef.current.send(JSON.stringify(toolResponse));
-
-                 } catch (err) {
-                     console.error("🚨 Memory Search Failed:", err);
-                     wsRef.current.send(JSON.stringify({
-                         toolResponse: {
-                             functionResponses: [{ name: "search_memory", response: { error: "Failed to access Pinecone memory vault." } }]
-                         }
-                     }));
-                 }
-              }
-
             }
           }
 
-          // Capture user speech transcripts for memory
+          // 4. User speech transcripts + memory buffering
           if (data.serverContent?.inputTranscript) {
             const userText = data.serverContent.inputTranscript;
             setTranscripts(prev => {
@@ -326,7 +226,6 @@ export function useGeminiLive(agentId: string, userId: string) {
             });
 
             userTranscriptBufferRef.current += " " + userText;
-
             if (userMemoryTimeoutRef.current) clearTimeout(userMemoryTimeoutRef.current);
             userMemoryTimeoutRef.current = setTimeout(() => {
               const completeUserThought = userTranscriptBufferRef.current.trim();
@@ -341,8 +240,9 @@ export function useGeminiLive(agentId: string, userId: string) {
         }
       };
 
+      // Audio worklet for mic capture
       const source = audioCtx.createMediaStreamSource(micStreamRef.current);
-      
+
       try {
         await audioCtx.audioWorklet.addModule('/audio-processor.js');
         const workletNode = new AudioWorkletNode(audioCtx, 'pcm-processor', {
@@ -354,14 +254,14 @@ export function useGeminiLive(agentId: string, userId: string) {
         workletNode.port.onmessage = (event) => {
           if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || !socketReadyRef.current) return;
           const { pcmData } = event.data;
-          
+
           const bytes = new Uint8Array(pcmData.buffer);
           let binary = '';
           for (let i = 0; i < bytes.byteLength; i += 1024) {
               const end = Math.min(i + 1024, bytes.byteLength);
               binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, end)));
           }
-          
+
           const payload = {
             realtimeInput: { mediaChunks: [{ mimeType: "audio/pcm;rate=16000", data: btoa(binary) }] }
           };
@@ -374,59 +274,24 @@ export function useGeminiLive(agentId: string, userId: string) {
         console.error("[AUDIO WORKLET ERROR]", err);
       }
 
-      const dataArray = new Uint8Array(analyzerRef.current.frequencyBinCount);
-      const binHz = 62.5; 
-
-      let frameCount = 0;
-      const updateVolume = () => {
-         if (analyzerRef.current && wsRef.current) {
-            // Throttle to ~30fps (every other frame) for efficiency
-            frameCount++;
-            if (frameCount % 2 === 0) {
-              analyzerRef.current.getByteFrequencyData(dataArray);
-              const len = dataArray.length;
-
-              let totalSum = 0;
-              let jawSum = 0, jawCount = 0;
-              let widthSum = 0, widthCount = 0;
-
-              for (let i = 0; i < len; i++) {
-                const val = dataArray[i];
-                totalSum += val;
-
-                const freqLow = i * binHz;
-                if (freqLow >= 200 && freqLow <= 800) { jawSum += val; jawCount++; }
-                if (freqLow >= 2000 && freqLow <= 5500) { widthSum += val; widthCount++; }
-              }
-
-              const volume = Math.min((totalSum / len) / 80, 1);
-              const jawOpen = jawCount > 0 ? Math.min((jawSum / jawCount) / 100, 1) : 0;
-              const mouthWidth = widthCount > 0 ? Math.min((widthSum / widthCount) / 80, 1) : 0;
-
-              volumeRef.current = { volume, jawOpen, mouthWidth };
-            }
-            rafIdRef.current = requestAnimationFrame(updateVolume);
-         }
-      };
-      rafIdRef.current = requestAnimationFrame(updateVolume);
+      // Start frequency analysis for lip-sync (delegated)
+      if (analyzerRef.current) {
+        startAnalysis(analyzerRef.current);
+      }
 
     } catch (error) {
+      console.error("[SESSION START ERROR]", error);
       isConnectingRef.current = false;
     }
-  }, [agentId, userId, isConnected, saveToMemory, startVision]); 
+  }, [agentId, userId, isConnected, saveToMemory, startVision, startAnalysis, playAudioBuffer, interruptPlayback, handleToolCall]);
 
   const stopSession = useCallback(() => {
     socketReadyRef.current = false;
     isConnectingRef.current = false;
-    nextPlayTimeRef.current = 0;
 
     stopVision();
-
-    // Cancel RAF loop
-    if (rafIdRef.current) {
-      cancelAnimationFrame(rafIdRef.current);
-      rafIdRef.current = null;
-    }
+    stopAnalysis();
+    stopAllPlayback();
 
     // Clear memory debounce timers
     if (memoryTimeoutRef.current) clearTimeout(memoryTimeoutRef.current);
@@ -444,53 +309,12 @@ export function useGeminiLive(agentId: string, userId: string) {
       userTranscriptBufferRef.current = "";
     }
 
-    // Stop and disconnect all playing audio nodes
-    currentAudioNodesRef.current.forEach(node => {
-      try { node.stop(); node.disconnect(); } catch(e) {}
-    });
-    currentAudioNodesRef.current = [];
-
     if (wsRef.current) { try { wsRef.current.close(); } catch(e) {} wsRef.current = null; }
     if (workletNodeRef.current) { workletNodeRef.current.disconnect(); workletNodeRef.current = null; }
     micStreamRef.current?.getTracks().forEach(track => track.stop());
     audioContextRef.current?.close();
     setIsConnected(false);
-    volumeRef.current = { ...VISEME_ZERO };
-  }, [stopVision, saveToMemory]);
-
-  const playAudioBuffer = async (base64Data: string) => {
-     if (!audioContextRef.current) return;
-     try {
-         const binaryString = window.atob(base64Data);
-         const pcmData = new Int16Array(binaryString.length / 2);
-         for (let i = 0; i < pcmData.length; i++) {
-             pcmData[i] = (binaryString.charCodeAt(i * 2 + 1) << 8) | binaryString.charCodeAt(i * 2); 
-         }
-         if (pcmData.length === 0) return; 
-         
-         const audioBuffer = audioContextRef.current.createBuffer(1, pcmData.length, 24000);
-         const channelData = audioBuffer.getChannelData(0);
-         for (let i = 0; i < pcmData.length; i++) channelData[i] = pcmData[i] / 32768.0; 
-         
-         const source = audioContextRef.current.createBufferSource();
-         source.buffer = audioBuffer;
-         source.connect(audioContextRef.current.destination); 
-         if (analyzerRef.current) source.connect(analyzerRef.current);
-         
-         const currentTime = audioContextRef.current.currentTime;
-         if (nextPlayTimeRef.current < currentTime) {
-             nextPlayTimeRef.current = currentTime + 0.05; 
-         }
-         
-         source.start(nextPlayTimeRef.current);
-         nextPlayTimeRef.current += audioBuffer.duration;
-         
-         currentAudioNodesRef.current.push(source);
-         source.onended = () => { currentAudioNodesRef.current = currentAudioNodesRef.current.filter(n => n !== source); };
-     } catch (error) {
-       console.error("[AUDIO PLAYBACK ERROR]", error);
-     }
-  };
+  }, [stopVision, stopAnalysis, stopAllPlayback, saveToMemory]);
 
   return { isConnected, vaultItems, isGeneratingVaultItem, startSession, stopSession, volumeRef, transcripts };
 }
