@@ -1,7 +1,12 @@
 import { NextResponse } from 'next/server';
 import { Pinecone } from '@pinecone-database/pinecone';
 
-const pc = new Pinecone({ apiKey: process.env.PINECONE_API_KEY || '' });
+// Lazy init to avoid build-time errors when env var isn't available
+let pc: Pinecone | null = null;
+function getPinecone() {
+  if (!pc) pc = new Pinecone({ apiKey: process.env.PINECONE_API_KEY || '' });
+  return pc;
+}
 
 export async function POST(req: Request) {
   try {
@@ -41,25 +46,27 @@ export async function POST(req: Request) {
       throw new Error("Invalid or empty embedding values returned from Google API.");
     }
 
-    // 4. Target your Pinecone Vault
-    const index = pc.Index('agent-memory');
+    // 4. Target your Pinecone Vault with namespace isolation per agent
+    const index = getPinecone().Index('agent-memory');
+    const safeAgentId = String(agentId || 'unknown_agent');
+    const safeUserId = String(userId || 'unknown_user');
+    const namespace = index.namespace(`${safeUserId}_${safeAgentId}`);
     const memoryId = `mem_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-    
+
     const record = {
         id: memoryId,
         values: vector,
         metadata: {
-            agentId: String(agentId || 'unknown_agent'),
-            userId: String(userId || 'unknown_user'),
+            agentId: safeAgentId,
+            userId: safeUserId,
             speaker: String(speaker || 'unknown_speaker'),
-            text: String(transcript).substring(0, 1000), 
+            text: String(transcript).substring(0, 1000),
             timestamp: Date.now()
         }
     };
 
-    // 🚀 THE ULTIMATE FIX: Pinecone SDK v7+ strictly requires the "records" wrapper
-    await index.upsert({ 
-        records: [record] 
+    await namespace.upsert({
+        records: [record]
     });
 
     console.log(`💾 [MEMORY] Vault Saved: "${transcript.substring(0, 30)}..."`);
