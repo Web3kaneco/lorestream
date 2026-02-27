@@ -8,14 +8,17 @@ interface ToolHandlerDeps {
   setVaultItems: React.Dispatch<React.SetStateAction<any[]>>;
   setIsGeneratingVaultItem: React.Dispatch<React.SetStateAction<boolean>>;
   setTranscripts: React.Dispatch<React.SetStateAction<{speaker: string, text: string}[]>>;
+  onToolCallback?: (toolName: string, args: any) => void;
 }
 
 export function useToolHandlers({
   wsRef, userId, agentId, saveToMemory,
-  setVaultItems, setIsGeneratingVaultItem, setTranscripts
+  setVaultItems, setIsGeneratingVaultItem, setTranscripts,
+  onToolCallback
 }: ToolHandlerDeps) {
 
   const handleToolCall = useCallback(async (functionCall: { name: string; args: any }) => {
+    // --- Image generation tool ---
     if (functionCall.name === "create_vault_artifact") {
       const { prompt, rationale } = functionCall.args;
       console.log(`[AGENT TOOL TRIGGERED] Creating: ${prompt}`);
@@ -68,6 +71,7 @@ export function useToolHandlers({
       }
     }
 
+    // --- Memory search tool ---
     if (functionCall.name === "search_memory") {
       const { query } = functionCall.args;
       console.log(`[AGENT SEARCHING MEMORY] Query: "${query}"`);
@@ -114,7 +118,37 @@ export function useToolHandlers({
         }
       }
     }
-  }, [wsRef, userId, agentId, saveToMemory, setVaultItems, setIsGeneratingVaultItem, setTranscripts]);
+
+    // --- Save new agent lore (Architect interview) ---
+    if (functionCall.name === "save_new_agent_lore") {
+      console.log("[ARCHITECT] Saving character lore:", functionCall.args);
+
+      setTranscripts(prev => {
+        const updated = [...prev, { speaker: 'SYSTEM', text: 'Character lore captured and saved.' }];
+        return updated.length > 500 ? updated.slice(-500) : updated;
+      });
+
+      // Delegate the actual Firestore write to the page via callback
+      if (onToolCallback) {
+        onToolCallback('save_new_agent_lore', functionCall.args);
+      }
+
+      // Send success response back to Gemini
+      if (wsRef.current) {
+        wsRef.current.send(JSON.stringify({
+          toolResponse: {
+            functionResponses: [{
+              name: "save_new_agent_lore",
+              response: {
+                result: "Success",
+                action: "Character lore has been saved. Tell the user their character's essence has been captured and ask them to upload an image of their character."
+              }
+            }]
+          }
+        }));
+      }
+    }
+  }, [wsRef, userId, agentId, saveToMemory, setVaultItems, setIsGeneratingVaultItem, setTranscripts, onToolCallback]);
 
   return { handleToolCall };
 }
