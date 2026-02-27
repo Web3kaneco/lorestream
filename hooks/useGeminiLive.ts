@@ -40,6 +40,12 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
   const socketReadyRef = useRef<boolean>(false);
   const isConnectingRef = useRef<boolean>(false);
 
+  // Reconnection state
+  const userStoppedRef = useRef<boolean>(false);
+  const reconnectAttemptsRef = useRef(0);
+  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const MAX_RECONNECT_ATTEMPTS = 5;
+
   // Memory transcript buffering
   const agentTranscriptBufferRef = useRef<string>("");
   const userTranscriptBufferRef = useRef<string>("");
@@ -56,8 +62,23 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
   const { startVision, stopVision } = useVisionPipeline(videoRef, wsRef, socketReadyRef);
   const { volumeRef, startAnalysis, stopAnalysis } = useFrequencyAnalysis();
   const { playAudioBuffer, stopAllPlayback, interruptPlayback } = useAudioPlayback();
+  // Safe WebSocket send — wraps all sends with readyState check + try-catch
+  const safeSend = useCallback((payload: any): boolean => {
+    try {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify(payload));
+        return true;
+      }
+      console.warn("[WS] Cannot send — socket not open, readyState:", wsRef.current?.readyState);
+      return false;
+    } catch (err) {
+      console.error("[WS SEND ERROR]", err);
+      return false;
+    }
+  }, []);
+
   const { handleToolCall } = useToolHandlers({
-    wsRef, userId, agentId, saveToMemory,
+    safeSend, userId, agentId, saveToMemory,
     setVaultItems, setIsGeneratingVaultItem, setTranscripts,
     onToolCallback: config?.onToolCallback
   });
@@ -65,6 +86,7 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
   const startSession = useCallback(async () => {
     if (isConnectingRef.current || isConnected) return;
     isConnectingRef.current = true;
+    userStoppedRef.current = false;
 
     try {
       socketReadyRef.current = false;
@@ -142,8 +164,9 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
         ]
       }];
 
-      // Audio context setup
-      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+      // Audio context setup — 24kHz matches Gemini's native audio output rate
+      // Mic capture downsamples 24kHz → 16kHz in the audio worklet before sending
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
       audioContextRef.current = audioCtx;
       if (audioCtx.state === 'suspended') await audioCtx.resume();
 
@@ -195,15 +218,30 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
         setIsConnected(true);
       };
 
-      ws.onclose = () => {
+      ws.onclose = (event) => {
+        console.warn(`[WS CLOSED] code=${event.code} reason=${event.reason || 'none'}`);
         wsRef.current = null;
         socketReadyRef.current = false;
         setIsConnected(false);
         isConnectingRef.current = false;
+
+        // Auto-reconnect with exponential backoff (unless user explicitly stopped)
+        if (!userStoppedRef.current && reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
+          const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 16000);
+          console.log(`[WS] Reconnecting in ${delay}ms (attempt ${reconnectAttemptsRef.current + 1}/${MAX_RECONNECT_ATTEMPTS})`);
+          reconnectTimeoutRef.current = setTimeout(() => {
+            reconnectAttemptsRef.current++;
+            startSession();
+          }, delay);
+        } else if (reconnectAttemptsRef.current >= MAX_RECONNECT_ATTEMPTS) {
+          console.error("[WS] Max reconnect attempts reached — session ended");
+        }
       };
 
       ws.onerror = (error) => {
         console.error("[WS ERROR]", error);
+        // Force close to trigger onclose → reconnection logic
+        try { ws.close(); } catch(e) {}
       };
 
       // Message handler — delegates to modular hooks
@@ -230,6 +268,7 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
           if (data.setupComplete) {
             console.log("[NATIVE WS] Handshake Complete! Safe to stream audio and video.");
             socketReadyRef.current = true;
+            reconnectAttemptsRef.current = 0; // Reset on successful connection
             if (enableVision) startVision();
             return;
           }
@@ -336,7 +375,11 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
           const payload = {
             realtimeInput: { mediaChunks: [{ mimeType: "audio/pcm;rate=16000", data: btoa(binary) }] }
           };
-          wsRef.current.send(JSON.stringify(payload));
+          try {
+            wsRef.current.send(JSON.stringify(payload));
+          } catch (err) {
+            console.error("[AUDIO SEND ERROR]", err);
+          }
         };
 
         source.connect(workletNode);
@@ -354,11 +397,19 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
       console.error("[SESSION START ERROR]", error);
       isConnectingRef.current = false;
     }
-  }, [agentId, userId, isConnected, config, enableVision, enableMemory, voiceName, saveToMemory, startVision, startAnalysis, playAudioBuffer, interruptPlayback, handleToolCall]);
+  }, [agentId, userId, isConnected, config, enableVision, enableMemory, voiceName, saveToMemory, startVision, startAnalysis, playAudioBuffer, interruptPlayback, handleToolCall, safeSend]);
 
   const stopSession = useCallback(() => {
+    userStoppedRef.current = true; // Prevent auto-reconnection
     socketReadyRef.current = false;
     isConnectingRef.current = false;
+    reconnectAttemptsRef.current = 0;
+
+    // Cancel any pending reconnection
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
 
     if (enableVision) stopVision();
     stopAnalysis();
