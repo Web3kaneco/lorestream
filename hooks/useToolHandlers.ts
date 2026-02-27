@@ -17,7 +17,7 @@ export function useToolHandlers({
   onToolCallback
 }: ToolHandlerDeps) {
 
-  const handleToolCall = useCallback(async (functionCall: { name: string; args: any }) => {
+  const handleToolCall = useCallback(async (functionCall: { name: string; args: any; id?: string }) => {
     // --- Image generation tool ---
     if (functionCall.name === "create_vault_artifact") {
       const { prompt, rationale } = functionCall.args;
@@ -51,6 +51,7 @@ export function useToolHandlers({
           wsRef.current.send(JSON.stringify({
             toolResponse: {
               functionResponses: [{
+                id: functionCall.id,
                 name: "create_vault_artifact",
                 response: { result: "Success", action: "Image generated and saved to vault." }
               }]
@@ -62,7 +63,7 @@ export function useToolHandlers({
         if (wsRef.current) {
           wsRef.current.send(JSON.stringify({
             toolResponse: {
-              functionResponses: [{ name: "create_vault_artifact", response: { error: "Failed to generate image." } }]
+              functionResponses: [{ id: functionCall.id, name: "create_vault_artifact", response: { error: "Failed to generate image." } }]
             }
           }));
         }
@@ -97,6 +98,7 @@ export function useToolHandlers({
           wsRef.current.send(JSON.stringify({
             toolResponse: {
               functionResponses: [{
+                id: functionCall.id,
                 name: "search_memory",
                 response: {
                   result: "Success",
@@ -112,7 +114,7 @@ export function useToolHandlers({
         if (wsRef.current) {
           wsRef.current.send(JSON.stringify({
             toolResponse: {
-              functionResponses: [{ name: "search_memory", response: { error: "Failed to access Pinecone memory vault." } }]
+              functionResponses: [{ id: functionCall.id, name: "search_memory", response: { error: "Failed to access Pinecone memory vault." } }]
             }
           }));
         }
@@ -138,6 +140,7 @@ export function useToolHandlers({
         wsRef.current.send(JSON.stringify({
           toolResponse: {
             functionResponses: [{
+              id: functionCall.id,
               name: "save_new_agent_lore",
               response: {
                 result: "Success",

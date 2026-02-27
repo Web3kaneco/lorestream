@@ -118,11 +118,11 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
         functionDeclarations: [
           {
             name: "create_vault_artifact",
-            description: "Triggers the image generator. MUST BE CALLED immediately when visual content is requested.",
+            description: "The ONLY way to create images. You MUST call this tool whenever the user requests ANY visual content — drawings, paintings, scenes, portraits, landscapes, or any image. Call this tool INSTEAD of describing what you would create. Never narrate — just call.",
             parameters: {
               type: "OBJECT",
               properties: {
-                prompt: { type: "STRING", description: "A highly detailed visual description of the image." },
+                prompt: { type: "STRING", description: "A highly detailed visual description of the image to generate. Be specific about composition, colors, style, lighting, and mood." },
                 rationale: { type: "STRING", description: "A short sentence explaining your visual choices." }
               },
               required: ["prompt", "rationale"]
@@ -130,7 +130,7 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
           },
           {
             name: "search_memory",
-            description: "Searches your Pinecone vector database for past memories. Call this ANY TIME the user asks you to remember something.",
+            description: "Search your memory database. You MUST call this when the user asks about past conversations, shared memories, or things discussed before. Do not guess — search first.",
             parameters: {
               type: "OBJECT",
               properties: {
@@ -213,6 +213,14 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
           if (event.data instanceof Blob) msgText = await event.data.text();
           const data = JSON.parse(msgText);
 
+          // Debug: log tool-related messages
+          if (data.serverContent?.modelTurn?.parts) {
+            const toolParts = data.serverContent.modelTurn.parts.filter((p: any) => p.functionCall);
+            if (toolParts.length > 0) {
+              console.log("[WS DEBUG] Function calls received:", JSON.stringify(toolParts));
+            }
+          }
+
           if (data.setupComplete) {
             console.log("[NATIVE WS] Handshake Complete! Safe to stream audio and video.");
             socketReadyRef.current = true;
@@ -253,6 +261,7 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
 
               // 3. Tool calls (delegated)
               if (part.functionCall) {
+                console.log("[TOOL CALL RECEIVED]", part.functionCall.name, "id:", part.functionCall.id, "args:", JSON.stringify(part.functionCall.args));
                 handleToolCall(part.functionCall);
               }
             }
