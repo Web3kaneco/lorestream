@@ -11,7 +11,7 @@ export function UIOverlay({ vaultItems = [] }: { vaultItems?: any[] }) {
   Agent Vault
 </h2>
         <span className="text-xs bg-cyan-400/20 text-cyan-400 px-2 py-1 rounded border border-cyan-400/30">
-          Imagen 3 Engine
+          Imagen 4 Ultra
         </span>
       </div>
       

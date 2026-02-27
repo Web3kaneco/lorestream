@@ -1,9 +1,9 @@
 'use client';
 
-import Image from 'next/image';
-
 interface VaultItem {
-  imageUrl: string;
+  url: string;
+  prompt?: string;
+  rationale?: string;
 }
 
 export function IPVault({ items }: { items: VaultItem[] }) {
@@ -20,26 +20,32 @@ export function IPVault({ items }: { items: VaultItem[] }) {
       {items.map((item, index) => (
         <div key={index} className="group relative rounded-xl overflow-hidden border border-neutral-800 bg-neutral-900 shadow-2xl transition-all hover:border-cyan-400">
           <div className="relative w-full aspect-video">
-            <Image 
-              src={item.imageUrl} 
-              alt="Generated Vault Asset" 
-              fill 
-              className="object-cover"
-              unoptimized
-            />
+            {item.url ? (
+              <img
+                src={item.url}
+                alt={item.prompt || "Generated Vault Asset"}
+                className="object-cover w-full h-full"
+              />
+            ) : (
+              <div className="flex items-center justify-center w-full h-full bg-neutral-800 text-neutral-500 text-xs">
+                Image loading...
+              </div>
+            )}
           </div>
           <div className="p-4 flex justify-between items-center">
             <p className="text-xs font-mono text-neutral-400 tracking-widest uppercase">
               Vault Asset #{index + 1}
             </p>
-            <a 
-              href={item.imageUrl} 
-              download={`lorestream_asset_${index}.jpg`} 
-              target="_blank" rel="noreferrer"
-              className="text-xs bg-white text-black px-3 py-1 rounded hover:bg-gray-200 font-bold"
-            >
-              Export
-            </a>
+            {item.url && (
+              <a
+                href={item.url}
+                download={`lorestream_asset_${index}.png`}
+                target="_blank" rel="noreferrer"
+                className="text-xs bg-white text-black px-3 py-1 rounded hover:bg-gray-200 font-bold"
+              >
+                Export
+              </a>
+            )}
           </div>
         </div>
       ))}
