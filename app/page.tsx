@@ -1,206 +1,319 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useCallback, useMemo } from 'react';
+import { useRouter } from 'next/navigation';
 import { httpsCallable } from 'firebase/functions';
-import { auth, functions } from '@/lib/firebase';
-import { DropZone } from '@/components/ui/DropZone';
-import { ActiveLoadingScreen } from '@/components/ui/ActiveLoadingScreen';
-import { UIOverlay } from '@/components/ui/UIOverlay';
+import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { auth, functions, db } from '@/lib/firebase';
 import { useGeminiLive } from '@/hooks/useGeminiLive';
-import dynamic from 'next/dynamic';
+import { ARCHITECT_CONFIG } from '@/lib/agents/architect';
+import { DropZone } from '@/components/ui/DropZone';
 import { LoginButton } from '@/components/ui/LoginButton';
-import { AgentLibrary } from '@/components/AgentLibrary';
+import { ModeSwitcher } from '@/components/ui/ModeSwitcher';
+import { VoiceOrb } from '@/components/ui/VoiceOrb';
+import dynamic from 'next/dynamic';
 
 const Scene = dynamic(() => import('@/components/3d/Scene'), { ssr: false });
 
-export default function LoreStreamApp() {
-  const [appState, setAppState] = useState<'INGESTION' | 'LOADING' | 'LIVE'>('INGESTION');
-  const [activeAgentId, setActiveAgentId] = useState<string | null>(null);
-  const [modelUrl, setModelUrl] = useState<string>('');
-  
-  const [showLibrary, setShowLibrary] = useState(false);
+type LandingState = 'LANDING' | 'INTERVIEW' | 'UPLOAD' | 'REDIRECT';
 
-  // 🧠 THE BRAIN: Properly scoped inside the component with 'transcripts' included
-  const { isConnected, vaultItems, isGeneratingVaultItem, startSession, stopSession, volumeRef, transcripts } = useGeminiLive(activeAgentId || '', auth.currentUser?.uid || '');
+interface CharacterLore {
+  archetype: string;
+  traits: string[];
+  backstory: string;
+  personality_summary: string;
+  key_facts: string[];
+}
 
-  const handleAwaken = async (data: any) => {
+export default function LandingPage() {
+  const router = useRouter();
+  const [pageState, setPageState] = useState<LandingState>('LANDING');
+  const [characterLore, setCharacterLore] = useState<CharacterLore | null>(null);
+  const [newAgentId, setNewAgentId] = useState<string | null>(null);
+
+  // Handle the save_new_agent_lore tool callback from Architect
+  const handleArchitectToolCallback = useCallback(async (toolName: string, args: any) => {
+    if (toolName === 'save_new_agent_lore') {
+      const lore: CharacterLore = {
+        archetype: args.archetype || 'Unknown Entity',
+        traits: args.traits || [],
+        backstory: args.backstory || '',
+        personality_summary: args.personality_summary || '',
+        key_facts: args.key_facts || []
+      };
+      setCharacterLore(lore);
+
+      // Pre-create agent doc in Firestore if user is logged in
+      const userId = auth.currentUser?.uid;
+      if (userId) {
+        const agentId = `agent_${Date.now()}`;
+        setNewAgentId(agentId);
+        try {
+          await setDoc(doc(db, `users/${userId}/agents/${agentId}`), {
+            archetype: lore.archetype,
+            traits: lore.traits,
+            funFact: lore.backstory,
+            extrusionStatus: 'pending',
+            createdAt: serverTimestamp()
+          });
+          await setDoc(doc(db, `users/${userId}/agents/${agentId}/lore/core_memory`), {
+            current_lore_summary: lore.personality_summary,
+            key_facts: lore.key_facts,
+            last_updated: serverTimestamp()
+          });
+        } catch (err) {
+          console.error("[ARCHITECT] Failed to save lore to Firestore:", err);
+        }
+      }
+
+      // Transition to upload after a brief delay (let the Architect finish speaking)
+      setTimeout(() => setPageState('UPLOAD'), 3000);
+    }
+  }, []);
+
+  // Architect config with callback wired in
+  const architectConfig = useMemo(() => ({
+    ...ARCHITECT_CONFIG,
+    onToolCallback: handleArchitectToolCallback
+  }), [handleArchitectToolCallback]);
+
+  const {
+    isConnected,
+    startSession,
+    stopSession,
+    volumeRef,
+    transcripts
+  } = useGeminiLive('architect_demo', auth.currentUser?.uid || 'anonymous', architectConfig);
+
+  const handleBeginInterview = async () => {
     if (!auth.currentUser) {
-      alert("You must be logged in to awaken an Agent.");
+      alert("Please log in first to begin your creation.");
       return;
     }
-    
-    const newAgentId = `agent_${Date.now()}`;
-    setActiveAgentId(newAgentId);
-    setAppState('LOADING');
+    setPageState('INTERVIEW');
+    // Small delay to let the state transition render before starting session
+    setTimeout(() => startSession(), 300);
+  };
 
+  const handleUploadComplete = async (data: any) => {
+    if (!auth.currentUser) return;
+
+    const agentId = newAgentId || `agent_${Date.now()}`;
+    if (!newAgentId) setNewAgentId(agentId);
+
+    // If lore wasn't saved yet (user skipped interview), create basic agent doc
+    if (!characterLore) {
+      try {
+        await setDoc(doc(db, `users/${auth.currentUser.uid}/agents/${agentId}`), {
+          archetype: 'Unknown Entity',
+          traits: [],
+          funFact: '',
+          extrusionStatus: 'pending',
+          createdAt: serverTimestamp()
+        });
+      } catch (err) {
+        console.error("[LANDING] Failed to create agent doc:", err);
+      }
+    }
+
+    // Trigger 3D generation
     try {
       const enqueue3DTask = httpsCallable(functions, 'enqueue3DTask');
       if (data.type === 'image') {
-        await enqueue3DTask({ imageBase64: data.base64, agentId: newAgentId });
+        await enqueue3DTask({ imageBase64: data.base64, agentId });
       } else if (data.type === 'nft') {
-        await enqueue3DTask({ contract: data.contract, tokenId: data.tokenId, agentId: newAgentId });
+        await enqueue3DTask({ contract: data.contract, tokenId: data.tokenId, agentId });
       }
     } catch (error) {
-      console.error("Failed to trigger the Forge:", error);
-      setAppState('INGESTION'); 
+      console.error("[LANDING] Failed to trigger 3D generation:", error);
+      return;
     }
+
+    // Clean up and redirect
+    setPageState('REDIRECT');
+    stopSession();
+    router.push(`/workspace?agentId=${agentId}`);
   };
 
-  // Grab the absolute newest item for the Active Workspace
-  const latestItem = vaultItems.length > 0 ? vaultItems[vaultItems.length - 1] : null;
-  // The rest of the items go to the Vault
-  const historicalItems = vaultItems.length > 1 ? vaultItems.slice(0, -1) : [];
+  // --- LANDING STATE ---
+  if (pageState === 'LANDING') {
+    return (
+      <main className="relative w-screen h-screen bg-black overflow-hidden flex flex-col items-center justify-center">
+        {/* Animated background */}
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(34,211,238,0.08)_0%,transparent_70%)] animate-pulse" />
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(34,197,94,0.05)_0%,transparent_50%)]" />
 
-  return (
-    <main className="relative w-screen h-screen bg-black overflow-hidden text-green-500 font-mono selection:bg-green-500 selection:text-black">
-      
-      <div className="absolute top-6 right-6 z-50 flex items-center gap-4">
-        {appState === 'INGESTION' && (
-           <button 
-             onClick={() => setShowLibrary(!showLibrary)}
-             className="px-4 py-2 bg-black text-cyan-400 border border-cyan-500/50 rounded hover:bg-cyan-500/10 transition-all text-sm"
-           >
-             {showLibrary ? "← SYS.RETURN_TO_FORGE" : "SYS.OPEN_VAULT"}
-           </button>
-        )}
-        <LoginButton />
-      </div>
+        {/* Top bar */}
+        <div className="absolute top-6 right-6 z-50 flex items-center gap-4">
+          <ModeSwitcher />
+          <LoginButton />
+        </div>
 
-      <div className={`absolute inset-0 z-10 flex ${appState === 'LIVE' ? 'pointer-events-none' : 'pointer-events-auto'}`}>
-        
-        {appState === 'INGESTION' && (
-           showLibrary ? (
-             <AgentLibrary 
-               userId={auth.currentUser?.uid || ''} 
-               onSelectAgent={(selectedAgentId, url) => {
-                 setActiveAgentId(selectedAgentId);
-                 setModelUrl(url);
-                 setAppState('LIVE'); 
-                 setShowLibrary(false);
-               }} 
-             />
-           ) : <DropZone onAwaken={handleAwaken} />
-        )}
+        {/* Hero */}
+        <div className="relative z-10 text-center max-w-2xl px-6">
+          <h1 className="text-6xl md:text-7xl font-bold text-white mb-2 tracking-tight">
+            Lore<span className="text-cyan-400">Stream</span>
+          </h1>
+          <p className="text-lg text-white/40 mb-12 font-light">
+            Breathe life into your characters
+          </p>
 
-        {appState === 'LOADING' && activeAgentId && (
-           <ActiveLoadingScreen 
-             userId={auth.currentUser?.uid || ''} 
-             agentId={activeAgentId} 
-             onComplete={(url) => {
-               setModelUrl(url); 
-               setAppState('LIVE');
-             }} 
-           />
-        )}
+          <button
+            onClick={handleBeginInterview}
+            className="group relative px-10 py-4 bg-cyan-500 hover:bg-cyan-400 text-black font-bold text-lg rounded-lg transition-all shadow-[0_0_30px_rgba(34,211,238,0.3)] hover:shadow-[0_0_50px_rgba(34,211,238,0.5)]"
+          >
+            Begin Your Creation
+            <span className="absolute inset-0 rounded-lg bg-cyan-400/20 animate-ping opacity-20 group-hover:opacity-0" />
+          </button>
 
-        {/* 🚀 THE NEW COMMAND CENTER GRID */}
-        {appState === 'LIVE' && activeAgentId && modelUrl && (
-          <div className="w-full h-full p-4 grid grid-cols-12 grid-rows-6 gap-4 pointer-events-auto">
-            
-            {/* 🦁 TOP LEFT: The Agent Feed (Col 1-3, Row 1-3) */}
-            <div className="col-span-3 row-span-3 col-start-1 row-start-1 border border-green-500/30 bg-black/50 rounded-md relative shadow-[0_0_15px_rgba(34,197,94,0.1)] overflow-hidden">
-              <div className="absolute top-2 left-2 text-xs opacity-50 flex items-center gap-2 z-20">
-                  <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-red-500 animate-pulse' : 'bg-gray-600'}`}></div>
-                  SYS.AVATAR_FEED // {isConnected ? 'LIVE' : 'STANDBY'}
-              </div>
-              <div className="absolute inset-0 z-0">
-                  <Scene modelUrl={modelUrl} volumeRef={volumeRef} />
-              </div>
-              <div className="pointer-events-none absolute inset-0 z-10 bg-[linear-gradient(transparent_50%,rgba(0,0,0,0.25)_50%)] bg-[length:100%_4px] opacity-20"></div>
-            </div>
-
-            {/* 🎨 BOTTOM LEFT: Active Workspace (Col 1-3, Row 4-6) */}
-            <div className="col-span-3 row-span-3 col-start-1 row-start-4 border border-green-500/30 bg-black/50 rounded-md p-4 flex flex-col relative shadow-[0_0_15px_rgba(34,197,94,0.1)] overflow-hidden">
-              <div className="text-xs opacity-50 mb-2 border-b border-green-500/30 pb-2 flex justify-between items-center">
-                  <span>ACTIVE_WORKSPACE // LATEST_RENDER</span>
-                  {isGeneratingVaultItem && <span className="text-cyan-400 animate-pulse">PROCESSING...</span>}
-              </div>
-              <div className="flex-1 flex items-center justify-center overflow-hidden">
-                  {isGeneratingVaultItem ? (
-                      <div className="text-cyan-400 animate-pulse border border-cyan-400/50 p-4 rounded text-center">
-                          [ COMPILING ARTIFACT... ]
-                      </div>
-                  ) : latestItem ? (
-                      <div className="flex flex-col items-center h-full w-full">
-                          <img src={latestItem.url} alt="Generated" className="object-contain max-h-[80%] rounded border border-green-500/50 shadow-lg" />
-                          <p className="text-xs text-green-400 mt-2 text-center overflow-hidden text-ellipsis whitespace-nowrap w-full">
-                            &gt; {latestItem.prompt}
-                          </p>
-                      </div>
-                  ) : (
-                      <p className="opacity-20 text-sm text-center">[ WAITING FOR AGENT GENERATION ]</p>
-                  )}
-              </div>
-            </div>
-
-            {/* 💬 CENTER: Terminal Stream (Col 4-8, Row 1-6) */}
-            <div className="col-span-5 row-span-6 col-start-4 row-start-1 border border-green-500/30 bg-black/50 rounded-md p-4 flex flex-col relative shadow-[0_0_15px_rgba(34,197,94,0.1)]">
-               <div className="text-xs opacity-50 mb-4 border-b border-green-500/30 pb-2 flex justify-between">
-                  <span>TERMINAL_STREAM // I-O_LOGS</span>
-                  <span>{transcripts?.length || 0} MESSAGES</span>
-              </div>
-              <div className="flex-1 overflow-y-auto font-mono text-sm space-y-3 flex flex-col-reverse">
-                  <div className="animate-pulse text-cyan-400 mt-2">_</div>
-                  {transcripts && [...transcripts].reverse().map((msg, idx) => (
-                      <div key={idx} className="border-l-2 border-green-500/30 pl-2">
-                          <span className="text-amber-400 font-bold">{msg.speaker}:</span> 
-                          <span className="text-green-400 ml-2">{msg.text}</span>
-                      </div>
-                  ))}
-                  <p className="opacity-50">Initializing secure connection to Generative Host...</p>
-                  <p className="opacity-50">Loading Vector Database constraints...</p>
-              </div>
-            </div>
-
-            {/* 🗂️ TOP RIGHT: The Archive Vault (Col 9-12, Row 1-4) */}
-            <div className="col-span-4 row-span-4 col-start-9 row-start-1 border border-green-500/30 bg-black/50 rounded-md p-4 flex flex-col relative shadow-[0_0_15px_rgba(34,197,94,0.1)]">
-              <div className="text-xs opacity-50 mb-4 border-b border-green-500/30 pb-2">
-                  ARCHIVE_VAULT // OVERFLOW
-              </div>
-              <div className="flex-1 overflow-y-auto relative">
-                  <UIOverlay vaultItems={historicalItems} />
-              </div>
-            </div>
-
-            {/* ⚙️ BOTTOM RIGHT: System Stats & Mini Controls (Col 9-12, Row 5-6) */}
-            <div className="col-span-4 row-span-2 col-start-9 row-start-5 border border-green-500/30 bg-black/50 rounded-md p-4 relative shadow-[0_0_15px_rgba(34,197,94,0.1)] flex flex-col justify-between">
-              <div className="text-xs opacity-50 mb-2 border-b border-green-500/30 pb-2 flex justify-between items-center">
-                  <span>SYS.DIAGNOSTICS</span>
-                  
-                  {/* 🔥 THE WAKE UP BUTTON */}
-                  <button 
-                    onClick={isConnected ? stopSession : startSession}
-                    className={`px-4 py-1 text-xs font-bold rounded border transition-all flex items-center gap-2 ${
-                        isConnected 
-                        ? 'bg-red-900/20 text-red-500 border-red-500/50 hover:bg-red-500/20' 
-                        : 'bg-green-500 text-black border-green-500 hover:bg-green-400 shadow-[0_0_15px_rgba(34,197,94,0.4)] animate-pulse'
-                    }`}
-                  >
-                    {!isConnected && <div className="w-2 h-2 rounded-full bg-black"></div>}
-                    {isConnected ? "GO TO SLEEP" : "WAKE UP AGENT"}
-                  </button>
-              </div>
-              
-              <div className="grid grid-cols-3 gap-4 text-xs h-full items-center">
-                  <div className="p-3 bg-green-900/10 border border-green-500/20 rounded">
-                      <p className="opacity-50 mb-1">VECTOR_DB</p>
-                      <p className="text-cyan-400">PINECONE // 768-DIM</p>
-                  </div>
-                  <div className="p-3 bg-green-900/10 border border-green-500/20 rounded">
-                      <p className="opacity-50 mb-1">WEBSOCKET_STATUS</p>
-                      <p className={isConnected ? "text-green-400 animate-pulse" : "text-red-400"}>
-                          {isConnected ? "CONNECTED" : "DISCONNECTED"}
-                      </p>
-                  </div>
-                  <div className="p-3 bg-green-900/10 border border-green-500/20 rounded">
-                      <p className="opacity-50 mb-1">TOOL_NODE</p>
-                      <p className="text-green-400">NANO-BANANA // ACTIVE</p>
-                  </div>
-              </div>
-            </div>
-
+          <div className="mt-8 flex flex-col items-center gap-3">
+            <button
+              onClick={() => router.push('/workspace')}
+              className="text-sm text-white/30 hover:text-white/60 transition-colors"
+            >
+              Skip to Workspace &rarr;
+            </button>
           </div>
-        )}
+        </div>
+
+        {/* Bottom decorative line */}
+        <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-cyan-500/30 to-transparent" />
+      </main>
+    );
+  }
+
+  // --- INTERVIEW STATE ---
+  if (pageState === 'INTERVIEW') {
+    return (
+      <main className="relative w-screen h-screen bg-black overflow-hidden flex flex-col">
+        {/* Top bar */}
+        <div className="absolute top-6 right-6 z-50 flex items-center gap-4">
+          <button
+            onClick={() => { stopSession(); setPageState('LANDING'); }}
+            className="px-4 py-2 text-sm text-white/40 hover:text-white/70 transition-colors"
+          >
+            &larr; Back
+          </button>
+          <LoginButton />
+        </div>
+
+        {/* Main content: Avatar + Transcript */}
+        <div className="flex-1 flex flex-col md:flex-row items-stretch p-6 pt-20 gap-6">
+          {/* 3D Avatar Panel */}
+          <div className="flex-1 relative rounded-xl overflow-hidden border border-cyan-500/20 bg-black/50 min-h-[300px]">
+            <div className="absolute top-3 left-3 text-xs text-cyan-400/50 z-10 flex items-center gap-2">
+              <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-cyan-400 animate-pulse' : 'bg-gray-600'}`} />
+              THE ARCHITECT {isConnected ? '// LISTENING' : '// STANDBY'}
+            </div>
+            <div className="absolute inset-0">
+              <Scene modelUrl="/architect.glb" volumeRef={volumeRef} />
+            </div>
+            {/* Scanline overlay */}
+            <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(transparent_50%,rgba(0,0,0,0.15)_50%)] bg-[length:100%_4px] opacity-20" />
+          </div>
+
+          {/* Transcript + Controls */}
+          <div className="w-full md:w-96 flex flex-col gap-4">
+            {/* Voice Orb (shows when no 3D model visible on mobile) */}
+            <div className="md:hidden">
+              <VoiceOrb volumeRef={volumeRef} isActive={isConnected} />
+            </div>
+
+            {/* Transcript */}
+            <div className="flex-1 overflow-y-auto border border-white/10 rounded-lg bg-black/30 p-4 space-y-3 min-h-[200px]">
+              {transcripts.length === 0 && (
+                <p className="text-white/20 text-sm italic">Waiting for The Architect to speak...</p>
+              )}
+              {transcripts.map((msg, idx) => (
+                <div key={idx} className={`text-sm ${msg.speaker === 'USER' ? 'text-cyan-300' : msg.speaker === 'SYSTEM' ? 'text-amber-400/60' : 'text-white/80'}`}>
+                  <span className="font-bold text-white/40 mr-2">{msg.speaker === 'USER' ? 'You' : msg.speaker === 'SYSTEM' ? 'SYS' : 'Architect'}:</span>
+                  {msg.text}
+                </div>
+              ))}
+            </div>
+
+            {/* Action buttons */}
+            <div className="flex gap-3">
+              {!isConnected ? (
+                <button
+                  onClick={startSession}
+                  className="flex-1 px-6 py-3 bg-cyan-500 hover:bg-cyan-400 text-black font-bold rounded-lg transition-all"
+                >
+                  Start Conversation
+                </button>
+              ) : (
+                <button
+                  onClick={() => { setPageState('UPLOAD'); }}
+                  className="flex-1 px-6 py-3 bg-white/10 hover:bg-white/20 text-white font-medium rounded-lg transition-all border border-white/20"
+                >
+                  Ready to Upload Image &rarr;
+                </button>
+              )}
+            </div>
+
+            {characterLore && (
+              <div className="text-xs text-cyan-400/60 text-center animate-pulse">
+                Character lore captured! Ready to move on.
+              </div>
+            )}
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  // --- UPLOAD STATE ---
+  if (pageState === 'UPLOAD') {
+    return (
+      <main className="relative w-screen h-screen bg-black overflow-hidden flex flex-col items-center justify-center">
+        <div className="absolute top-6 left-6 z-50">
+          <button
+            onClick={() => setPageState('INTERVIEW')}
+            className="px-4 py-2 text-sm text-white/40 hover:text-white/70 transition-colors"
+          >
+            &larr; Back to Interview
+          </button>
+        </div>
+        <div className="absolute top-6 right-6 z-50">
+          <LoginButton />
+        </div>
+
+        <div className="relative z-10 w-full max-w-2xl px-6">
+          {/* Character summary card */}
+          {characterLore && (
+            <div className="mb-8 p-6 border border-cyan-500/30 rounded-xl bg-black/50">
+              <h3 className="text-sm text-cyan-400/60 uppercase tracking-widest mb-2">Character Captured</h3>
+              <p className="text-2xl text-white font-bold mb-3">{characterLore.archetype}</p>
+              <div className="flex flex-wrap gap-2 mb-3">
+                {characterLore.traits.map((trait, i) => (
+                  <span key={i} className="px-3 py-1 bg-cyan-500/10 border border-cyan-500/20 rounded-full text-xs text-cyan-300">
+                    {trait}
+                  </span>
+                ))}
+              </div>
+              <p className="text-sm text-white/50 italic">&quot;{characterLore.backstory}&quot;</p>
+            </div>
+          )}
+
+          <h2 className="text-3xl font-bold text-white text-center mb-2">
+            Now show me what they look like
+          </h2>
+          <p className="text-white/40 text-center mb-8">
+            Upload an image of your character to bring them into 3D
+          </p>
+
+          <DropZone onAwaken={handleUploadComplete} />
+        </div>
+      </main>
+    );
+  }
+
+  // --- REDIRECT STATE ---
+  return (
+    <main className="w-screen h-screen bg-black flex items-center justify-center">
+      <div className="text-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-cyan-400 mx-auto mb-4" />
+        <p className="text-white/40 text-sm">Entering the workspace...</p>
       </div>
     </main>
   );

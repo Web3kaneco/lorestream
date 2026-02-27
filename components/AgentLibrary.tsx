@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { collection, query, where, getDocs } from 'firebase/firestore';
-import { db } from '../lib/firebase'; // Make sure this path points to your firebase config
+import { db } from '../lib/firebase';
 
 interface AgentLibraryProps {
   userId: string;
@@ -12,34 +12,50 @@ interface AgentLibraryProps {
 export function AgentLibrary({ userId, onSelectAgent }: AgentLibraryProps) {
   const [agents, setAgents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchLibrary = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const agentsRef = collection(db, `users/${userId}/agents`);
+      const q = query(agentsRef, where('extrusionStatus', '==', 'complete'));
+      const querySnapshot = await getDocs(q);
+
+      const loadedAgents = querySnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+
+      setAgents(loadedAgents);
+    } catch (err) {
+      console.error("Error fetching library:", err);
+      setError("Failed to load agents. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  }, [userId]);
 
   useEffect(() => {
     if (!userId) return;
-
-    const fetchLibrary = async () => {
-      try {
-        // Only fetch agents that successfully generated a 3D model
-        const agentsRef = collection(db, `users/${userId}/agents`);
-        const q = query(agentsRef, where('extrusionStatus', '==', 'complete'));
-        const querySnapshot = await getDocs(q);
-        
-        const loadedAgents = querySnapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        }));
-        
-        setAgents(loadedAgents);
-      } catch (error) {
-        console.error("Error fetching library:", error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
     fetchLibrary();
-  }, [userId]);
+  }, [userId, fetchLibrary]);
 
   if (loading) return <div className="text-white text-center mt-10">Loading your Vault...</div>;
+
+  if (error) {
+    return (
+      <div className="text-center mt-10">
+        <p className="text-red-400 mb-4">{error}</p>
+        <button
+          onClick={fetchLibrary}
+          className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white text-sm font-medium transition-colors"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
 
   if (agents.length === 0) return <div className="text-gray-400 text-center mt-10">Vault is empty. Forge a new soul.</div>;
 
@@ -53,7 +69,6 @@ export function AgentLibrary({ userId, onSelectAgent }: AgentLibraryProps) {
             onClick={() => onSelectAgent(agent.id, agent.model3dUrl)}
             className="flex flex-col items-center p-4 bg-gray-900 border border-gray-700 hover:border-cyan-500 rounded-lg transition-all"
           >
-            {/* Since we don't have the 2D image saved yet, we'll use the Archetype as the label */}
             <span className="text-cyan-400 font-bold mb-2">
               {agent.archetype || "Unknown Entity"}
             </span>

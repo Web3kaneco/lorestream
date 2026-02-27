@@ -1,5 +1,6 @@
 import './globals.css';
 import { ReactNode } from 'react';
+import { ThemeProvider } from '@/lib/theme';
 
 export const metadata = {
   title: 'LoreStream Engine',
@@ -8,8 +9,10 @@ export const metadata = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en">
-      <body>{children}</body>
+    <html lang="en" data-theme="creator">
+      <body>
+        <ThemeProvider>{children}</ThemeProvider>
+      </body>
     </html>
   );
 }
