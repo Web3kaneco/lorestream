@@ -215,7 +215,7 @@ function WorkspacePage() {
                   </div>
                   <div className="p-3 bg-green-900/10 border border-green-500/20 rounded">
                       <p className="opacity-50 mb-1">TOOL_NODE</p>
-                      <p className="text-green-400">NANO-BANANA // ACTIVE</p>
+                      <p className="text-green-400">IMAGEN-4 ULTRA // ACTIVE</p>
                   </div>
               </div>
             </div>
