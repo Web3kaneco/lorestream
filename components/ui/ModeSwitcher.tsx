@@ -10,24 +10,24 @@ export function ModeSwitcher() {
   return (
     <div className="flex items-center gap-1 p-1 rounded-full bg-white/10 backdrop-blur-sm border border-white/20">
       <button
-        onClick={() => { setMode('creator'); router.push('/'); }}
+        onClick={() => { setMode('prime'); router.push('/'); }}
         className={`px-4 py-1.5 rounded-full text-xs font-medium transition-all ${
-          mode === 'creator'
-            ? 'bg-cyan-500 text-black shadow-lg'
+          mode === 'prime'
+            ? 'bg-[#d4af37] text-black shadow-lg'
             : 'text-white/60 hover:text-white'
         }`}
       >
-        Creator
+        Prime
       </button>
       <button
-        onClick={() => { setMode('tutor'); router.push('/tutor'); }}
+        onClick={() => { setMode('spark'); router.push('/spark'); }}
         className={`px-4 py-1.5 rounded-full text-xs font-medium transition-all ${
-          mode === 'tutor'
+          mode === 'spark'
             ? 'bg-amber-500 text-black shadow-lg'
             : 'text-white/60 hover:text-white'
         }`}
       >
-        Tutor
+        Spark
       </button>
     </div>
   );

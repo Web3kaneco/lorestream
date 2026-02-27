@@ -1,8 +1,9 @@
 'use client';
 
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import type { LXXIMode } from '@/types/lxxi';
 
-type ThemeMode = 'creator' | 'tutor';
+type ThemeMode = LXXIMode;
 
 interface ThemeContextValue {
   mode: ThemeMode;
@@ -10,7 +11,7 @@ interface ThemeContextValue {
 }
 
 const ThemeContext = createContext<ThemeContextValue>({
-  mode: 'creator',
+  mode: 'prime',
   setMode: () => {},
 });
 
@@ -19,21 +20,21 @@ export function useTheme() {
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [mode, setModeState] = useState<ThemeMode>('creator');
+  const [mode, setModeState] = useState<ThemeMode>('prime');
 
   useEffect(() => {
-    const stored = localStorage.getItem('lorestream-theme') as ThemeMode | null;
-    if (stored === 'creator' || stored === 'tutor') {
+    const stored = localStorage.getItem('lxxi-theme') as ThemeMode | null;
+    if (stored === 'prime' || stored === 'spark') {
       setModeState(stored);
       document.documentElement.setAttribute('data-theme', stored);
     } else {
-      document.documentElement.setAttribute('data-theme', 'creator');
+      document.documentElement.setAttribute('data-theme', 'prime');
     }
   }, []);
 
   const setMode = (newMode: ThemeMode) => {
     setModeState(newMode);
-    localStorage.setItem('lorestream-theme', newMode);
+    localStorage.setItem('lxxi-theme', newMode);
     document.documentElement.setAttribute('data-theme', newMode);
   };
 

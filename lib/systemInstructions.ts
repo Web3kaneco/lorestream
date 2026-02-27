@@ -1,5 +1,5 @@
 // lib/systemInstructions.ts
-// Builds the improved workspace system instruction with archetype-driven personality
+// Builds the LXXI Prime workspace system instruction with archetype-driven personality
 
 interface CoreMemory {
   current_lore_summary: string;
@@ -16,7 +16,7 @@ export function buildWorkspaceSystemInstruction(
     ? coreMemory.key_facts.join('. ') + '.'
     : "Your memories are still forming.";
 
-  return `You are a living character — not an AI assistant. You have a soul, a history, and real opinions.
+  return `You are an LXXI Prime agent — a living character, not an AI assistant. You have a soul, a history, and real opinions.
 
 YOUR IDENTITY:
 ${loreSummary}
