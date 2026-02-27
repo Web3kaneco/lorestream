@@ -138,10 +138,11 @@ export default function LandingPage() {
   // --- LANDING STATE ---
   if (pageState === 'LANDING') {
     return (
-      <main className="relative w-screen h-screen bg-black overflow-hidden flex flex-col items-center justify-center">
-        {/* Animated background */}
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(34,211,238,0.08)_0%,transparent_70%)] animate-pulse" />
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(34,197,94,0.05)_0%,transparent_50%)]" />
+      <main className="relative w-screen h-screen overflow-hidden flex flex-col items-center justify-center"
+            style={{ backgroundColor: '#050505' }}>
+        {/* Animated background — gold radials */}
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(212,175,55,0.06)_0%,transparent_70%)] animate-pulse" />
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(212,175,55,0.03)_0%,transparent_50%)]" />
 
         {/* Top bar */}
         <div className="absolute top-6 right-6 z-50 flex items-center gap-4">
@@ -149,27 +150,45 @@ export default function LandingPage() {
           <LoginButton />
         </div>
 
+        {/* Manifesto link */}
+        <div className="absolute top-6 left-6 z-50">
+          <button
+            onClick={() => router.push('/manifesto')}
+            className="text-xs tracking-[0.2em] uppercase text-white/20 hover:text-[#d4af37]/60 transition-colors"
+          >
+            Manifesto
+          </button>
+        </div>
+
         {/* Hero */}
         <div className="relative z-10 text-center max-w-2xl px-6">
-          <h1 className="text-6xl md:text-7xl font-bold text-white mb-2 tracking-tight">
-            Lore<span className="text-cyan-400">Stream</span>
+          <h1 className="text-7xl md:text-8xl font-bold text-white mb-1 tracking-tight"
+              style={{ fontFamily: 'var(--font-heading)' }}>
+            LXXI
           </h1>
-          <p className="text-lg text-white/40 mb-12 font-light">
-            Breathe life into your characters
+          <p className="text-xs tracking-[0.3em] uppercase text-white/30 mb-2">
+            Seventy-One
+          </p>
+          <p className="text-base text-white/40 mb-14 font-light italic">
+            Voice is for Vibe &middot; Screen is for Substance
           </p>
 
           <button
             onClick={handleBeginInterview}
-            className="group relative px-10 py-4 bg-cyan-500 hover:bg-cyan-400 text-black font-bold text-lg rounded-lg transition-all shadow-[0_0_30px_rgba(34,211,238,0.3)] hover:shadow-[0_0_50px_rgba(34,211,238,0.5)]"
+            className="group relative px-10 py-4 text-black font-bold text-lg rounded-lg transition-all"
+            style={{
+              backgroundColor: '#d4af37',
+              boxShadow: '0 0 30px rgba(212,175,55,0.3)'
+            }}
           >
-            Begin Your Creation
-            <span className="absolute inset-0 rounded-lg bg-cyan-400/20 animate-ping opacity-20 group-hover:opacity-0" />
+            Enter the Forge
+            <span className="absolute inset-0 rounded-lg bg-[#d4af37]/20 animate-ping opacity-20 group-hover:opacity-0" />
           </button>
 
           <div className="mt-8 flex flex-col items-center gap-3">
             <button
               onClick={() => router.push('/workspace')}
-              className="text-sm text-white/30 hover:text-white/60 transition-colors"
+              className="text-sm text-white/25 hover:text-[#d4af37]/60 transition-colors"
             >
               Skip to Workspace &rarr;
             </button>
@@ -177,7 +196,7 @@ export default function LandingPage() {
         </div>
 
         {/* Bottom decorative line */}
-        <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-cyan-500/30 to-transparent" />
+        <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[#d4af37]/20 to-transparent" />
       </main>
     );
   }
@@ -185,7 +204,8 @@ export default function LandingPage() {
   // --- INTERVIEW STATE ---
   if (pageState === 'INTERVIEW') {
     return (
-      <main className="relative w-screen h-screen bg-black overflow-hidden flex flex-col">
+      <main className="relative w-screen h-screen overflow-hidden flex flex-col"
+            style={{ backgroundColor: '#050505' }}>
         {/* Top bar */}
         <div className="absolute top-6 right-6 z-50 flex items-center gap-4">
           <button
@@ -200,9 +220,9 @@ export default function LandingPage() {
         {/* Main content: Avatar + Transcript */}
         <div className="flex-1 flex flex-col md:flex-row items-stretch p-6 pt-20 gap-6">
           {/* 3D Avatar Panel */}
-          <div className="flex-1 relative rounded-xl overflow-hidden border border-cyan-500/20 bg-black/50 min-h-[300px]">
-            <div className="absolute top-3 left-3 text-xs text-cyan-400/50 z-10 flex items-center gap-2">
-              <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-cyan-400 animate-pulse' : 'bg-gray-600'}`} />
+          <div className="flex-1 relative rounded-xl overflow-hidden border border-[#d4af37]/20 bg-black/50 min-h-[300px]">
+            <div className="absolute top-3 left-3 text-xs text-[#d4af37]/50 z-10 flex items-center gap-2">
+              <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-[#d4af37] animate-pulse' : 'bg-gray-600'}`} />
               THE ARCHITECT {isConnected ? '// LISTENING' : '// STANDBY'}
             </div>
             <div className="absolute inset-0">
@@ -225,7 +245,7 @@ export default function LandingPage() {
                 <p className="text-white/20 text-sm italic">Waiting for The Architect to speak...</p>
               )}
               {transcripts.map((msg, idx) => (
-                <div key={idx} className={`text-sm ${msg.speaker === 'USER' ? 'text-cyan-300' : msg.speaker === 'SYSTEM' ? 'text-amber-400/60' : 'text-white/80'}`}>
+                <div key={idx} className={`text-sm ${msg.speaker === 'USER' ? 'text-[#d4af37]' : msg.speaker === 'SYSTEM' ? 'text-amber-400/60' : 'text-white/80'}`}>
                   <span className="font-bold text-white/40 mr-2">{msg.speaker === 'USER' ? 'You' : msg.speaker === 'SYSTEM' ? 'SYS' : 'Architect'}:</span>
                   {msg.text}
                 </div>
@@ -237,7 +257,8 @@ export default function LandingPage() {
               {!isConnected ? (
                 <button
                   onClick={startSession}
-                  className="flex-1 px-6 py-3 bg-cyan-500 hover:bg-cyan-400 text-black font-bold rounded-lg transition-all"
+                  className="flex-1 px-6 py-3 text-black font-bold rounded-lg transition-all"
+                  style={{ backgroundColor: '#d4af37' }}
                 >
                   Start Conversation
                 </button>
@@ -252,7 +273,7 @@ export default function LandingPage() {
             </div>
 
             {characterLore && (
-              <div className="text-xs text-cyan-400/60 text-center animate-pulse">
+              <div className="text-xs text-[#d4af37]/60 text-center animate-pulse">
                 Character lore captured! Ready to move on.
               </div>
             )}
@@ -265,7 +286,8 @@ export default function LandingPage() {
   // --- UPLOAD STATE ---
   if (pageState === 'UPLOAD') {
     return (
-      <main className="relative w-screen h-screen bg-black overflow-hidden flex flex-col items-center justify-center">
+      <main className="relative w-screen h-screen overflow-hidden flex flex-col items-center justify-center"
+            style={{ backgroundColor: '#050505' }}>
         <div className="absolute top-6 left-6 z-50">
           <button
             onClick={() => setPageState('INTERVIEW')}
@@ -281,12 +303,12 @@ export default function LandingPage() {
         <div className="relative z-10 w-full max-w-2xl px-6">
           {/* Character summary card */}
           {characterLore && (
-            <div className="mb-8 p-6 border border-cyan-500/30 rounded-xl bg-black/50">
-              <h3 className="text-sm text-cyan-400/60 uppercase tracking-widest mb-2">Character Captured</h3>
+            <div className="mb-8 p-6 border border-[#d4af37]/30 rounded-xl bg-black/50">
+              <h3 className="text-sm text-[#d4af37]/60 uppercase tracking-widest mb-2">Character Captured</h3>
               <p className="text-2xl text-white font-bold mb-3">{characterLore.archetype}</p>
               <div className="flex flex-wrap gap-2 mb-3">
                 {characterLore.traits.map((trait, i) => (
-                  <span key={i} className="px-3 py-1 bg-cyan-500/10 border border-cyan-500/20 rounded-full text-xs text-cyan-300">
+                  <span key={i} className="px-3 py-1 bg-[#d4af37]/10 border border-[#d4af37]/20 rounded-full text-xs text-[#d4af37]">
                     {trait}
                   </span>
                 ))}
@@ -310,9 +332,10 @@ export default function LandingPage() {
 
   // --- REDIRECT STATE ---
   return (
-    <main className="w-screen h-screen bg-black flex items-center justify-center">
+    <main className="w-screen h-screen flex items-center justify-center"
+          style={{ backgroundColor: '#050505' }}>
       <div className="text-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-cyan-400 mx-auto mb-4" />
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#d4af37] mx-auto mb-4" />
         <p className="text-white/40 text-sm">Entering the workspace...</p>
       </div>
     </main>

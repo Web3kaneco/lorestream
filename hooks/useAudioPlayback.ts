@@ -28,11 +28,26 @@ export function useAudioPlayback() {
 
       const currentTime = audioContext.currentTime;
       if (nextPlayTimeRef.current < currentTime) {
-        nextPlayTimeRef.current = currentTime + 0.05;
+        // Fell behind — catch up with a small gap to avoid clicks
+        nextPlayTimeRef.current = currentTime + 0.02;
       }
 
-      source.start(nextPlayTimeRef.current);
-      nextPlayTimeRef.current += audioBuffer.duration;
+      try {
+        source.start(nextPlayTimeRef.current);
+        nextPlayTimeRef.current += audioBuffer.duration;
+      } catch (err) {
+        // Scheduling failed (e.g. time in past, context closed) — reset and retry once
+        console.warn("[AUDIO] Failed to schedule chunk, resetting timeline:", err);
+        nextPlayTimeRef.current = audioContext.currentTime + 0.02;
+        try {
+          source.start(nextPlayTimeRef.current);
+          nextPlayTimeRef.current += audioBuffer.duration;
+        } catch (e) {
+          // Give up on this chunk
+          console.error("[AUDIO] Retry also failed:", e);
+          return;
+        }
+      }
 
       currentAudioNodesRef.current.push(source);
       source.onended = () => {

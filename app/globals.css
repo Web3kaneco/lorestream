@@ -2,24 +2,27 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Theme: Creator (cyberpunk dark) */
-[data-theme="creator"] {
-  --bg-primary: #000000;
+/* Theme: Prime (Neo-Classical Cyberpunk) */
+[data-theme="prime"] {
+  --bg-primary: #050505;
   --bg-secondary: #0a0a0a;
-  --bg-panel: rgba(0, 0, 0, 0.5);
-  --text-primary: #22c55e;
-  --text-secondary: #4ade80;
-  --text-muted: rgba(255, 255, 255, 0.5);
-  --accent: #22d3ee;
-  --accent-hover: #06b6d4;
-  --border: rgba(34, 197, 94, 0.3);
-  --border-accent: rgba(34, 211, 238, 0.5);
-  --panel-shadow: rgba(34, 197, 94, 0.1);
+  --bg-panel: rgba(10, 10, 10, 0.8);
+  --text-primary: #e2e8f0;
+  --text-secondary: #cbd5e1;
+  --text-muted: #8a8a8a;
+  --accent: #d4af37;
+  --accent-hover: #c9a030;
+  --accent-glow: rgba(212, 175, 55, 0.3);
+  --border: #1a1a1a;
+  --border-accent: rgba(212, 175, 55, 0.4);
+  --panel-shadow: rgba(212, 175, 55, 0.08);
+  --terminal-green: #00ff00;
   --font-primary: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+  --font-heading: 'Playfair Display', Georgia, 'Times New Roman', serif;
 }
 
-/* Theme: Tutor (warm, kid-friendly) */
-[data-theme="tutor"] {
+/* Theme: Spark (warm, kid-friendly) */
+[data-theme="spark"] {
   --bg-primary: #FFF8F0;
   --bg-secondary: #FEF3E2;
   --bg-panel: #FFFFFF;
@@ -28,14 +31,17 @@
   --text-muted: #94A3B8;
   --accent: #F59E0B;
   --accent-hover: #D97706;
+  --accent-glow: rgba(245, 158, 11, 0.3);
   --border: #E2E8F0;
   --border-accent: rgba(245, 158, 11, 0.5);
   --panel-shadow: rgba(0, 0, 0, 0.05);
+  --terminal-green: #22c55e;
   --font-primary: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-heading: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
 }
 
 body {
-  background-color: var(--bg-primary, #000000);
-  color: var(--text-primary, #ffffff);
+  background-color: var(--bg-primary, #050505);
+  color: var(--text-primary, #e2e8f0);
   overflow: hidden;
 }

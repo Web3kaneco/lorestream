@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 
 interface ToolHandlerDeps {
-  wsRef: React.MutableRefObject<WebSocket | null>;
+  safeSend: (payload: any) => boolean;
   userId: string;
   agentId: string;
   saveToMemory: (text: string, speaker: 'user' | 'agent') => void;
@@ -12,7 +12,7 @@ interface ToolHandlerDeps {
 }
 
 export function useToolHandlers({
-  wsRef, userId, agentId, saveToMemory,
+  safeSend, userId, agentId, saveToMemory,
   setVaultItems, setIsGeneratingVaultItem, setTranscripts,
   onToolCallback
 }: ToolHandlerDeps) {
@@ -30,17 +30,15 @@ export function useToolHandlers({
       });
 
       // Send tool response IMMEDIATELY so the model can keep talking
-      if (wsRef.current) {
-        wsRef.current.send(JSON.stringify({
-          toolResponse: {
-            functionResponses: [{
-              id: functionCall.id,
-              name: "create_vault_artifact",
-              response: { result: "Success", action: "Image generation started. It will appear in the vault shortly." }
-            }]
-          }
-        }));
-      }
+      safeSend({
+        toolResponse: {
+          functionResponses: [{
+            id: functionCall.id,
+            name: "create_vault_artifact",
+            response: { result: "Success", action: "Image generation started. It will appear in the vault shortly." }
+          }]
+        }
+      });
 
       // Fire-and-forget: generate image in background while agent keeps talking
       fetch('/api/generate-image', {
@@ -84,30 +82,26 @@ export function useToolHandlers({
           ? result.memories.join('\n- ')
           : "No relevant memories found in the database for this query.";
 
-        if (wsRef.current) {
-          wsRef.current.send(JSON.stringify({
-            toolResponse: {
-              functionResponses: [{
-                id: functionCall.id,
-                name: "search_memory",
-                response: {
-                  result: "Success",
-                  action: "Retrieved relevant memories.",
-                  memories_found: retrievedMemories
-                }
-              }]
-            }
-          }));
-        }
+        safeSend({
+          toolResponse: {
+            functionResponses: [{
+              id: functionCall.id,
+              name: "search_memory",
+              response: {
+                result: "Success",
+                action: "Retrieved relevant memories.",
+                memories_found: retrievedMemories
+              }
+            }]
+          }
+        });
       } catch (err) {
         console.error("Memory Search Failed:", err);
-        if (wsRef.current) {
-          wsRef.current.send(JSON.stringify({
-            toolResponse: {
-              functionResponses: [{ id: functionCall.id, name: "search_memory", response: { error: "Failed to access Pinecone memory vault." } }]
-            }
-          }));
-        }
+        safeSend({
+          toolResponse: {
+            functionResponses: [{ id: functionCall.id, name: "search_memory", response: { error: "Failed to access Pinecone memory vault." } }]
+          }
+        });
       }
     }
 
@@ -126,22 +120,20 @@ export function useToolHandlers({
       }
 
       // Send success response back to Gemini
-      if (wsRef.current) {
-        wsRef.current.send(JSON.stringify({
-          toolResponse: {
-            functionResponses: [{
-              id: functionCall.id,
-              name: "save_new_agent_lore",
-              response: {
-                result: "Success",
-                action: "Character lore has been saved. Tell the user their character's essence has been captured and ask them to upload an image of their character."
-              }
-            }]
-          }
-        }));
-      }
+      safeSend({
+        toolResponse: {
+          functionResponses: [{
+            id: functionCall.id,
+            name: "save_new_agent_lore",
+            response: {
+              result: "Success",
+              action: "Character lore has been saved. Tell the user their character's essence has been captured and ask them to upload an image of their character."
+            }
+          }]
+        }
+      });
     }
-  }, [wsRef, userId, agentId, saveToMemory, setVaultItems, setIsGeneratingVaultItem, setTranscripts, onToolCallback]);
+  }, [safeSend, userId, agentId, saveToMemory, setVaultItems, setIsGeneratingVaultItem, setTranscripts, onToolCallback]);
 
   return { handleToolCall };
 }
