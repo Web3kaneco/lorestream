@@ -214,10 +214,16 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
           const data = JSON.parse(msgText);
 
           // Debug: log tool-related messages
+          if (data.toolCall) {
+            console.log("[WS MSG] toolCall:", JSON.stringify(data.toolCall));
+          }
+          if (data.toolCallCancellation) {
+            console.log("[WS MSG] toolCallCancellation:", JSON.stringify(data.toolCallCancellation));
+          }
           if (data.serverContent?.modelTurn?.parts) {
             const toolParts = data.serverContent.modelTurn.parts.filter((p: any) => p.functionCall);
             if (toolParts.length > 0) {
-              console.log("[WS DEBUG] Function calls received:", JSON.stringify(toolParts));
+              console.log("[WS DEBUG] Function calls in modelTurn:", JSON.stringify(toolParts));
             }
           }
 
@@ -226,6 +232,19 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
             socketReadyRef.current = true;
             if (enableVision) startVision();
             return;
+          }
+
+          // Handle tool calls — Live API sends these as a SEPARATE message type
+          if (data.toolCall?.functionCalls) {
+            for (const fc of data.toolCall.functionCalls) {
+              console.log("[TOOL CALL RECEIVED via toolCall]", fc.name, "id:", fc.id);
+              handleToolCall(fc);
+            }
+          }
+
+          // Handle tool call cancellation
+          if (data.toolCallCancellation) {
+            setIsGeneratingVaultItem(false);
           }
 
           if (data.serverContent?.interrupted) {
