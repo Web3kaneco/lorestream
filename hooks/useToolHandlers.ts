@@ -25,51 +25,41 @@ export function useToolHandlers({
 
       setIsGeneratingVaultItem(true);
       setTranscripts(prev => {
-        const updated = [...prev, { speaker: 'SYSTEM', text: `Executing Nano-Banana Tool: Generating "${prompt}"` }];
+        const updated = [...prev, { speaker: 'SYSTEM', text: `Generating image: "${prompt}"` }];
         return updated.length > 500 ? updated.slice(-500) : updated;
       });
 
-      try {
-        const res = await fetch('/api/generate-image', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt })
-        });
-
-        const result = await res.json();
-
-        if (result.imageUrl) {
-          setVaultItems(prev => {
-            const updated = [...prev, { prompt, url: result.imageUrl, rationale }];
-            return updated.length > 100 ? updated.slice(-100) : updated;
-          });
-          const memoryEntry = `I created an image for the user. Rationale: ${rationale}. Visual Prompt used: ${prompt}.`;
-          saveToMemory(memoryEntry, 'agent');
-        }
-
-        if (wsRef.current) {
-          wsRef.current.send(JSON.stringify({
-            toolResponse: {
-              functionResponses: [{
-                id: functionCall.id,
-                name: "create_vault_artifact",
-                response: { result: "Success", action: "Image generated and saved to vault." }
-              }]
-            }
-          }));
-        }
-      } catch (err) {
-        console.error("Tool Execution Failed:", err);
-        if (wsRef.current) {
-          wsRef.current.send(JSON.stringify({
-            toolResponse: {
-              functionResponses: [{ id: functionCall.id, name: "create_vault_artifact", response: { error: "Failed to generate image." } }]
-            }
-          }));
-        }
-      } finally {
-        setIsGeneratingVaultItem(false);
+      // Send tool response IMMEDIATELY so the model can keep talking
+      if (wsRef.current) {
+        wsRef.current.send(JSON.stringify({
+          toolResponse: {
+            functionResponses: [{
+              id: functionCall.id,
+              name: "create_vault_artifact",
+              response: { result: "Success", action: "Image generation started. It will appear in the vault shortly." }
+            }]
+          }
+        }));
       }
+
+      // Fire-and-forget: generate image in background while agent keeps talking
+      fetch('/api/generate-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt })
+      })
+        .then(res => res.json())
+        .then(result => {
+          if (result.imageUrl) {
+            setVaultItems(prev => {
+              const updated = [...prev, { prompt, url: result.imageUrl, rationale }];
+              return updated.length > 100 ? updated.slice(-100) : updated;
+            });
+            saveToMemory(`I created an image. Rationale: ${rationale}. Prompt: ${prompt}.`, 'agent');
+          }
+        })
+        .catch(err => console.error("Image generation failed:", err))
+        .finally(() => setIsGeneratingVaultItem(false));
     }
 
     // --- Memory search tool ---
