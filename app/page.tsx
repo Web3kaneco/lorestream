@@ -11,6 +11,7 @@ import { DropZone } from '@/components/ui/DropZone';
 import { LoginButton } from '@/components/ui/LoginButton';
 import { ModeSwitcher } from '@/components/ui/ModeSwitcher';
 import { VoiceOrb } from '@/components/ui/VoiceOrb';
+import { AgentLibrary } from '@/components/AgentLibrary';
 import dynamic from 'next/dynamic';
 
 const Scene = dynamic(() => import('@/components/3d/Scene'), { ssr: false });
@@ -30,6 +31,7 @@ export default function LandingPage() {
   const [pageState, setPageState] = useState<LandingState>('LANDING');
   const [characterLore, setCharacterLore] = useState<CharacterLore | null>(null);
   const [newAgentId, setNewAgentId] = useState<string | null>(null);
+  const [showVault, setShowVault] = useState(false);
 
   // Handle the save_new_agent_lore tool callback from Architect
   const handleArchitectToolCallback = useCallback(async (toolName: string, args: any) => {
@@ -160,40 +162,66 @@ export default function LandingPage() {
           </button>
         </div>
 
-        {/* Hero */}
-        <div className="relative z-10 text-center max-w-2xl px-6">
-          <h1 className="text-7xl md:text-8xl font-bold text-white mb-1 tracking-tight"
-              style={{ fontFamily: 'var(--font-heading)' }}>
-            LXXI
-          </h1>
-          <p className="text-xs tracking-[0.3em] uppercase text-white/30 mb-2">
-            Seventy-One
-          </p>
-          <p className="text-base text-white/40 mb-14 font-light italic">
-            Voice is for Vibe &middot; Screen is for Substance
-          </p>
-
-          <button
-            onClick={handleBeginInterview}
-            className="group relative px-10 py-4 text-black font-bold text-lg rounded-lg transition-all"
-            style={{
-              backgroundColor: '#d4af37',
-              boxShadow: '0 0 30px rgba(212,175,55,0.3)'
-            }}
-          >
-            Enter the Forge
-            <span className="absolute inset-0 rounded-lg bg-[#d4af37]/20 animate-ping opacity-20 group-hover:opacity-0" />
-          </button>
-
-          <div className="mt-8 flex flex-col items-center gap-3">
+        {showVault ? (
+          /* Vault overlay — browse past characters */
+          <div className="relative z-10 w-full max-w-4xl px-6">
             <button
-              onClick={() => router.push('/workspace')}
-              className="text-sm text-white/25 hover:text-[#d4af37]/60 transition-colors"
+              onClick={() => setShowVault(false)}
+              className="text-sm text-white/40 hover:text-white/70 transition-colors mb-4"
             >
-              Skip to Workspace &rarr;
+              &larr; Back
             </button>
+            <AgentLibrary
+              userId={auth.currentUser?.uid || ''}
+              onSelectAgent={(agentId) => {
+                router.push(`/workspace?agentId=${agentId}`);
+              }}
+            />
           </div>
-        </div>
+        ) : (
+          /* Hero */
+          <div className="relative z-10 text-center max-w-2xl px-6">
+            <h1 className="text-7xl md:text-8xl font-bold text-white mb-1 tracking-tight"
+                style={{ fontFamily: 'var(--font-heading)' }}>
+              LXXI
+            </h1>
+            <p className="text-xs tracking-[0.3em] uppercase text-white/30 mb-2">
+              Seventy-One
+            </p>
+            <p className="text-base text-white/40 mb-14 font-light italic">
+              Voice is for Vibe &middot; Screen is for Substance
+            </p>
+
+            <button
+              onClick={handleBeginInterview}
+              className="group relative px-10 py-4 text-black font-bold text-lg rounded-lg transition-all"
+              style={{
+                backgroundColor: '#d4af37',
+                boxShadow: '0 0 30px rgba(212,175,55,0.3)'
+              }}
+            >
+              Enter the Forge
+              <span className="absolute inset-0 rounded-lg bg-[#d4af37]/20 animate-ping opacity-20 group-hover:opacity-0" />
+            </button>
+
+            <div className="mt-8 flex flex-col items-center gap-3">
+              <button
+                onClick={() => router.push('/workspace')}
+                className="text-sm text-white/25 hover:text-[#d4af37]/60 transition-colors"
+              >
+                Skip to Workspace &rarr;
+              </button>
+              {auth.currentUser && (
+                <button
+                  onClick={() => setShowVault(true)}
+                  className="text-sm text-white/25 hover:text-[#d4af37]/60 transition-colors"
+                >
+                  Open the Vault &rarr;
+                </button>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Bottom decorative line */}
         <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[#d4af37]/20 to-transparent" />
