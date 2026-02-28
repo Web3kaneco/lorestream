@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 
-export function DropZone({ onAwaken }: { onAwaken: (data: any) => void }) {
+export function DropZone({ onAwaken, userId }: { onAwaken: (data: any) => void; userId?: string }) {
   const [activeTab, setActiveTab] = useState<'upload' | 'web3'>('upload');
   const [tokenId, setTokenId] = useState('');
   const [contract, setContract] = useState('');
@@ -15,6 +15,15 @@ export function DropZone({ onAwaken }: { onAwaken: (data: any) => void }) {
     reader.readAsDataURL(file);
     reader.onload = () => {
       onAwaken({ type: 'image', base64: reader.result });
+
+      // Also upload to Firebase Storage for vault persistence (fire-and-forget)
+      if (userId) {
+        import('@/lib/storageUtils').then(({ uploadFileToStorage }) => {
+          uploadFileToStorage(userId, file).catch((err) =>
+            console.warn('[DROPZONE] Storage upload failed:', err)
+          );
+        });
+      }
     };
   };
 

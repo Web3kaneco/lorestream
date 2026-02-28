@@ -18,14 +18,14 @@ export function useToolHandlers({
 }: ToolHandlerDeps) {
 
   const handleToolCall = useCallback(async (functionCall: { name: string; args: any; id?: string }) => {
-    // --- Image generation tool ---
+    // --- Image generation tool (with optional reference images) ---
     if (functionCall.name === "create_vault_artifact") {
-      const { prompt, rationale } = functionCall.args;
-      console.log(`[AGENT TOOL TRIGGERED] Creating: ${prompt}`);
+      const { prompt, rationale, referenceImageUrls } = functionCall.args;
+      console.log(`[AGENT TOOL TRIGGERED] Creating: ${prompt}${referenceImageUrls?.length ? ` (with ${referenceImageUrls.length} references)` : ''}`);
 
       setIsGeneratingVaultItem(true);
       setTranscripts(prev => {
-        const updated = [...prev, { speaker: 'SYSTEM', text: `Generating image: "${prompt}"` }];
+        const updated = [...prev, { speaker: 'SYSTEM', text: `Generating image: "${prompt}"${referenceImageUrls?.length ? ` (using ${referenceImageUrls.length} reference images)` : ''}` }];
         return updated.length > 500 ? updated.slice(-500) : updated;
       });
 
@@ -44,20 +44,109 @@ export function useToolHandlers({
       fetch('/api/generate-image', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt })
+        body: JSON.stringify({ prompt, referenceImageUrls })
       })
         .then(res => res.json())
-        .then(result => {
+        .then(async (result) => {
           if (result.imageUrl) {
+            let finalUrl = result.imageUrl;
+
+            // Upload to Firebase Storage for persistence
+            try {
+              const { uploadBase64Image } = await import('@/lib/storageUtils');
+              const storageUrl = await uploadBase64Image(userId, result.imageUrl);
+              finalUrl = storageUrl;
+            } catch (e) {
+              console.warn("[VAULT] Storage upload failed, using base64 URL:", e);
+            }
+
             setVaultItems(prev => {
-              const updated = [...prev, { prompt, url: result.imageUrl, rationale }];
+              const updated = [...prev, { type: 'image' as const, prompt, url: finalUrl, rationale, createdAt: Date.now() }];
               return updated.length > 100 ? updated.slice(-100) : updated;
             });
+
+            // Persist to Firestore vault
+            try {
+              const { saveVaultItem } = await import('@/lib/vaultUtils');
+              await saveVaultItem(userId, agentId, { type: 'image', url: finalUrl, prompt, rationale, createdAt: Date.now() });
+            } catch (e) {
+              console.warn("[VAULT] Firestore save failed:", e);
+            }
+
             saveToMemory(`I created an image. Rationale: ${rationale}. Prompt: ${prompt}.`, 'agent');
           }
         })
         .catch(err => console.error("Image generation failed:", err))
         .finally(() => setIsGeneratingVaultItem(false));
+    }
+
+    // --- Document artifact tool ---
+    if (functionCall.name === "createDocumentArtifact") {
+      const { title, content, language, description } = functionCall.args;
+      console.log(`[AGENT TOOL] Creating document: "${title}" (${language})`);
+
+      setTranscripts(prev => {
+        const updated = [...prev, { speaker: 'SYSTEM', text: `Creating document: "${title}"` }];
+        return updated.length > 500 ? updated.slice(-500) : updated;
+      });
+
+      // Immediate response so model keeps talking
+      safeSend({
+        toolResponse: {
+          functionResponses: [{
+            id: functionCall.id,
+            name: "createDocumentArtifact",
+            response: { result: "Success", action: "Document created and added to the vault." }
+          }]
+        }
+      });
+
+      // Add to vault state
+      const docItem = {
+        type: 'document' as const,
+        title: title || 'Untitled',
+        content: content || '',
+        language: language || 'text',
+        description: description || '',
+        createdAt: Date.now()
+      };
+
+      setVaultItems(prev => {
+        const updated = [...prev, docItem];
+        return updated.length > 100 ? updated.slice(-100) : updated;
+      });
+
+      // Persist to Firestore vault
+      try {
+        const { saveVaultItem } = await import('@/lib/vaultUtils');
+        await saveVaultItem(userId, agentId, docItem);
+      } catch (e) {
+        console.warn("[VAULT] Firestore save for document failed:", e);
+      }
+
+      saveToMemory(`I created a document titled "${title}" (${language}). ${description || ''}`, 'agent');
+    }
+
+    // --- Chalkboard math tool (Spark mode) ---
+    if (functionCall.name === "displayChalkboard") {
+      const { problem, hint, difficulty } = functionCall.args;
+      console.log(`[TUTOR TOOL] Chalkboard: "${problem}" (${difficulty})`);
+
+      // Immediate response
+      safeSend({
+        toolResponse: {
+          functionResponses: [{
+            id: functionCall.id,
+            name: "displayChalkboard",
+            response: { result: "Success", action: "Math problem displayed on the chalkboard." }
+          }]
+        }
+      });
+
+      // Delegate to parent page via callback (Spark page renders ChalkboardCard)
+      if (onToolCallback) {
+        onToolCallback('displayChalkboard', { problem, hint, difficulty });
+      }
     }
 
     // --- Memory search tool ---

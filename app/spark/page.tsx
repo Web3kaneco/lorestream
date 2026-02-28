@@ -1,11 +1,12 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useGeminiLive } from '@/hooks/useGeminiLive';
 import { TUTOR_CONFIG } from '@/lib/agents/tutor';
 import { useTheme } from '@/lib/theme';
 import { VoiceOrb } from '@/components/ui/VoiceOrb';
+import { ChalkboardCard } from '@/components/ui/ChalkboardCard';
 import dynamic from 'next/dynamic';
 
 const Scene = dynamic(() => import('@/components/3d/Scene'), { ssr: false });
@@ -24,11 +25,24 @@ export default function SparkPage() {
   const { setMode } = useTheme();
   const [subject, setSubject] = useState<Subject>('general');
   const [hasStarted, setHasStarted] = useState(false);
+  const [chalkboardItems, setChalkboardItems] = useState<{ problem: string; hint: string; difficulty: 'easy' | 'medium' | 'hard' }[]>([]);
 
   // Set spark theme on mount
   useEffect(() => {
     setMode('spark');
   }, [setMode]);
+
+  // Wrap TUTOR_CONFIG with chalkboard callback
+  const handleSparkToolCallback = useCallback((toolName: string, args: any) => {
+    if (toolName === 'displayChalkboard') {
+      setChalkboardItems(prev => [...prev, args]);
+    }
+  }, []);
+
+  const sparkConfig = useMemo(() => ({
+    ...TUTOR_CONFIG,
+    onToolCallback: handleSparkToolCallback
+  }), [handleSparkToolCallback]);
 
   const {
     isConnected,
@@ -36,7 +50,7 @@ export default function SparkPage() {
     stopSession,
     volumeRef,
     transcripts
-  } = useGeminiLive('tutor_demo', 'anonymous', TUTOR_CONFIG);
+  } = useGeminiLive('tutor_demo', 'anonymous', sparkConfig);
 
   const handleStart = () => {
     setHasStarted(true);
@@ -180,10 +194,17 @@ export default function SparkPage() {
 
         {/* Right: Whiteboard / Content Area */}
         <div className="md:w-3/5 flex flex-col">
+          {/* Chalkboard display — latest math problem */}
+          {chalkboardItems.length > 0 && (
+            <div className="px-6 pt-4">
+              <ChalkboardCard {...chalkboardItems[chalkboardItems.length - 1]} />
+            </div>
+          )}
+
           {/* Whiteboard panel */}
           <div className="flex-1 overflow-y-auto p-6">
             <div className="max-w-lg mx-auto space-y-4">
-              {transcripts.length === 0 && (
+              {transcripts.length === 0 && chalkboardItems.length === 0 && (
                 <div className="text-center py-12">
                   <div className="text-4xl mb-4">📚</div>
                   <p className="text-lg font-medium" style={{ color: 'var(--text-primary)' }}>
