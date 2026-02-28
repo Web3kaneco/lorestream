@@ -27,7 +27,7 @@ export interface GeminiLiveConfig {
 
 export function useGeminiLive(agentId: string, userId: string, config?: GeminiLiveConfig) {
   const [isConnected, setIsConnected] = useState(false);
-  const [vaultItems, setVaultItems] = useState<any[]>([]);
+  const [vaultItems, setVaultItems] = useState<any[]>([]); // VaultItem[] at runtime
   const [isGeneratingVaultItem, setIsGeneratingVaultItem] = useState(false);
   const [transcripts, setTranscripts] = useState<{speaker: string, text: string}[]>([]);
 
@@ -140,12 +140,13 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
         functionDeclarations: [
           {
             name: "create_vault_artifact",
-            description: "The ONLY way to create images. You MUST call this tool whenever the user requests ANY visual content — drawings, paintings, scenes, portraits, landscapes, or any image. Call this tool INSTEAD of describing what you would create. Never narrate — just call.",
+            description: "The ONLY way to create images. You MUST call this tool whenever the user requests ANY visual content — drawings, paintings, scenes, portraits, landscapes, or any image. Call this tool INSTEAD of describing what you would create. Never narrate — just call. If the user wants to incorporate elements from previously generated images, include referenceImageUrls.",
             parameters: {
               type: "OBJECT",
               properties: {
                 prompt: { type: "STRING", description: "A highly detailed visual description of the image to generate. Be specific about composition, colors, style, lighting, and mood." },
-                rationale: { type: "STRING", description: "A short sentence explaining your visual choices." }
+                rationale: { type: "STRING", description: "A short sentence explaining your visual choices." },
+                referenceImageUrls: { type: "ARRAY", items: { type: "STRING" }, description: "Optional array of URLs of previously generated vault images to use as style or content references for the new image. Use when the user wants to incorporate elements from previous creations. Maximum 3." }
               },
               required: ["prompt", "rationale"]
             }
@@ -159,6 +160,20 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
                 query: { type: "STRING", description: "The specific topic or question to search the database for." }
               },
               required: ["query"]
+            }
+          },
+          {
+            name: "createDocumentArtifact",
+            description: "Create a document artifact — code, text, essays, recipes, study notes, etc. — that is saved to the vault. Use this for ANY non-image content the user requests. Call this INSTEAD of reading code aloud or describing text. The document will be rendered with syntax highlighting and copy/download buttons.",
+            parameters: {
+              type: "OBJECT",
+              properties: {
+                title: { type: "STRING", description: "A concise title for the document." },
+                content: { type: "STRING", description: "The full content of the document. For code, include the complete functional code. For text, include the full text." },
+                language: { type: "STRING", description: "The content language or format: 'javascript', 'python', 'typescript', 'html', 'css', 'markdown', 'text', etc." },
+                description: { type: "STRING", description: "A brief description of what this document contains and why it was created." }
+              },
+              required: ["title", "content", "language"]
             }
           }
         ]
@@ -270,6 +285,23 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
             socketReadyRef.current = true;
             reconnectAttemptsRef.current = 0; // Reset on successful connection
             if (enableVision) startVision();
+
+            // Load persisted vault items from Firestore (non-blocking)
+            if (userId && agentId && agentId !== 'tutor_demo' && agentId !== 'architect_demo') {
+              import('@/lib/vaultUtils').then(({ loadVaultItems }) => {
+                loadVaultItems(userId, agentId).then((saved) => {
+                  if (saved.length > 0) {
+                    setVaultItems(prev => {
+                      // Deduplicate by checking existing IDs
+                      const existingIds = new Set(prev.filter((i: any) => i.id).map((i: any) => i.id));
+                      const newItems = saved.filter((i) => !i.id || !existingIds.has(i.id));
+                      return [...newItems, ...prev];
+                    });
+                    console.log(`[VAULT] Loaded ${saved.length} persisted items from Firestore`);
+                  }
+                }).catch((e) => console.warn("[VAULT] Could not load saved items:", e));
+              });
+            }
             return;
           }
 
