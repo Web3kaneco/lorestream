@@ -1,12 +1,13 @@
 'use client';
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useGeminiLive } from '@/hooks/useGeminiLive';
 import { TUTOR_CONFIG } from '@/lib/agents/tutor';
 import { useTheme } from '@/lib/theme';
 import { VoiceOrb } from '@/components/ui/VoiceOrb';
 import { ChalkboardCard } from '@/components/ui/ChalkboardCard';
+import type { AnimationState } from '@/components/3d/Avatar';
 import dynamic from 'next/dynamic';
 
 const Scene = dynamic(() => import('@/components/3d/Scene'), { ssr: false });
@@ -26,6 +27,8 @@ export default function SparkPage() {
   const [subject, setSubject] = useState<Subject>('general');
   const [hasStarted, setHasStarted] = useState(false);
   const [chalkboardItems, setChalkboardItems] = useState<{ problem: string; hint: string; difficulty: 'easy' | 'medium' | 'hard' }[]>([]);
+  const [animationState, setAnimationState] = useState<AnimationState>('idle');
+  const animTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Set spark theme on mount
   useEffect(() => {
@@ -51,6 +54,25 @@ export default function SparkPage() {
     volumeRef,
     transcripts
   } = useGeminiLive('tutor_demo', 'anonymous', sparkConfig);
+
+  // Poll volumeRef at 4Hz to derive animationState
+  useEffect(() => {
+    if (animTimerRef.current) clearInterval(animTimerRef.current);
+
+    if (!isConnected) {
+      setAnimationState('idle');
+      return;
+    }
+
+    animTimerRef.current = setInterval(() => {
+      const vol = volumeRef.current?.volume || 0;
+      setAnimationState(vol > 0.05 ? 'speaking' : 'idle');
+    }, 250);
+
+    return () => {
+      if (animTimerRef.current) clearInterval(animTimerRef.current);
+    };
+  }, [isConnected, volumeRef]);
 
   const handleStart = () => {
     setHasStarted(true);
@@ -184,7 +206,7 @@ export default function SparkPage() {
         {/* Left: 3D Avatar */}
         <div className="md:w-2/5 relative min-h-[250px] md:min-h-0 border-b md:border-b-0 md:border-r" style={{ borderColor: 'var(--border)' }}>
           <div className="absolute inset-0">
-            <Scene modelUrl="/tutor.glb" volumeRef={volumeRef} />
+            <Scene modelUrl="/WOW.glb" volumeRef={volumeRef} animationState={animationState} />
           </div>
           {/* Mobile voice orb fallback */}
           <div className="md:hidden absolute bottom-4 left-1/2 -translate-x-1/2">

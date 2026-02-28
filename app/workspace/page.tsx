@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, Suspense } from 'react';
+import { useState, useEffect, useRef, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { httpsCallable } from 'firebase/functions';
 import { auth, functions } from '@/lib/firebase';
@@ -8,6 +8,7 @@ import { DropZone } from '@/components/ui/DropZone';
 import { ActiveLoadingScreen } from '@/components/ui/ActiveLoadingScreen';
 import { UIOverlay } from '@/components/ui/UIOverlay';
 import { useGeminiLive } from '@/hooks/useGeminiLive';
+import type { AnimationState } from '@/components/3d/Avatar';
 import dynamic from 'next/dynamic';
 import { LoginButton } from '@/components/ui/LoginButton';
 import { AgentLibrary } from '@/components/AgentLibrary';
@@ -47,6 +48,32 @@ function WorkspacePage() {
   }, [paramAgentId, activeAgentId]);
 
   const { isConnected, vaultItems, isGeneratingVaultItem, startSession, stopSession, volumeRef, transcripts } = useGeminiLive(activeAgentId || '', auth.currentUser?.uid || '');
+
+  // Derive animationState from connection + volume + generation state
+  const [animationState, setAnimationState] = useState<AnimationState>('idle');
+  const animTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    if (animTimerRef.current) clearInterval(animTimerRef.current);
+
+    if (!isConnected) {
+      setAnimationState('idle');
+      return;
+    }
+
+    animTimerRef.current = setInterval(() => {
+      if (isGeneratingVaultItem) {
+        setAnimationState('thinking');
+      } else {
+        const vol = volumeRef.current?.volume || 0;
+        setAnimationState(vol > 0.05 ? 'speaking' : 'idle');
+      }
+    }, 250);
+
+    return () => {
+      if (animTimerRef.current) clearInterval(animTimerRef.current);
+    };
+  }, [isConnected, isGeneratingVaultItem, volumeRef]);
 
   const handleAwaken = async (data: any) => {
     if (!auth.currentUser) {
@@ -126,7 +153,7 @@ function WorkspacePage() {
                   LXXI.AVATAR_FEED // {isConnected ? 'LIVE' : 'STANDBY'}
               </div>
               <div className="absolute inset-0 z-0">
-                  <Scene modelUrl={modelUrl} volumeRef={volumeRef} />
+                  <Scene modelUrl={modelUrl} volumeRef={volumeRef} animationState={animationState} />
               </div>
               <div className="pointer-events-none absolute inset-0 z-10 bg-[linear-gradient(transparent_50%,rgba(0,0,0,0.25)_50%)] bg-[length:100%_4px] opacity-20"></div>
             </div>

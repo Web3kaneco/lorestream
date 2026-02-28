@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { httpsCallable } from 'firebase/functions';
 import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
@@ -12,11 +12,17 @@ import { LoginButton } from '@/components/ui/LoginButton';
 import { ModeSwitcher } from '@/components/ui/ModeSwitcher';
 import { VoiceOrb } from '@/components/ui/VoiceOrb';
 import { AgentLibrary } from '@/components/AgentLibrary';
+import type { AnimationState } from '@/components/3d/Avatar';
 import dynamic from 'next/dynamic';
 
 const Scene = dynamic(() => import('@/components/3d/Scene'), { ssr: false });
 
 type LandingState = 'LANDING' | 'INTERVIEW' | 'UPLOAD' | 'REDIRECT';
+
+const DEMO_MODELS = [
+  { url: '/kanecov1.glb', label: 'KANE' },
+  { url: '/WOW.glb', label: 'WOW' },
+] as const;
 
 interface CharacterLore {
   archetype: string;
@@ -32,6 +38,11 @@ export default function LandingPage() {
   const [characterLore, setCharacterLore] = useState<CharacterLore | null>(null);
   const [newAgentId, setNewAgentId] = useState<string | null>(null);
   const [showVault, setShowVault] = useState(false);
+  const [demoModelIdx, setDemoModelIdx] = useState(0);
+
+  // Derive animationState from connection + volume
+  const [animationState, setAnimationState] = useState<AnimationState>('idle');
+  const animTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Handle the save_new_agent_lore tool callback from Architect
   const handleArchitectToolCallback = useCallback(async (toolName: string, args: any) => {
@@ -86,6 +97,25 @@ export default function LandingPage() {
     volumeRef,
     transcripts
   } = useGeminiLive('architect_demo', auth.currentUser?.uid || 'anonymous', architectConfig);
+
+  // Poll volumeRef at 4Hz to derive animationState (ref can't trigger re-renders)
+  useEffect(() => {
+    if (animTimerRef.current) clearInterval(animTimerRef.current);
+
+    if (!isConnected) {
+      setAnimationState('idle');
+      return;
+    }
+
+    animTimerRef.current = setInterval(() => {
+      const vol = volumeRef.current?.volume || 0;
+      setAnimationState(vol > 0.05 ? 'speaking' : 'idle');
+    }, 250);
+
+    return () => {
+      if (animTimerRef.current) clearInterval(animTimerRef.current);
+    };
+  }, [isConnected, volumeRef]);
 
   const handleBeginInterview = async () => {
     if (!auth.currentUser) {
@@ -253,8 +283,24 @@ export default function LandingPage() {
               <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-[#d4af37] animate-pulse' : 'bg-gray-600'}`} />
               THE ARCHITECT {isConnected ? '// LISTENING' : '// STANDBY'}
             </div>
+            {/* Demo model toggle */}
+            <div className="absolute top-3 right-3 z-10 flex gap-1">
+              {DEMO_MODELS.map((m, i) => (
+                <button
+                  key={m.label}
+                  onClick={() => setDemoModelIdx(i)}
+                  className={`px-3 py-1 text-[10px] font-bold tracking-widest rounded transition-all ${
+                    demoModelIdx === i
+                      ? 'bg-[#d4af37] text-black'
+                      : 'bg-white/5 text-white/30 hover:text-white/60'
+                  }`}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
             <div className="absolute inset-0">
-              <Scene modelUrl="/architect.glb" volumeRef={volumeRef} />
+              <Scene modelUrl={DEMO_MODELS[demoModelIdx].url} volumeRef={volumeRef} animationState={animationState} />
             </div>
             {/* Scanline overlay */}
             <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(transparent_50%,rgba(0,0,0,0.15)_50%)] bg-[length:100%_4px] opacity-20" />
