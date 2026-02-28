@@ -13,9 +13,16 @@ import { ModeSwitcher } from '@/components/ui/ModeSwitcher';
 import { VoiceOrb } from '@/components/ui/VoiceOrb';
 import { AgentLibrary } from '@/components/AgentLibrary';
 import type { AnimationState } from '@/components/3d/Avatar';
+import { useGLTF } from '@react-three/drei';
 import dynamic from 'next/dynamic';
 
 const Scene = dynamic(() => import('@/components/3d/Scene'), { ssr: false });
+
+// Preload demo GLBs at module load time — download starts as soon as
+// the landing page JS executes, before user clicks "Enter the Forge".
+// On Firebase Hosting CDN, subsequent visits serve from edge cache.
+useGLTF.preload('/kanecov1.glb');
+useGLTF.preload('/WOW.glb');
 
 type LandingState = 'LANDING' | 'INTERVIEW' | 'UPLOAD' | 'REDIRECT';
 

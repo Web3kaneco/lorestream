@@ -8,9 +8,13 @@ import { useTheme } from '@/lib/theme';
 import { VoiceOrb } from '@/components/ui/VoiceOrb';
 import { ChalkboardCard } from '@/components/ui/ChalkboardCard';
 import type { AnimationState } from '@/components/3d/Avatar';
+import { useGLTF } from '@react-three/drei';
 import dynamic from 'next/dynamic';
 
 const Scene = dynamic(() => import('@/components/3d/Scene'), { ssr: false });
+
+// Preload tutor model at module load time — instant display when session starts
+useGLTF.preload('/WOW.glb');
 
 type Subject = 'general' | 'math' | 'spanish' | 'science';
 

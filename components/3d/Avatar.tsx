@@ -643,3 +643,6 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     </group>
   );
 }
+
+// Preload the shared reference animation at module load time
+useGLTF.preload('/idlebreathing.glb');
