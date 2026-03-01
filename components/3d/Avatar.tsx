@@ -97,9 +97,15 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
   const rootBoneRef = useRef<THREE.Bone | null>(null);
   const jawBoneRef = useRef<THREE.Bone | null>(null);
 
-  // Full mouth rig: lip bone refs
-  const lipsLBoneRef = useRef<THREE.Bone | null>(null);
-  const lipsRBoneRef = useRef<THREE.Bone | null>(null);
+  // Full mouth rig: lip bone refs (from Blender add_mouth_rig.py)
+  const lipTopRef = useRef<THREE.Bone | null>(null);
+  const lipBottomRef = useRef<THREE.Bone | null>(null);
+  const lipTopLRef = useRef<THREE.Bone | null>(null);
+  const lipTopRRef = useRef<THREE.Bone | null>(null);
+  const lipBottomLRef = useRef<THREE.Bone | null>(null);
+  const lipBottomRRef = useRef<THREE.Bone | null>(null);
+  const lipsLRef = useRef<THREE.Bone | null>(null);
+  const lipsRRef = useRef<THREE.Bone | null>(null);
   const hasFullMouthRigRef = useRef(false);
 
   // Raw reference quaternions extracted from idlebreathing.glb (shoulders + arms + forearms)
@@ -159,7 +165,8 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
 
   // =========================================================
   // EFFECT 1: Scan the model's skeleton for bones
-  // Now detects lips.L / lips.R for full mouth rig
+  // Detects both Tripo and Mixamo naming conventions, plus
+  // exact-match mouth bones from Blender add_mouth_rig.py
   // =========================================================
   useEffect(() => {
     headBoneRef.current = null;
@@ -167,8 +174,14 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     spineBoneRef.current = null;
     rootBoneRef.current = null;
     jawBoneRef.current = null;
-    lipsLBoneRef.current = null;
-    lipsRBoneRef.current = null;
+    lipTopRef.current = null;
+    lipBottomRef.current = null;
+    lipTopLRef.current = null;
+    lipTopRRef.current = null;
+    lipBottomLRef.current = null;
+    lipBottomRRef.current = null;
+    lipsLRef.current = null;
+    lipsRRef.current = null;
     hasFullMouthRigRef.current = false;
     headBaseRotRef.current = null;
     neckBaseRotRef.current = null;
@@ -176,6 +189,18 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     lipsRBaseRotRef.current = null;
 
     console.log('--- Skeleton Bone Scan ---');
+
+    // Exact-name lookup for Blender mouth rig bones (from add_mouth_rig.py)
+    const mouthBoneMap: Record<string, React.MutableRefObject<THREE.Bone | null>> = {
+      'lip.T': lipTopRef,
+      'lip.B': lipBottomRef,
+      'lip.T.L': lipTopLRef,
+      'lip.T.R': lipTopRRef,
+      'lip.B.L': lipBottomLRef,
+      'lip.B.R': lipBottomRRef,
+      'lips.L': lipsLRef,
+      'lips.R': lipsRRef,
+    };
 
     scene.traverse((child) => {
       if ((child as THREE.Bone).isBone) {
@@ -185,48 +210,57 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
         if (name.includes('head') && !name.includes('headtop') && !name.includes('head_end')) {
           if (!headBoneRef.current) headBoneRef.current = child as THREE.Bone;
         }
-        if (name.includes('neck')) {
+        if (name.includes('neck') && !name.includes('necklace')) {
           if (!neckBoneRef.current) neckBoneRef.current = child as THREE.Bone;
         }
-        if (name.includes('jaw') || name.includes('chin') || name.includes('mandible')) {
+        if (name === 'jaw' || name.includes('jaw') || name.includes('chin') || name.includes('mandible')) {
           if (!jawBoneRef.current) {
             jawBoneRef.current = child as THREE.Bone;
             console.log('  -> Native jaw bone found:', child.name);
           }
         }
-        // Lip bone detection: lips.l, lips_l, lip.l, etc.
+        // Fuzzy lip bone detection (for models not rigged by our scripts)
         if ((name.includes('lips') || name.includes('lip')) && !name.includes('headtop')) {
           if (name.includes('.l') || name.includes('_l') || name.includes('left')) {
-            if (!lipsLBoneRef.current) {
-              lipsLBoneRef.current = child as THREE.Bone;
-              console.log('  -> Lips.L bone found:', child.name);
+            if (!lipsLRef.current) {
+              lipsLRef.current = child as THREE.Bone;
+              console.log('  -> Lips.L bone found (fuzzy):', child.name);
             }
           }
           if (name.includes('.r') || name.includes('_r') || name.includes('right')) {
-            if (!lipsRBoneRef.current) {
-              lipsRBoneRef.current = child as THREE.Bone;
-              console.log('  -> Lips.R bone found:', child.name);
+            if (!lipsRRef.current) {
+              lipsRRef.current = child as THREE.Bone;
+              console.log('  -> Lips.R bone found (fuzzy):', child.name);
             }
           }
         }
-        if (name.includes('spine') || name.includes('chest')) {
+        if (name.includes('spine') || name.includes('chest') || name === 'waist') {
           if (!spineBoneRef.current) spineBoneRef.current = child as THREE.Bone;
         }
-        if (name.includes('hips') || name.includes('pelvis') || name.includes('hip') || name.includes('waist')) {
+        if (name.includes('hips') || name.includes('pelvis') || name === 'hip' || name === 'root') {
           if (!rootBoneRef.current) rootBoneRef.current = child as THREE.Bone;
+        }
+
+        // Exact match for Blender mouth rig bones (overrides fuzzy matches)
+        const mouthRef = mouthBoneMap[child.name];
+        if (mouthRef) {
+          mouthRef.current = child as THREE.Bone;
+          console.log('  -> Mouth bone found (exact):', child.name);
         }
       }
     });
 
-    // Determine if we have a full mouth rig (jaw + both lip bones)
-    hasFullMouthRigRef.current = !!(jawBoneRef.current && lipsLBoneRef.current && lipsRBoneRef.current);
+    // Determine if we have a full mouth rig (jaw + both lip corners at minimum)
+    hasFullMouthRigRef.current = !!(jawBoneRef.current && lipsLRef.current && lipsRRef.current);
 
     console.log('--- Bone Mapping Result ---');
     console.log('  Head:', headBoneRef.current?.name ?? 'MISSING');
     console.log('  Neck:', neckBoneRef.current?.name ?? 'MISSING');
     console.log('  Jaw:', jawBoneRef.current?.name ?? 'MISSING');
-    console.log('  Lips.L:', lipsLBoneRef.current?.name ?? 'MISSING');
-    console.log('  Lips.R:', lipsRBoneRef.current?.name ?? 'MISSING');
+    console.log('  Lips.L:', lipsLRef.current?.name ?? 'MISSING');
+    console.log('  Lips.R:', lipsRRef.current?.name ?? 'MISSING');
+    console.log('  lip.T:', lipTopRef.current?.name ?? '-');
+    console.log('  lip.B:', lipBottomRef.current?.name ?? '-');
     console.log('  Spine:', spineBoneRef.current?.name ?? 'MISSING');
     console.log('  Root:', rootBoneRef.current?.name ?? 'MISSING');
     console.log('  Full Mouth Rig:', hasFullMouthRigRef.current ? 'YES — native lip animation' : 'NO — will use synthetic mouth');
@@ -558,43 +592,81 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     // --- Full mouth rig: frequency-driven lip bone animation ---
     if (hasFullMouthRigRef.current) {
       // Capture lip bone base rotations on first frame
-      if (lipsLBoneRef.current && lipsLBaseRotRef.current === null) {
+      if (lipsLRef.current && lipsLBaseRotRef.current === null) {
         lipsLBaseRotRef.current = {
-          x: lipsLBoneRef.current.rotation.x,
-          y: lipsLBoneRef.current.rotation.y,
-          z: lipsLBoneRef.current.rotation.z,
+          x: lipsLRef.current.rotation.x,
+          y: lipsLRef.current.rotation.y,
+          z: lipsLRef.current.rotation.z,
         };
       }
-      if (lipsRBoneRef.current && lipsRBaseRotRef.current === null) {
+      if (lipsRRef.current && lipsRBaseRotRef.current === null) {
         lipsRBaseRotRef.current = {
-          x: lipsRBoneRef.current.rotation.x,
-          y: lipsRBoneRef.current.rotation.y,
-          z: lipsRBoneRef.current.rotation.z,
+          x: lipsRRef.current.rotation.x,
+          y: lipsRRef.current.rotation.y,
+          z: lipsRRef.current.rotation.z,
         };
       }
 
       // Lips.L: width drives Y rotation (spread outward), jaw drives Z (open pull)
-      if (lipsLBoneRef.current && lipsLBaseRotRef.current) {
+      if (lipsLRef.current && lipsLBaseRotRef.current) {
         const targetY = lipsLBaseRotRef.current.y + (-width * 0.12);
         const targetZ = lipsLBaseRotRef.current.z + (jaw * 0.06);
-        lipsLBoneRef.current.rotation.y = THREE.MathUtils.lerp(
-          lipsLBoneRef.current.rotation.y, targetY, 0.35
+        lipsLRef.current.rotation.y = THREE.MathUtils.lerp(
+          lipsLRef.current.rotation.y, targetY, 0.35
         );
-        lipsLBoneRef.current.rotation.z = THREE.MathUtils.lerp(
-          lipsLBoneRef.current.rotation.z, targetZ, 0.3
+        lipsLRef.current.rotation.z = THREE.MathUtils.lerp(
+          lipsLRef.current.rotation.z, targetZ, 0.3
         );
       }
 
       // Lips.R: mirror of lips.L (positive Y instead of negative)
-      if (lipsRBoneRef.current && lipsRBaseRotRef.current) {
+      if (lipsRRef.current && lipsRBaseRotRef.current) {
         const targetY = lipsRBaseRotRef.current.y + (width * 0.12);
         const targetZ = lipsRBaseRotRef.current.z + (jaw * 0.06);
-        lipsRBoneRef.current.rotation.y = THREE.MathUtils.lerp(
-          lipsRBoneRef.current.rotation.y, targetY, 0.35
+        lipsRRef.current.rotation.y = THREE.MathUtils.lerp(
+          lipsRRef.current.rotation.y, targetY, 0.35
         );
-        lipsRBoneRef.current.rotation.z = THREE.MathUtils.lerp(
-          lipsRBoneRef.current.rotation.z, targetZ, 0.3
+        lipsRRef.current.rotation.z = THREE.MathUtils.lerp(
+          lipsRRef.current.rotation.z, targetZ, 0.3
         );
+      }
+
+      // Extended lip bones (from add_mouth_rig.py): position-based animation
+      if (vol > 0.02) {
+        // Upper lip rises slightly on open vowels ("ah", "oh")
+        if (lipTopRef.current) {
+          lipTopRef.current.position.y = THREE.MathUtils.lerp(
+            lipTopRef.current.position.y, jaw * 0.002, 0.3
+          );
+        }
+        // Lower lip drops with jaw (reinforces jaw bone)
+        if (lipBottomRef.current) {
+          lipBottomRef.current.position.y = THREE.MathUtils.lerp(
+            lipBottomRef.current.position.y, -jaw * 0.001, 0.3
+          );
+        }
+        // Side lip segments follow their corner with reduced intensity
+        const cornerSpread = (width - 0.3) * 0.003;
+        if (lipTopLRef.current) {
+          lipTopLRef.current.position.x = THREE.MathUtils.lerp(
+            lipTopLRef.current.position.x, cornerSpread * 0.5, 0.2
+          );
+        }
+        if (lipTopRRef.current) {
+          lipTopRRef.current.position.x = THREE.MathUtils.lerp(
+            lipTopRRef.current.position.x, -cornerSpread * 0.5, 0.2
+          );
+        }
+        if (lipBottomLRef.current) {
+          lipBottomLRef.current.position.x = THREE.MathUtils.lerp(
+            lipBottomLRef.current.position.x, cornerSpread * 0.5, 0.2
+          );
+        }
+        if (lipBottomRRef.current) {
+          lipBottomRRef.current.position.x = THREE.MathUtils.lerp(
+            lipBottomRRef.current.position.x, -cornerSpread * 0.5, 0.2
+          );
+        }
       }
     }
 
