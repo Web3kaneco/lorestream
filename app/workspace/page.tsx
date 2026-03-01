@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, Suspense } from 'react';
+import { useState, useEffect, useRef, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { httpsCallable } from 'firebase/functions';
 import { auth, functions } from '@/lib/firebase';
@@ -8,6 +8,7 @@ import { DropZone } from '@/components/ui/DropZone';
 import { ActiveLoadingScreen } from '@/components/ui/ActiveLoadingScreen';
 import { UIOverlay } from '@/components/ui/UIOverlay';
 import { useGeminiLive } from '@/hooks/useGeminiLive';
+import type { AnimationState } from '@/components/3d/Avatar';
 import dynamic from 'next/dynamic';
 import { LoginButton } from '@/components/ui/LoginButton';
 import { AgentLibrary } from '@/components/AgentLibrary';
@@ -47,6 +48,32 @@ function WorkspacePage() {
   }, [paramAgentId, activeAgentId]);
 
   const { isConnected, vaultItems, isGeneratingVaultItem, startSession, stopSession, volumeRef, transcripts } = useGeminiLive(activeAgentId || '', auth.currentUser?.uid || '');
+
+  // Derive animationState from connection + volume + generation state
+  const [animationState, setAnimationState] = useState<AnimationState>('idle');
+  const animTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    if (animTimerRef.current) clearInterval(animTimerRef.current);
+
+    if (!isConnected) {
+      setAnimationState('idle');
+      return;
+    }
+
+    animTimerRef.current = setInterval(() => {
+      if (isGeneratingVaultItem) {
+        setAnimationState('thinking');
+      } else {
+        const vol = volumeRef.current?.volume || 0;
+        setAnimationState(vol > 0.05 ? 'speaking' : 'idle');
+      }
+    }, 250);
+
+    return () => {
+      if (animTimerRef.current) clearInterval(animTimerRef.current);
+    };
+  }, [isConnected, isGeneratingVaultItem, volumeRef]);
 
   const handleAwaken = async (data: any) => {
     if (!auth.currentUser) {
@@ -102,7 +129,7 @@ function WorkspacePage() {
                  setShowLibrary(false);
                }}
              />
-           ) : <DropZone onAwaken={handleAwaken} />
+           ) : <DropZone onAwaken={handleAwaken} userId={auth.currentUser?.uid} />
         )}
 
         {appState === 'LOADING' && activeAgentId && (
@@ -126,7 +153,7 @@ function WorkspacePage() {
                   LXXI.AVATAR_FEED // {isConnected ? 'LIVE' : 'STANDBY'}
               </div>
               <div className="absolute inset-0 z-0">
-                  <Scene modelUrl={modelUrl} volumeRef={volumeRef} />
+                  <Scene modelUrl={modelUrl} volumeRef={volumeRef} animationState={animationState} />
               </div>
               <div className="pointer-events-none absolute inset-0 z-10 bg-[linear-gradient(transparent_50%,rgba(0,0,0,0.25)_50%)] bg-[length:100%_4px] opacity-20"></div>
             </div>
@@ -143,11 +170,23 @@ function WorkspacePage() {
                           [ COMPILING ARTIFACT... ]
                       </div>
                   ) : latestItem ? (
-                      <div className="flex flex-col items-center h-full w-full">
-                          <img src={latestItem.url} alt="Generated" className="object-contain max-h-[80%] rounded border border-[#00ff00]/50 shadow-lg" />
-                          <p className="text-xs text-[#00ff00]/80 mt-2 text-center overflow-hidden text-ellipsis whitespace-nowrap w-full">
-                            &gt; {latestItem.prompt}
-                          </p>
+                      <div className="flex flex-col items-center h-full w-full overflow-auto">
+                        {latestItem.type === 'document' ? (
+                          <>
+                            <div className="w-full p-2 bg-[#0a0a0a] border border-[#d4af37]/30 rounded text-xs font-mono text-[#d4af37] overflow-auto max-h-[80%]">
+                              <div className="text-[10px] text-white/30 mb-1">{latestItem.title} ({latestItem.language})</div>
+                              <pre className="whitespace-pre-wrap text-[#00ff00]/80">{latestItem.content?.slice(0, 500)}{latestItem.content?.length > 500 ? '...' : ''}</pre>
+                            </div>
+                            <p className="text-xs text-[#d4af37]/80 mt-2 text-center">&gt; {latestItem.title}</p>
+                          </>
+                        ) : (
+                          <>
+                            <img src={latestItem.url} alt="Generated" className="object-contain max-h-[80%] rounded border border-[#00ff00]/50 shadow-lg" />
+                            <p className="text-xs text-[#00ff00]/80 mt-2 text-center overflow-hidden text-ellipsis whitespace-nowrap w-full">
+                              &gt; {latestItem.prompt}
+                            </p>
+                          </>
+                        )}
                       </div>
                   ) : (
                       <p className="opacity-20 text-sm text-center">[ WAITING FOR AGENT GENERATION ]</p>

@@ -35,6 +35,16 @@ SPANISH EXAMPLES:
 OPENING LINE:
 Start with something like: "Hey there! I'm Leo, and I love helping people learn cool stuff. What are you in the mood to explore today — some math, a little Spanish, or something else?"
 
+TOOL PROTOCOL:
+
+displayChalkboard — Visual Math Display:
+- Whenever you present a math problem, equation, or practice exercise, ALWAYS call displayChalkboard to show it visually on the chalkboard.
+- Write the problem in clear notation the student can read (e.g., "7 x 8 = ?", "3/4 + 1/2 = ?").
+- Always include a helpful hint that guides without giving away the answer.
+- Set difficulty appropriately: "easy" for single-digit operations, "medium" for multi-step or fractions, "hard" for word problems or advanced concepts.
+- Call the tool silently — don't say "Let me put that on the chalkboard." Just call it and continue teaching naturally.
+- After showing a problem, engage the student: ask them to try it, give encouragement, and celebrate correct answers.
+
 NEVER:
 - Use complex vocabulary without explaining it
 - Move too fast through material
@@ -43,7 +53,21 @@ NEVER:
 - Give long lectures — keep explanations short and interactive
 - Say "As an AI" or acknowledge being artificial`,
 
-  tools: [],
+  tools: [{
+    functionDeclarations: [{
+      name: "displayChalkboard",
+      description: "Display a math problem on the chalkboard for the student to see and work through. Call this whenever presenting a math problem, equation, or practice exercise.",
+      parameters: {
+        type: "OBJECT",
+        properties: {
+          problem: { type: "STRING", description: "The math problem or equation to display. Use clear notation (e.g., '7 x 8 = ?', '3/4 + 1/2 = ?')." },
+          hint: { type: "STRING", description: "A helpful hint to guide the student without giving away the answer." },
+          difficulty: { type: "STRING", description: "Problem difficulty level: 'easy', 'medium', or 'hard'." }
+        },
+        required: ["problem", "hint", "difficulty"]
+      }
+    }]
+  }],
   voiceName: "Fenrir",
   enableVision: false,
   enableMemory: false
