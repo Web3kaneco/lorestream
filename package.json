@@ -12,6 +12,7 @@
         "@pinecone-database/pinecone": "^7.1.0",
         "@react-three/drei": "^9.105.6",
         "@react-three/fiber": "^8.16.2",
+        "@types/react-syntax-highlighter": "^15.5.13",
         "alchemy-sdk": "^3.6.5",
         "firebase": "^10.11.1",
         "firebase-admin": "^13.6.1",
