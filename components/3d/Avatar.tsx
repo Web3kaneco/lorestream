@@ -413,6 +413,43 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
   useFrame(({ clock }, delta) => {
     const t = clock.getElapsedTime();
     const vol = smoothVolRef.current;
+    diagFrameRef.current++;
+
+    // =======================================
+    // LAZY BONE INIT — ensures arm refs are set even after hot reload
+    // (Effects don't re-run on HMR if deps haven't changed)
+    // =======================================
+    if (!armLRef.current && scene) {
+      const lArm = scene.getObjectByName('L_Upperarm') as THREE.Bone | undefined;
+      const rArm = scene.getObjectByName('R_Upperarm') as THREE.Bone | undefined;
+      const lFore = scene.getObjectByName('L_Forearm') as THREE.Bone | undefined;
+      const rFore = scene.getObjectByName('R_Forearm') as THREE.Bone | undefined;
+      if (lArm) { armLRef.current = lArm; armLRestQ.current = lArm.quaternion.clone(); }
+      if (rArm) { armRRef.current = rArm; armRRestQ.current = rArm.quaternion.clone(); }
+      if (lFore) { forearmLRef.current = lFore; forearmLRestQ.current = lFore.quaternion.clone(); }
+      if (rFore) { forearmRRef.current = rFore; forearmRRestQ.current = rFore.quaternion.clone(); }
+      console.log(`[AVATAR-LAZY] Arms: L=${lArm?.name ?? 'MISS'} R=${rArm?.name ?? 'MISS'}`);
+
+      // ONE-TIME: Check SkinnedMesh binding (critical diagnostic)
+      let smInfo = '';
+      scene.traverse((c: THREE.Object3D) => {
+        const sm = c as THREE.SkinnedMesh;
+        if (sm.isSkinnedMesh) {
+          const skelBones = sm.skeleton?.bones?.length ?? 0;
+          const hasWeights = !!(sm.geometry?.attributes?.skinWeight);
+          const hasIndices = !!(sm.geometry?.attributes?.skinIndex);
+          smInfo += `\n  SkinnedMesh "${sm.name}": bones=${skelBones} skinWeights=${hasWeights} skinIndices=${hasIndices} bindMode=${sm.bindMode}`;
+          // Check if our arm bone is actually IN this skeleton
+          const armInSkel = sm.skeleton?.bones.some(b => b.name === 'L_Upperarm');
+          smInfo += ` armInSkeleton=${armInSkel}`;
+        }
+      });
+      if (smInfo) {
+        console.log(`%c[AVATAR-DIAG] SkinnedMesh info:${smInfo}`, 'color: #00ccff; font-weight: bold');
+      } else {
+        console.log(`%c[AVATAR-DIAG] ⚠ NO SkinnedMesh found! Bone manipulation will NOT affect the visual mesh!`, 'color: #ff0000; font-weight: bold; font-size: 14px');
+      }
+    }
 
     // =======================================
     // GROUP-LEVEL ANIMATION (never distorts mesh)
@@ -462,28 +499,26 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     }
 
     // =======================================
-    // HEAD/NECK ANIMATION (bone-level, visible amplitude)
-    // Larger motion for obvious liveliness
+    // HEAD/NECK ANIMATION (bone-level, LARGE amplitude)
     // =======================================
     if (neckBoneRef.current) {
       if (!neckBaseRotRef.current) neckBaseRotRef.current = neckBoneRef.current.rotation.clone();
-      neckBoneRef.current.rotation.y = neckBaseRotRef.current.y + Math.sin(t * 0.7) * 0.08;
-      neckBoneRef.current.rotation.x = neckBaseRotRef.current.x + Math.sin(t * 1.0) * 0.04;
+      neckBoneRef.current.rotation.y = neckBaseRotRef.current.y + Math.sin(t * 0.7) * 0.15;
+      neckBoneRef.current.rotation.x = neckBaseRotRef.current.x + Math.sin(t * 1.0) * 0.08;
     }
     if (headBoneRef.current) {
       if (!headBaseRotRef.current) headBaseRotRef.current = headBoneRef.current.rotation.clone();
-      headBoneRef.current.rotation.z = headBaseRotRef.current.z + Math.sin(t * 1.3) * 0.06;
-      headBoneRef.current.rotation.x = headBaseRotRef.current.x + Math.sin(t * 0.8) * 0.03;
+      headBoneRef.current.rotation.z = headBaseRotRef.current.z + Math.sin(t * 1.3) * 0.12;
+      headBoneRef.current.rotation.x = headBaseRotRef.current.x + Math.sin(t * 0.8) * 0.06;
     }
 
     // =======================================
     // DIAGNOSTIC LOGGING (sampled, ~every 3 sec)
     // =======================================
-    diagFrameRef.current++;
     if (diagFrameRef.current % 180 === 1) {
       const la = armLRef.current;
-      const laQ = la ? `z=${la.quaternion.z.toFixed(3)} w=${la.quaternion.w.toFixed(3)}` : 'N/A';
-      console.log(`[AVATAR] vol=${vol.toFixed(3)} jaw=${smoothJawRef.current.toFixed(3)} w=${smoothWidthRef.current.toFixed(3)} armL.q(${laQ})`);
+      const laQ = la ? `z=${la.quaternion.z.toFixed(3)} w=${la.quaternion.w.toFixed(3)}` : 'null';
+      console.log(`[AVATAR] f=${diagFrameRef.current} vol=${vol.toFixed(3)} jaw=${smoothJawRef.current.toFixed(3)} armL.q(${laQ}) mixer=${!!mixerRef.current}`);
     }
 
     // =======================================
