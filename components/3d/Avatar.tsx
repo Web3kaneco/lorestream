@@ -62,7 +62,6 @@ function repairTrackNames(clips: THREE.AnimationClip[], boneNames: Set<string>):
       if (fixed) continue;
 
       // Strategy 2: Extract last segment of hierarchical path
-      // Handles "Armature/Root/Hip/Waist.quaternion" → "Waist"
       const segments = bn.split(/[./\\]/);
       for (let i = segments.length - 1; i >= 0; i--) {
         if (boneNames.has(segments[i])) {
@@ -86,7 +85,7 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
 
   const groupRef = useRef<THREE.Group>(null!);
 
-  // Bone refs — only used for head, jaw, and lip sync
+  // Bone refs — head, jaw, lip sync
   const headBoneRef = useRef<THREE.Bone | null>(null);
   const neckBoneRef = useRef<THREE.Bone | null>(null);
   const jawBoneRef = useRef<THREE.Bone | null>(null);
@@ -116,9 +115,8 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
   const forearmFixL = useMemo(() => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), 0.3), []);
   const forearmFixR = useMemo(() => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -0.3), []);
 
-  // Direct SkinnedMesh + skeleton ref (bypasses potential reference mismatch)
-  const skinnedMeshRef = useRef<THREE.SkinnedMesh | null>(null);
-  const skelBonesMapRef = useRef<Map<string, THREE.Bone>>(new Map());
+  // Lazy-init flag for skeleton bone remapping in useFrame
+  const skelInitDoneRef = useRef(false);
 
   // Diagnostic frame counter
   const diagFrameRef = useRef(0);
@@ -147,8 +145,7 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
   const mouthMat = useMemo(() => new THREE.MeshBasicMaterial({ color: 0x1a0a0a, transparent: true, opacity: 0.85, depthWrite: false }), []);
 
   // =========================================================
-  // EFFECT 1: Scan skeleton for head/jaw/lip bones only
-  // Body animation handled at group level (no mesh artifacts)
+  // EFFECT 1: Scan skeleton for head/jaw/lip/arm bones
   // =========================================================
   useEffect(() => {
     headBoneRef.current = null;
@@ -175,6 +172,7 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     armRRestQ.current = null;
     forearmLRestQ.current = null;
     forearmRRestQ.current = null;
+    skelInitDoneRef.current = false;
 
     const allBoneNames: string[] = [];
     const mouthBoneMap: Record<string, React.MutableRefObject<THREE.Bone | null>> = {
@@ -227,7 +225,6 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
 
     hasFullMouthRigRef.current = !!(jawBoneRef.current && lipsLRef.current && lipsRRef.current);
 
-    // Check SkinnedMesh binding
     let skinnedCount = 0;
     scene.traverse((child) => {
       if ((child as THREE.SkinnedMesh).isSkinnedMesh) {
@@ -238,11 +235,9 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     });
 
     console.log(`%c[AVATAR] ${allBoneNames.length} bones found, ${skinnedCount} SkinnedMesh(es)`, 'color: #d4af37; font-weight: bold');
-    console.log(`  Bones: ${allBoneNames.join(', ')}`);
     console.log(`  Head=${headBoneRef.current?.name ?? 'MISS'} Neck=${neckBoneRef.current?.name ?? 'MISS'} Jaw=${jawBoneRef.current?.name ?? 'MISS'}`);
-    console.log(`  Arms: L=${armLRef.current?.name ?? 'MISS'} R=${armRRef.current?.name ?? 'MISS'} ForeL=${forearmLRef.current?.name ?? 'MISS'} ForeR=${forearmRRef.current?.name ?? 'MISS'}`);
-    console.log(`  LipsL=${lipsLRef.current?.name ?? 'MISS'} LipsR=${lipsRRef.current?.name ?? 'MISS'} LipT=${lipTopRef.current?.name ?? 'MISS'} LipB=${lipBottomRef.current?.name ?? 'MISS'}`);
-    console.log(`  MouthRig=${hasFullMouthRigRef.current ? 'FULL' : 'NONE'} (jaw+lipsL+lipsR required)`);
+    console.log(`  Arms: L=${armLRef.current?.name ?? 'MISS'} R=${armRRef.current?.name ?? 'MISS'}`);
+    console.log(`  MouthRig=${hasFullMouthRigRef.current ? 'FULL' : 'NONE'}`);
   }, [scene]);
 
   // =========================================================
@@ -263,51 +258,26 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       const boneNames = new Set<string>();
       scene.traverse((c) => { if ((c as THREE.Bone).isBone) boneNames.add(c.name); });
       const repairedCount = repairTrackNames(modelAnimations, boneNames);
-      if (repairedCount > 0) console.log(`%c[AVATAR] Repaired ${repairedCount} animation track names`, 'color: #ffa500');
+      if (repairedCount > 0) console.log(`%c[AVATAR] Repaired ${repairedCount} track names`, 'color: #ffa500');
 
-      // Diagnostic: check each clip's tracks against actual bones
       let totalBound = 0, totalUnbound = 0;
       for (const clip of modelAnimations) {
         let bound = 0, unbound = 0;
-        const unboundNames: string[] = [];
         for (const track of clip.tracks) {
           const di = track.name.lastIndexOf('.');
           const bn = di >= 0 ? track.name.substring(0, di) : track.name;
-          if (scene.getObjectByName(bn)) { bound++; } else { unbound++; unboundNames.push(track.name); }
+          if (scene.getObjectByName(bn)) { bound++; } else { unbound++; }
         }
         totalBound += bound;
         totalUnbound += unbound;
-        console.log(`  Clip "${clip.name}" dur=${clip.duration.toFixed(2)}s tracks=${clip.tracks.length} bound=${bound} unbound=${unbound}`);
-        if (unboundNames.length > 0 && unboundNames.length <= 8) {
-          console.log(`    Unbound tracks: ${unboundNames.join(', ')}`);
-        } else if (unboundNames.length > 8) {
-          console.log(`    Unbound tracks: ${unboundNames.slice(0, 5).join(', ')} ... +${unboundNames.length - 5} more`);
-        }
+        console.log(`  Clip "${clip.name}" dur=${clip.duration.toFixed(2)}s bound=${bound}/${clip.tracks.length}`);
       }
 
       const bindRate = totalBound + totalUnbound > 0 ? (totalBound / (totalBound + totalUnbound) * 100).toFixed(0) : '0';
       console.log(`%c[AVATAR] Track binding: ${totalBound}/${totalBound + totalUnbound} (${bindRate}%)`,
         totalBound === 0 ? 'color: #ff4444; font-weight: bold' : 'color: #00ff00; font-weight: bold');
 
-      // Check if first clip is effectively static (all keyframes identical = baked T-pose)
-      const firstClip = modelAnimations[0];
-      const qTracks = firstClip.tracks.filter(t => t.name.endsWith('.quaternion'));
-      let staticTracks = 0, checkedTracks = 0;
-      const step = Math.max(1, Math.floor(qTracks.length / 20));
-      for (let qi = 0; qi < qTracks.length; qi += step) {
-        const v = qTracks[qi].values;
-        if (v.length < 8) continue;
-        checkedTracks++;
-        const n = Math.floor(v.length / 4);
-        const midIdx = Math.floor(n / 2) * 4;
-        const diff = Math.abs(v[0] - v[midIdx]) + Math.abs(v[1] - v[midIdx + 1]) + Math.abs(v[2] - v[midIdx + 2]) + Math.abs(v[3] - v[midIdx + 3]);
-        if (diff < 0.005) staticTracks++;
-      }
-      const isEffectivelyStatic = checkedTracks > 0 && staticTracks === checkedTracks;
-      console.log(`  Static check: ${staticTracks}/${checkedTracks} sampled tracks are static → ${isEffectivelyStatic ? 'STATIC (T-pose baked)' : 'ANIMATED'}`);
-
-      // Only use mixer if tracks bind AND animation has actual movement
-      if (totalBound > 0 && !isEffectivelyStatic) {
+      if (totalBound > 0) {
         const mixer = new THREE.AnimationMixer(scene);
         mixerRef.current = mixer;
         hasClipAnimRef.current = true;
@@ -322,12 +292,8 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
         currentActionRef.current = action;
         console.log(`%c[AVATAR] Playing clip: "${idleClip.name}"`, 'color: #00ff00; font-weight: bold');
       } else {
-        const reason = isEffectivelyStatic ? 'Clips are static (T-pose baked)' : `All ${totalUnbound} tracks unbound`;
-        console.log(`%c[AVATAR] ⚠ ${reason} — using procedural animation.`, 'color: #ff4444; font-weight: bold');
-        hasClipAnimRef.current = false;
+        console.log(`%c[AVATAR] No tracks bound — using procedural animation`, 'color: #ff4444; font-weight: bold');
       }
-    } else {
-      console.log(`%c[AVATAR] No model clips — using procedural animation`, 'color: #ffa500; font-weight: bold');
     }
 
     return () => {
@@ -412,7 +378,13 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
   }, [scene, mouthGeo, mouthMat]);
 
   // =========================================================
-  // RENDER LOOP — smooth, layered animation
+  // RENDER LOOP
+  // NOTE: Three.js v0.164 renderer auto-handles skeleton:
+  //   - Auto-creates boneTexture via skeleton.computeBoneTexture()
+  //   - Auto-calls skeleton.update() every frame
+  //   - Auto-uploads boneTexture to GPU
+  // We must NOT manually create boneTexture (wrong size breaks it!)
+  // We only: (1) update mixer, (2) modify bone transforms, (3) lip sync
   // =========================================================
   useFrame(({ clock }, delta) => {
     const t = clock.getElapsedTime();
@@ -420,39 +392,32 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     diagFrameRef.current++;
 
     // =======================================
-    // SKELETON INIT — find SkinnedMesh and use its skeleton.bones DIRECTLY
-    // This bypasses any reference mismatch between scene.getObjectByName
-    // and the actual bones the GPU skinning shader uses
+    // LAZY SKELETON RE-MAP (once, for HMR resilience)
+    // Re-map bone refs from skeleton.bones after first render
     // =======================================
-    if (!skinnedMeshRef.current && scene) {
+    if (!skelInitDoneRef.current && scene) {
+      let sm: THREE.SkinnedMesh | null = null;
       scene.traverse((c: THREE.Object3D) => {
-        if ((c as THREE.SkinnedMesh).isSkinnedMesh && !skinnedMeshRef.current) {
-          skinnedMeshRef.current = c as THREE.SkinnedMesh;
+        if ((c as THREE.SkinnedMesh).isSkinnedMesh && !sm) {
+          sm = c as THREE.SkinnedMesh;
         }
       });
 
-      if (skinnedMeshRef.current) {
-        const skel = skinnedMeshRef.current.skeleton;
+      if (sm) {
+        const skel = (sm as THREE.SkinnedMesh).skeleton;
         const bonesMap = new Map<string, THREE.Bone>();
         for (const bone of skel.bones) bonesMap.set(bone.name, bone);
-        skelBonesMapRef.current = bonesMap;
 
-        // Use skeleton bones (guaranteed to be what the shader uses)
+        // Re-map all bone refs from skeleton.bones (same objects as scene, confirmed)
         const sArmL = bonesMap.get('L_Upperarm') ?? null;
         const sArmR = bonesMap.get('R_Upperarm') ?? null;
         const sForeL = bonesMap.get('L_Forearm') ?? null;
         const sForeR = bonesMap.get('R_Forearm') ?? null;
-
-        // Check if scene bones match skeleton bones
-        const sceneArmL = scene.getObjectByName('L_Upperarm');
-        const sameRef = sArmL === sceneArmL;
-
         if (sArmL) { armLRef.current = sArmL; armLRestQ.current = sArmL.quaternion.clone(); }
         if (sArmR) { armRRef.current = sArmR; armRRestQ.current = sArmR.quaternion.clone(); }
         if (sForeL) { forearmLRef.current = sForeL; forearmLRestQ.current = sForeL.quaternion.clone(); }
         if (sForeR) { forearmRRef.current = sForeR; forearmRRestQ.current = sForeR.quaternion.clone(); }
 
-        // Also re-map head/neck/jaw from skeleton bones
         const sHead = bonesMap.get('Head') ?? null;
         const sNeck = bonesMap.get('NeckTwist01') ?? null;
         const sJaw = bonesMap.get('jaw') ?? null;
@@ -460,71 +425,19 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
         if (sNeck) { neckBoneRef.current = sNeck; neckBaseRotRef.current = null; }
         if (sJaw) jawBoneRef.current = sJaw;
 
-        const hasWeights = !!(skinnedMeshRef.current.geometry?.attributes?.skinWeight);
-        const hasIndices = !!(skinnedMeshRef.current.geometry?.attributes?.skinIndex);
-
-        // ─── CRITICAL FIX: Create boneTexture if missing ───
-        // Without a boneTexture, bone matrices computed on CPU never reach
-        // the GPU vertex shader. The mesh stays frozen in bind pose (T-pose).
-        // Modern Three.js compiles the skinning shader with BONE_TEXTURE defined
-        // when floatVertexTextures is supported (all modern GPUs), but if the
-        // skeleton has no boneTexture the shader reads zeroes → frozen mesh.
-        if (!skel.boneTexture) {
-          const nBones = skel.bones.length;
-          const size = Math.ceil(Math.sqrt(nBones * 4));
-          // Create padded Float32Array to fit square texture dimensions
-          const paddedBoneMatrices = new Float32Array(size * size * 4);
-          // Copy existing bone matrix data (nBones*16 floats) into padded array
-          if (skel.boneMatrices && skel.boneMatrices.length > 0) {
-            paddedBoneMatrices.set(
-              skel.boneMatrices.subarray(0, Math.min(skel.boneMatrices.length, paddedBoneMatrices.length))
-            );
-          }
-          skel.boneMatrices = paddedBoneMatrices;
-          skel.boneTexture = new THREE.DataTexture(
-            paddedBoneMatrices, size, size, THREE.RGBAFormat, THREE.FloatType
-          );
-          skel.boneTexture.needsUpdate = true;
-          // CRITICAL: shader needs boneTextureSize to compute UV coordinates
-          // Without this, boneTextureSize=0 → shader divides by zero → reads all-zeroes → frozen T-pose
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (skel as any).boneTextureSize = size;
-          console.log(`%c[AVATAR-SKEL] ⚡ Created boneTexture (${size}×${size}, ${nBones} bones, boneTextureSize=${size})!`, 'color: #ff00ff; font-weight: bold; font-size: 16px');
-        }
-
-        // Force shader recompile so it picks up the boneTexture define
-        const mat = skinnedMeshRef.current.material;
-        if (Array.isArray(mat)) {
-          mat.forEach((m: THREE.Material) => { m.needsUpdate = true; });
-        } else if (mat) {
-          (mat as THREE.Material).needsUpdate = true;
-        }
-
-        const hasBoneTex = !!skel.boneTexture;
-
-        console.log(`%c[AVATAR-SKEL] Using skeleton.bones directly! sameRefAsScene=${sameRef}`, 'color: #00ff00; font-weight: bold; font-size: 14px');
-        console.log(`  SkinnedMesh: "${skinnedMeshRef.current.name}" bones=${skel.bones.length} skinWeights=${hasWeights} skinIndices=${hasIndices} boneTexture=${hasBoneTex} bindMode=${skinnedMeshRef.current.bindMode}`);
-        console.log(`  Arm bones from skeleton: L=${sArmL?.name ?? 'MISS'} R=${sArmR?.name ?? 'MISS'}`);
-      } else {
-        console.log(`%c[AVATAR-SKEL] ⚠ NO SkinnedMesh found!`, 'color: #ff0000; font-weight: bold; font-size: 14px');
+        console.log(`%c[AVATAR] Skeleton ready: ${skel.bones.length} bones, boneTexture=${!!skel.boneTexture} (renderer will auto-create if null)`, 'color: #00ff00; font-weight: bold');
+        skelInitDoneRef.current = true;
       }
     }
 
     // =======================================
     // GROUP-LEVEL ANIMATION (never distorts mesh)
-    // This provides visible idle motion for ALL models.
-    // Amplitude is larger when clips aren't animating the body.
     // =======================================
     if (groupRef.current) {
-      // Stronger motion when no clip animation is active
       const amp = hasClipAnimRef.current ? 1.0 : 2.5;
-      // Gentle breathing bob
       const breathY = Math.sin(t * 1.8) * 0.015 * amp;
-      // Subtle weight shift (torso lean)
       const swayX = Math.sin(t * 0.6) * 0.012 * amp;
-      // Looking around slowly
       const lookY = Math.sin(t * 0.35) * 0.04 * amp;
-      // Slight lateral sway (weight shift side-to-side)
       const lateralX = Math.sin(t * 0.45) * 0.008 * amp;
 
       groupRef.current.position.y = -1 + breathY;
@@ -534,74 +447,53 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     }
 
     // =======================================
-    // CLIP ANIMATION (if model has own clips)
+    // CLIP ANIMATION (mixer.update drives bone transforms)
     // =======================================
     if (mixerRef.current) {
       mixerRef.current.update(delta);
     }
 
     // =======================================
-    // T-POSE ARM FIX — applied AFTER mixer so we override T-pose
-    // Uses skeleton.bones directly + forced matrix update
+    // T-POSE ARM FIX — applied AFTER mixer so we override
+    // Renderer will call updateMatrixWorld() + skeleton.update()
     // =======================================
     if (armLRef.current && armLRestQ.current) {
       armLRef.current.quaternion.copy(armLRestQ.current).multiply(armFixL);
-      armLRef.current.updateMatrix();
     }
     if (armRRef.current && armRRestQ.current) {
       armRRef.current.quaternion.copy(armRRestQ.current).multiply(armFixR);
-      armRRef.current.updateMatrix();
     }
     if (forearmLRef.current && forearmLRestQ.current) {
       forearmLRef.current.quaternion.copy(forearmLRestQ.current).multiply(forearmFixL);
-      forearmLRef.current.updateMatrix();
     }
     if (forearmRRef.current && forearmRRestQ.current) {
       forearmRRef.current.quaternion.copy(forearmRRestQ.current).multiply(forearmFixR);
-      forearmRRef.current.updateMatrix();
     }
 
     // =======================================
-    // HEAD/NECK ANIMATION (bone-level, LARGE amplitude)
+    // HEAD/NECK IDLE ANIMATION
     // =======================================
     if (neckBoneRef.current) {
       if (!neckBaseRotRef.current) neckBaseRotRef.current = neckBoneRef.current.rotation.clone();
       neckBoneRef.current.rotation.y = neckBaseRotRef.current.y + Math.sin(t * 0.7) * 0.15;
       neckBoneRef.current.rotation.x = neckBaseRotRef.current.x + Math.sin(t * 1.0) * 0.08;
-      neckBoneRef.current.updateMatrix();
     }
     if (headBoneRef.current) {
       if (!headBaseRotRef.current) headBaseRotRef.current = headBoneRef.current.rotation.clone();
       headBoneRef.current.rotation.z = headBaseRotRef.current.z + Math.sin(t * 1.3) * 0.12;
       headBoneRef.current.rotation.x = headBaseRotRef.current.x + Math.sin(t * 0.8) * 0.06;
-      headBoneRef.current.updateMatrix();
     }
 
-    // Force skeleton to recompute bone matrices for the GPU
-    if (skinnedMeshRef.current?.skeleton) {
-      const skel = skinnedMeshRef.current.skeleton;
-      skel.update();
-      if (skel.boneTexture) skel.boneTexture.needsUpdate = true;
-    }
+    // NOTE: No manual skeleton.update() or boneTexture.needsUpdate!
+    // Three.js v0.164 renderer handles both automatically.
 
     // =======================================
-    // DIAGNOSTIC LOGGING (sampled, ~every 3 sec)
+    // DIAGNOSTIC LOGGING (~every 3 sec)
     // =======================================
     if (diagFrameRef.current % 180 === 1) {
       const la = armLRef.current;
       const laQ = la ? `z=${la.quaternion.z.toFixed(3)} w=${la.quaternion.w.toFixed(3)}` : 'null';
-      const skel = skinnedMeshRef.current?.skeleton;
-      const bm = skel?.boneMatrices;
-      // Log arm bone matrix (index 38 = L_Upperarm, based on bone list order)
-      // Each bone = 16 floats, so L_Upperarm starts at index*16
-      const armIdx = skel ? skel.bones.findIndex(b => b.name === 'L_Upperarm') : -1;
-      const armOff = armIdx >= 0 ? armIdx * 16 : 0;
-      const bmArm = bm && armIdx >= 0
-        ? `armBM[0-3]=${bm[armOff].toFixed(2)},${bm[armOff+1].toFixed(2)},${bm[armOff+2].toFixed(2)},${bm[armOff+3].toFixed(2)}`
-        : 'no-arm-bm';
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const texSize = skel ? `texSz=${(skel as any).boneTextureSize ?? 'UNSET'}` : '';
-      console.log(`[AVATAR] f=${diagFrameRef.current} vol=${vol.toFixed(3)} jaw=${smoothJawRef.current.toFixed(3)} armL.q(${laQ}) ${bmArm} ${texSize}`);
+      console.log(`[AVATAR] f=${diagFrameRef.current} vol=${vol.toFixed(3)} jaw=${smoothJawRef.current.toFixed(3)} armL.q(${laQ})`);
     }
 
     // =======================================
@@ -630,7 +522,6 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       if (lipsRRef.current && !lipsRBaseRotRef.current) lipsRBaseRotRef.current = lipsRRef.current.rotation.clone();
 
       if (vol > 0.02) {
-        // Active speech
         if (lipsLRef.current && lipsLBaseRotRef.current) {
           lipsLRef.current.rotation.y = THREE.MathUtils.lerp(lipsLRef.current.rotation.y, lipsLBaseRotRef.current.y - width * 0.12, 0.35);
           lipsLRef.current.rotation.z = THREE.MathUtils.lerp(lipsLRef.current.rotation.z, lipsLBaseRotRef.current.z + jaw * 0.06, 0.3);
@@ -647,7 +538,6 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
         if (lipBottomLRef.current) lipBottomLRef.current.position.x = THREE.MathUtils.lerp(lipBottomLRef.current.position.x, cs * 0.5, 0.2);
         if (lipBottomRRef.current) lipBottomRRef.current.position.x = THREE.MathUtils.lerp(lipBottomRRef.current.position.x, -cs * 0.5, 0.2);
       } else {
-        // Idle breathing mouth
         const bp = Math.sin(t * 1.8) * 0.5 + 0.5;
         if (jawBoneRef.current) jawBoneRef.current.rotation.x = THREE.MathUtils.lerp(jawBoneRef.current.rotation.x, bp * 0.01, 0.06);
         if (lipsLRef.current && lipsLBaseRotRef.current) lipsLRef.current.rotation.y = THREE.MathUtils.lerp(lipsLRef.current.rotation.y, lipsLBaseRotRef.current.y + bp * 0.005, 0.05);
