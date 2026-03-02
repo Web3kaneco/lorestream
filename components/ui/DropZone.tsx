@@ -1,11 +1,6 @@
 'use client';
 
-import { useState } from 'react';
-
 export function DropZone({ onAwaken, userId }: { onAwaken: (data: any) => void; userId?: string }) {
-  const [activeTab, setActiveTab] = useState<'upload' | 'web3'>('upload');
-  const [tokenId, setTokenId] = useState('');
-  const [contract, setContract] = useState('');
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -27,46 +22,18 @@ export function DropZone({ onAwaken, userId }: { onAwaken: (data: any) => void; 
     };
   };
 
-  const handleWeb3Submit = () => {
-    if (!tokenId || !contract) return;
-    onAwaken({ type: 'nft', contract, tokenId });
-  };
-
   return (
-    <div className="flex flex-col items-center justify-center h-full w-full bg-[#050505] text-white pointer-events-auto">
-      <h1 className="text-5xl font-bold mb-10 tracking-tight">Show me who I am.</h1>
-
-      <div className="flex gap-4 mb-8 border-b border-neutral-800 pb-4">
-        <button onClick={() => setActiveTab('upload')} className={activeTab === 'upload' ? 'text-[#d4af37] font-bold' : 'text-neutral-500'}>
-          Upload Image
-        </button>
-        <button onClick={() => setActiveTab('web3')} className={activeTab === 'web3' ? 'text-[#d4af37] font-bold' : 'text-neutral-500'}>
-          NFT Contract
-        </button>
+    <label className="border-2 border-dashed border-white/15 w-full h-40 flex flex-col items-center justify-center rounded-xl cursor-pointer hover:border-[#d4af37]/60 transition-all bg-white/[0.02] hover:bg-[#d4af37]/[0.03] group">
+      <div className="flex flex-col items-center gap-2">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" className="text-white/20 group-hover:text-[#d4af37]/50 transition-colors">
+          <path d="M12 16V4m0 0l-4 4m4-4l4 4M4 18v1a1 1 0 001 1h14a1 1 0 001-1v-1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+        <span className="text-white/30 group-hover:text-white/50 text-xs font-mono transition-colors">
+          Drop image or click to upload
+        </span>
+        <span className="text-white/15 text-[10px]">JPG, PNG</span>
       </div>
-
-      {activeTab === 'upload' ? (
-        <label className="border-2 border-dashed border-neutral-700 w-96 h-64 flex flex-col items-center justify-center rounded-xl cursor-pointer hover:border-[#d4af37] transition-all">
-          <span className="text-neutral-400 font-medium">Click to drop an image</span>
-          <input type="file" accept="image/jpeg, image/png" className="hidden" onChange={handleFileUpload} />
-        </label>
-      ) : (
-        <div className="flex flex-col gap-4 w-96">
-          <input
-            type="text" placeholder="Contract Address (0x...)"
-            className="p-4 bg-neutral-900 rounded-lg border border-neutral-800 focus:border-[#d4af37] outline-none text-white"
-            value={contract} onChange={(e) => setContract(e.target.value)}
-          />
-          <input
-            type="text" placeholder="Token ID (e.g., 4012)"
-            className="p-4 bg-neutral-900 rounded-lg border border-neutral-800 focus:border-[#d4af37] outline-none text-white"
-            value={tokenId} onChange={(e) => setTokenId(e.target.value)}
-          />
-          <button onClick={handleWeb3Submit} className="mt-4 p-4 bg-white text-black font-bold rounded-lg hover:bg-gray-200">
-            Awaken Character
-          </button>
-        </div>
-      )}
-    </div>
+      <input type="file" accept="image/jpeg, image/png" className="hidden" onChange={handleFileUpload} />
+    </label>
   );
 }
