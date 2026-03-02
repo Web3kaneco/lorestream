@@ -116,6 +116,10 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
   const forearmFixL = useMemo(() => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), 0.3), []);
   const forearmFixR = useMemo(() => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -0.3), []);
 
+  // Direct SkinnedMesh + skeleton ref (bypasses potential reference mismatch)
+  const skinnedMeshRef = useRef<THREE.SkinnedMesh | null>(null);
+  const skelBonesMapRef = useRef<Map<string, THREE.Bone>>(new Map());
+
   // Diagnostic frame counter
   const diagFrameRef = useRef(0);
 
@@ -416,38 +420,55 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     diagFrameRef.current++;
 
     // =======================================
-    // LAZY BONE INIT — ensures arm refs are set even after hot reload
-    // (Effects don't re-run on HMR if deps haven't changed)
+    // SKELETON INIT — find SkinnedMesh and use its skeleton.bones DIRECTLY
+    // This bypasses any reference mismatch between scene.getObjectByName
+    // and the actual bones the GPU skinning shader uses
     // =======================================
-    if (!armLRef.current && scene) {
-      const lArm = scene.getObjectByName('L_Upperarm') as THREE.Bone | undefined;
-      const rArm = scene.getObjectByName('R_Upperarm') as THREE.Bone | undefined;
-      const lFore = scene.getObjectByName('L_Forearm') as THREE.Bone | undefined;
-      const rFore = scene.getObjectByName('R_Forearm') as THREE.Bone | undefined;
-      if (lArm) { armLRef.current = lArm; armLRestQ.current = lArm.quaternion.clone(); }
-      if (rArm) { armRRef.current = rArm; armRRestQ.current = rArm.quaternion.clone(); }
-      if (lFore) { forearmLRef.current = lFore; forearmLRestQ.current = lFore.quaternion.clone(); }
-      if (rFore) { forearmRRef.current = rFore; forearmRRestQ.current = rFore.quaternion.clone(); }
-      console.log(`[AVATAR-LAZY] Arms: L=${lArm?.name ?? 'MISS'} R=${rArm?.name ?? 'MISS'}`);
-
-      // ONE-TIME: Check SkinnedMesh binding (critical diagnostic)
-      let smInfo = '';
+    if (!skinnedMeshRef.current && scene) {
       scene.traverse((c: THREE.Object3D) => {
-        const sm = c as THREE.SkinnedMesh;
-        if (sm.isSkinnedMesh) {
-          const skelBones = sm.skeleton?.bones?.length ?? 0;
-          const hasWeights = !!(sm.geometry?.attributes?.skinWeight);
-          const hasIndices = !!(sm.geometry?.attributes?.skinIndex);
-          smInfo += `\n  SkinnedMesh "${sm.name}": bones=${skelBones} skinWeights=${hasWeights} skinIndices=${hasIndices} bindMode=${sm.bindMode}`;
-          // Check if our arm bone is actually IN this skeleton
-          const armInSkel = sm.skeleton?.bones.some(b => b.name === 'L_Upperarm');
-          smInfo += ` armInSkeleton=${armInSkel}`;
+        if ((c as THREE.SkinnedMesh).isSkinnedMesh && !skinnedMeshRef.current) {
+          skinnedMeshRef.current = c as THREE.SkinnedMesh;
         }
       });
-      if (smInfo) {
-        console.log(`%c[AVATAR-DIAG] SkinnedMesh info:${smInfo}`, 'color: #00ccff; font-weight: bold');
+
+      if (skinnedMeshRef.current) {
+        const skel = skinnedMeshRef.current.skeleton;
+        const bonesMap = new Map<string, THREE.Bone>();
+        for (const bone of skel.bones) bonesMap.set(bone.name, bone);
+        skelBonesMapRef.current = bonesMap;
+
+        // Use skeleton bones (guaranteed to be what the shader uses)
+        const sArmL = bonesMap.get('L_Upperarm') ?? null;
+        const sArmR = bonesMap.get('R_Upperarm') ?? null;
+        const sForeL = bonesMap.get('L_Forearm') ?? null;
+        const sForeR = bonesMap.get('R_Forearm') ?? null;
+
+        // Check if scene bones match skeleton bones
+        const sceneArmL = scene.getObjectByName('L_Upperarm');
+        const sameRef = sArmL === sceneArmL;
+
+        if (sArmL) { armLRef.current = sArmL; armLRestQ.current = sArmL.quaternion.clone(); }
+        if (sArmR) { armRRef.current = sArmR; armRRestQ.current = sArmR.quaternion.clone(); }
+        if (sForeL) { forearmLRef.current = sForeL; forearmLRestQ.current = sForeL.quaternion.clone(); }
+        if (sForeR) { forearmRRef.current = sForeR; forearmRRestQ.current = sForeR.quaternion.clone(); }
+
+        // Also re-map head/neck/jaw from skeleton bones
+        const sHead = bonesMap.get('Head') ?? null;
+        const sNeck = bonesMap.get('NeckTwist01') ?? null;
+        const sJaw = bonesMap.get('jaw') ?? null;
+        if (sHead) { headBoneRef.current = sHead; headBaseRotRef.current = null; }
+        if (sNeck) { neckBoneRef.current = sNeck; neckBaseRotRef.current = null; }
+        if (sJaw) jawBoneRef.current = sJaw;
+
+        const hasWeights = !!(skinnedMeshRef.current.geometry?.attributes?.skinWeight);
+        const hasIndices = !!(skinnedMeshRef.current.geometry?.attributes?.skinIndex);
+        const hasBoneTex = !!skel.boneTexture;
+
+        console.log(`%c[AVATAR-SKEL] Using skeleton.bones directly! sameRefAsScene=${sameRef}`, 'color: #00ff00; font-weight: bold; font-size: 14px');
+        console.log(`  SkinnedMesh: "${skinnedMeshRef.current.name}" bones=${skel.bones.length} skinWeights=${hasWeights} skinIndices=${hasIndices} boneTexture=${hasBoneTex} bindMode=${skinnedMeshRef.current.bindMode}`);
+        console.log(`  Arm bones from skeleton: L=${sArmL?.name ?? 'MISS'} R=${sArmR?.name ?? 'MISS'}`);
       } else {
-        console.log(`%c[AVATAR-DIAG] ⚠ NO SkinnedMesh found! Bone manipulation will NOT affect the visual mesh!`, 'color: #ff0000; font-weight: bold; font-size: 14px');
+        console.log(`%c[AVATAR-SKEL] ⚠ NO SkinnedMesh found!`, 'color: #ff0000; font-weight: bold; font-size: 14px');
       }
     }
 
@@ -483,19 +504,23 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
 
     // =======================================
     // T-POSE ARM FIX — applied AFTER mixer so we override T-pose
-    // Uses rest quaternion * fix rotation for consistent pose
+    // Uses skeleton.bones directly + forced matrix update
     // =======================================
     if (armLRef.current && armLRestQ.current) {
       armLRef.current.quaternion.copy(armLRestQ.current).multiply(armFixL);
+      armLRef.current.updateMatrix();
     }
     if (armRRef.current && armRRestQ.current) {
       armRRef.current.quaternion.copy(armRRestQ.current).multiply(armFixR);
+      armRRef.current.updateMatrix();
     }
     if (forearmLRef.current && forearmLRestQ.current) {
       forearmLRef.current.quaternion.copy(forearmLRestQ.current).multiply(forearmFixL);
+      forearmLRef.current.updateMatrix();
     }
     if (forearmRRef.current && forearmRRestQ.current) {
       forearmRRef.current.quaternion.copy(forearmRRestQ.current).multiply(forearmFixR);
+      forearmRRef.current.updateMatrix();
     }
 
     // =======================================
@@ -505,11 +530,20 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       if (!neckBaseRotRef.current) neckBaseRotRef.current = neckBoneRef.current.rotation.clone();
       neckBoneRef.current.rotation.y = neckBaseRotRef.current.y + Math.sin(t * 0.7) * 0.15;
       neckBoneRef.current.rotation.x = neckBaseRotRef.current.x + Math.sin(t * 1.0) * 0.08;
+      neckBoneRef.current.updateMatrix();
     }
     if (headBoneRef.current) {
       if (!headBaseRotRef.current) headBaseRotRef.current = headBoneRef.current.rotation.clone();
       headBoneRef.current.rotation.z = headBaseRotRef.current.z + Math.sin(t * 1.3) * 0.12;
       headBoneRef.current.rotation.x = headBaseRotRef.current.x + Math.sin(t * 0.8) * 0.06;
+      headBoneRef.current.updateMatrix();
+    }
+
+    // Force skeleton to recompute bone matrices for the GPU
+    if (skinnedMeshRef.current?.skeleton) {
+      const skel = skinnedMeshRef.current.skeleton;
+      skel.update();
+      if (skel.boneTexture) skel.boneTexture.needsUpdate = true;
     }
 
     // =======================================
@@ -518,7 +552,11 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     if (diagFrameRef.current % 180 === 1) {
       const la = armLRef.current;
       const laQ = la ? `z=${la.quaternion.z.toFixed(3)} w=${la.quaternion.w.toFixed(3)}` : 'null';
-      console.log(`[AVATAR] f=${diagFrameRef.current} vol=${vol.toFixed(3)} jaw=${smoothJawRef.current.toFixed(3)} armL.q(${laQ}) mixer=${!!mixerRef.current}`);
+      // Also log first few boneMatrix values to verify they change
+      const skel = skinnedMeshRef.current?.skeleton;
+      const bm = skel?.boneMatrices;
+      const bmSample = bm ? `bm[0-3]=${bm[0].toFixed(2)},${bm[1].toFixed(2)},${bm[2].toFixed(2)},${bm[3].toFixed(2)}` : 'no-bm';
+      console.log(`[AVATAR] f=${diagFrameRef.current} vol=${vol.toFixed(3)} jaw=${smoothJawRef.current.toFixed(3)} armL.q(${laQ}) ${bmSample}`);
     }
 
     // =======================================
