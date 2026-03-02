@@ -11,13 +11,15 @@ import { DropZone } from '@/components/ui/DropZone';
 import { LoginButton } from '@/components/ui/LoginButton';
 import { ModeSwitcher } from '@/components/ui/ModeSwitcher';
 import { VoiceOrb } from '@/components/ui/VoiceOrb';
+import { HintArrow } from '@/components/ui/HintArrow';
+import { StepIndicator } from '@/components/ui/StepIndicator';
 import { AgentLibrary } from '@/components/AgentLibrary';
 import type { AnimationState } from '@/components/3d/Avatar';
 import dynamic from 'next/dynamic';
 
 const Scene = dynamic(() => import('@/components/3d/Scene'), { ssr: false });
 
-type LandingState = 'LANDING' | 'INTERVIEW' | 'UPLOAD' | 'REDIRECT';
+type LandingState = 'LANDING' | 'INTERVIEW' | 'REDIRECT';
 
 const DEMO_MODELS = [
   { url: '/kanecov1.glb', label: 'KANE' },
@@ -39,10 +41,12 @@ export default function LandingPage() {
   const [newAgentId, setNewAgentId] = useState<string | null>(null);
   const [showVault, setShowVault] = useState(false);
   const [demoModelIdx, setDemoModelIdx] = useState(0);
+  const [uploadReady, setUploadReady] = useState(false);
 
   // Derive animationState from connection + volume
   const [animationState, setAnimationState] = useState<AnimationState>('idle');
   const animTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const transcriptEndRef = useRef<HTMLDivElement>(null);
 
   // Handle the save_new_agent_lore tool callback from Architect
   const handleArchitectToolCallback = useCallback(async (toolName: string, args: any) => {
@@ -55,6 +59,7 @@ export default function LandingPage() {
         key_facts: args.key_facts || []
       };
       setCharacterLore(lore);
+      setUploadReady(true);
 
       // Pre-create agent doc in Firestore if user is logged in
       const userId = auth.currentUser?.uid;
@@ -78,9 +83,6 @@ export default function LandingPage() {
           console.error("[ARCHITECT] Failed to save lore to Firestore:", err);
         }
       }
-
-      // Transition to upload after a brief delay (let the Architect finish speaking)
-      setTimeout(() => setPageState('UPLOAD'), 3000);
     }
   }, []);
 
@@ -116,6 +118,11 @@ export default function LandingPage() {
       if (animTimerRef.current) clearInterval(animTimerRef.current);
     };
   }, [isConnected, volumeRef]);
+
+  // Auto-scroll transcript
+  useEffect(() => {
+    transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [transcripts]);
 
   const handleBeginInterview = async () => {
     if (!auth.currentUser) {
@@ -153,8 +160,6 @@ export default function LandingPage() {
       const enqueue3DTask = httpsCallable(functions, 'enqueue3DTask');
       if (data.type === 'image') {
         await enqueue3DTask({ imageBase64: data.base64, agentId });
-      } else if (data.type === 'nft') {
-        await enqueue3DTask({ contract: data.contract, tokenId: data.tokenId, agentId });
       }
     } catch (error) {
       console.error("[LANDING] Failed to trigger 3D generation:", error);
@@ -166,6 +171,9 @@ export default function LandingPage() {
     stopSession();
     router.push(`/workspace?agentId=${agentId}`);
   };
+
+  // Derive current step for StepIndicator
+  const currentStep: 1 | 2 | 3 = characterLore ? 2 : 1;
 
   // --- LANDING STATE ---
   if (pageState === 'LANDING') {
@@ -180,16 +188,6 @@ export default function LandingPage() {
         <div className="absolute top-6 right-6 z-50 flex items-center gap-4">
           <ModeSwitcher />
           <LoginButton />
-        </div>
-
-        {/* Manifesto link */}
-        <div className="absolute top-6 left-6 z-50">
-          <button
-            onClick={() => router.push('/manifesto')}
-            className="text-xs tracking-[0.2em] uppercase text-white/20 hover:text-[#d4af37]/60 transition-colors"
-          >
-            Manifesto
-          </button>
         </div>
 
         {showVault ? (
@@ -222,24 +220,43 @@ export default function LandingPage() {
               Voice is for Vibe &middot; Screen is for Substance
             </p>
 
-            <button
-              onClick={handleBeginInterview}
-              className="group relative px-10 py-4 text-black font-bold text-lg rounded-lg transition-all"
-              style={{
-                backgroundColor: '#d4af37',
-                boxShadow: '0 0 30px rgba(212,175,55,0.3)'
-              }}
-            >
-              Enter the Forge
-              <span className="absolute inset-0 rounded-lg bg-[#d4af37]/20 animate-ping opacity-20 group-hover:opacity-0" />
-            </button>
+            {/* Main CTA with hint arrow */}
+            <div className="relative inline-block">
+              <HintArrow
+                text="Start here — describe your character with voice"
+                direction="down"
+                dismissKey="hint_forge_arrow"
+                className="absolute -top-14 left-1/2 -translate-x-1/2"
+              />
+              <button
+                onClick={handleBeginInterview}
+                className="group relative px-10 py-4 text-black font-bold text-lg rounded-lg transition-all"
+                style={{
+                  backgroundColor: '#d4af37',
+                  boxShadow: '0 0 30px rgba(212,175,55,0.3)'
+                }}
+              >
+                Enter the Forge
+                <span className="absolute inset-0 rounded-lg bg-[#d4af37]/20 animate-ping opacity-20 group-hover:opacity-0" />
+              </button>
+              <p className="text-[11px] text-white/25 mt-2 font-mono">
+                Create a character through voice conversation
+              </p>
+            </div>
 
-            <div className="mt-8 flex flex-col items-center gap-3">
+            <div className="mt-10 flex flex-col items-center gap-3">
+              <button
+                onClick={() => router.push('/manifesto')}
+                className="text-sm text-white/50 hover:text-[#d4af37] transition-colors tracking-[0.15em] uppercase"
+              >
+                Read the Manifesto
+              </button>
               <button
                 onClick={() => router.push('/workspace')}
                 className="text-sm text-white/25 hover:text-[#d4af37]/60 transition-colors"
               >
                 Skip to Workspace &rarr;
+                <span className="block text-[10px] text-white/15 mt-0.5">Browse existing characters</span>
               </button>
               {auth.currentUser && (
                 <button
@@ -247,6 +264,7 @@ export default function LandingPage() {
                   className="text-sm text-white/25 hover:text-[#d4af37]/60 transition-colors"
                 >
                   Open the Vault &rarr;
+                  <span className="block text-[10px] text-white/15 mt-0.5">View your creations</span>
                 </button>
               )}
             </div>
@@ -259,26 +277,31 @@ export default function LandingPage() {
     );
   }
 
-  // --- INTERVIEW STATE ---
+  // --- INTERVIEW STATE (merged with Upload) ---
   if (pageState === 'INTERVIEW') {
     return (
       <main className="relative w-screen h-screen overflow-hidden flex flex-col"
             style={{ backgroundColor: '#050505' }}>
         {/* Top bar */}
-        <div className="absolute top-6 right-6 z-50 flex items-center gap-4">
+        <div className="flex items-center justify-between px-6 pt-4 pb-2 z-50">
           <button
             onClick={() => { stopSession(); setPageState('LANDING'); }}
             className="px-4 py-2 text-sm text-white/40 hover:text-white/70 transition-colors"
           >
             &larr; Back
           </button>
-          <LoginButton />
+
+          <StepIndicator currentStep={currentStep} />
+
+          <div className="flex items-center gap-3">
+            <LoginButton />
+          </div>
         </div>
 
-        {/* Main content: Avatar + Transcript */}
-        <div className="flex-1 flex flex-col md:flex-row items-stretch p-6 pt-20 gap-6">
-          {/* 3D Avatar Panel */}
-          <div className="flex-1 relative rounded-xl overflow-hidden border border-[#d4af37]/20 bg-black/50 min-h-[300px]">
+        {/* Main content: Avatar + Transcript + Upload Sidebar */}
+        <div className="flex-1 flex flex-col md:flex-row items-stretch px-4 pb-4 gap-4 overflow-hidden">
+          {/* LEFT: 3D Avatar Panel */}
+          <div className="flex-1 relative rounded-xl overflow-hidden border border-[#d4af37]/20 bg-black/50 min-h-[250px]">
             <div className="absolute top-3 left-3 text-xs text-[#d4af37]/50 z-10 flex items-center gap-2">
               <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-[#d4af37] animate-pulse' : 'bg-gray-600'}`} />
               THE ARCHITECT {isConnected ? '// LISTENING' : '// STANDBY'}
@@ -304,19 +327,37 @@ export default function LandingPage() {
             </div>
             {/* Scanline overlay */}
             <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(transparent_50%,rgba(0,0,0,0.15)_50%)] bg-[length:100%_4px] opacity-20" />
+
+            {/* Onboarding hint on avatar */}
+            <HintArrow
+              text="Meet The Architect"
+              direction="down"
+              dismissKey="hint_architect_avatar"
+              className="absolute bottom-16 left-1/2 -translate-x-1/2 z-10"
+            />
           </div>
 
-          {/* Transcript + Controls */}
-          <div className="w-full md:w-96 flex flex-col gap-4">
+          {/* CENTER: Transcript + Controls */}
+          <div className="w-full md:w-80 flex flex-col gap-3 min-w-0">
             {/* Voice Orb (shows when no 3D model visible on mobile) */}
             <div className="md:hidden">
               <VoiceOrb volumeRef={volumeRef} isActive={isConnected} />
             </div>
 
             {/* Transcript */}
-            <div className="flex-1 overflow-y-auto border border-white/10 rounded-lg bg-black/30 p-4 space-y-3 min-h-[200px]">
+            <div className="flex-1 overflow-y-auto border border-white/10 rounded-lg bg-black/30 p-4 space-y-3 min-h-[150px] relative">
               {transcripts.length === 0 && (
-                <p className="text-white/20 text-sm italic">Waiting for The Architect to speak...</p>
+                <div className="space-y-3">
+                  <p className="text-white/30 text-sm">
+                    The Architect will ask about your character. Speak naturally &mdash; describe who they are and their world.
+                  </p>
+                  <HintArrow
+                    text="Your conversation appears here"
+                    direction="down"
+                    dismissKey="hint_transcript"
+                    className="mx-auto"
+                  />
+                </div>
               )}
               {transcripts.map((msg, idx) => (
                 <div key={idx} className={`text-sm ${msg.speaker === 'USER' ? 'text-[#d4af37]' : msg.speaker === 'SYSTEM' ? 'text-amber-400/60' : 'text-white/80'}`}>
@@ -324,6 +365,7 @@ export default function LandingPage() {
                   {msg.text}
                 </div>
               ))}
+              <div ref={transcriptEndRef} />
             </div>
 
             {/* Action buttons */}
@@ -338,67 +380,60 @@ export default function LandingPage() {
                 </button>
               ) : (
                 <button
-                  onClick={() => { setPageState('UPLOAD'); }}
-                  className="flex-1 px-6 py-3 bg-white/10 hover:bg-white/20 text-white font-medium rounded-lg transition-all border border-white/20"
+                  onClick={stopSession}
+                  className="flex-1 px-4 py-3 bg-white/10 hover:bg-white/15 text-white/60 font-medium rounded-lg transition-all border border-white/10 text-sm"
                 >
-                  Ready to Upload Image &rarr;
+                  End Conversation
                 </button>
               )}
             </div>
 
             {characterLore && (
               <div className="text-xs text-[#d4af37]/60 text-center animate-pulse">
-                Character lore captured! Ready to move on.
+                Character lore captured! Upload an image to continue.
               </div>
             )}
           </div>
-        </div>
-      </main>
-    );
-  }
 
-  // --- UPLOAD STATE ---
-  if (pageState === 'UPLOAD') {
-    return (
-      <main className="relative w-screen h-screen overflow-hidden flex flex-col items-center justify-center"
-            style={{ backgroundColor: '#050505' }}>
-        <div className="absolute top-6 left-6 z-50">
-          <button
-            onClick={() => setPageState('INTERVIEW')}
-            className="px-4 py-2 text-sm text-white/40 hover:text-white/70 transition-colors"
-          >
-            &larr; Back to Interview
-          </button>
-        </div>
-        <div className="absolute top-6 right-6 z-50">
-          <LoginButton />
-        </div>
+          {/* RIGHT: Upload Sidebar */}
+          <div className={`w-full md:w-64 flex flex-col gap-3 transition-all duration-500 ${
+            uploadReady ? 'ring-1 ring-[#d4af37]/40 shadow-[0_0_20px_rgba(212,175,55,0.15)]' : ''
+          } rounded-xl p-3 bg-black/30 border border-white/5`}>
+            <h3 className="text-[11px] text-white/30 uppercase tracking-widest font-mono text-center">
+              Character Image
+            </h3>
 
-        <div className="relative z-10 w-full max-w-2xl px-6">
-          {/* Character summary card */}
-          {characterLore && (
-            <div className="mb-8 p-6 border border-[#d4af37]/30 rounded-xl bg-black/50">
-              <h3 className="text-sm text-[#d4af37]/60 uppercase tracking-widest mb-2">Character Captured</h3>
-              <p className="text-2xl text-white font-bold mb-3">{characterLore.archetype}</p>
-              <div className="flex flex-wrap gap-2 mb-3">
-                {characterLore.traits.map((trait, i) => (
-                  <span key={i} className="px-3 py-1 bg-[#d4af37]/10 border border-[#d4af37]/20 rounded-full text-xs text-[#d4af37]">
-                    {trait}
-                  </span>
-                ))}
+            {/* Character summary card (compact) */}
+            {characterLore && (
+              <div className="p-3 border border-[#d4af37]/30 rounded-lg bg-[#d4af37]/[0.03]">
+                <p className="text-sm text-white font-bold mb-1">{characterLore.archetype}</p>
+                <div className="flex flex-wrap gap-1 mb-2">
+                  {characterLore.traits.slice(0, 3).map((trait, i) => (
+                    <span key={i} className="px-2 py-0.5 bg-[#d4af37]/10 border border-[#d4af37]/20 rounded-full text-[10px] text-[#d4af37]">
+                      {trait}
+                    </span>
+                  ))}
+                </div>
+                <p className="text-[11px] text-white/40 italic line-clamp-2">{characterLore.backstory}</p>
               </div>
-              <p className="text-sm text-white/50 italic">&quot;{characterLore.backstory}&quot;</p>
-            </div>
-          )}
+            )}
 
-          <h2 className="text-3xl font-bold text-white text-center mb-2">
-            Now show me what they look like
-          </h2>
-          <p className="text-white/40 text-center mb-8">
-            Upload an image of your character to bring them into 3D
-          </p>
+            {/* Upload area */}
+            <DropZone onAwaken={handleUploadComplete} userId={auth.currentUser?.uid} />
 
-          <DropZone onAwaken={handleUploadComplete} />
+            <p className="text-[10px] text-white/20 text-center leading-relaxed">
+              Upload a reference image for your character&apos;s 3D model. You can do this while talking to The Architect.
+            </p>
+
+            {!characterLore && (
+              <HintArrow
+                text="Upload anytime — no need to wait"
+                direction="up"
+                dismissKey="hint_upload_sidebar"
+                className="mx-auto"
+              />
+            )}
+          </div>
         </div>
       </main>
     );

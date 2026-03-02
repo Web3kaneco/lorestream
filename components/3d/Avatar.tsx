@@ -22,16 +22,36 @@ interface AvatarProps {
 }
 
 // Bones we care about for arm pose extraction.
+// Includes both Mixamo AND Tripo naming conventions.
 const ARM_BONE_NAMES = new Set([
   'mixamorigLeftArm', 'mixamorigRightArm',
   'mixamorigLeftForeArm', 'mixamorigRightForeArm',
+  'L_Upperarm', 'R_Upperarm',
+  'L_Forearm', 'R_Forearm',
 ]);
 const SHOULDER_BONE_NAMES = new Set([
   'mixamorigLeftShoulder', 'mixamorigRightShoulder',
+  'L_Clavicle', 'R_Clavicle',
 ]);
 const ALL_POSE_BONES = new Set(
   (Array.from(ARM_BONE_NAMES) as string[]).concat(Array.from(SHOULDER_BONE_NAMES))
 );
+
+// Map Tripo bone names → Mixamo equivalents (for reference pose lookup)
+const TRIPO_TO_MIXAMO: Record<string, string> = {
+  'L_Upperarm': 'mixamorigLeftArm',
+  'R_Upperarm': 'mixamorigRightArm',
+  'L_Forearm': 'mixamorigLeftForeArm',
+  'R_Forearm': 'mixamorigRightForeArm',
+  'L_Clavicle': 'mixamorigLeftShoulder',
+  'R_Clavicle': 'mixamorigRightShoulder',
+};
+
+// Reverse map: Mixamo → Tripo
+const MIXAMO_TO_TRIPO: Record<string, string> = {};
+for (const [tripo, mixamo] of Object.entries(TRIPO_TO_MIXAMO)) {
+  MIXAMO_TO_TRIPO[mixamo] = tripo;
+}
 
 // Fallback blend factors (module-scope to avoid per-frame allocation)
 const FALLBACK_ARM_BLEND = 0.15;
@@ -47,6 +67,23 @@ const CLIP_STATE_KEYWORDS: Record<AnimationState, string[]> = {
 
 // Crossfade duration in seconds
 const CROSSFADE_DURATION = 0.4;
+
+/**
+ * Detect whether a model uses Tripo or Mixamo naming convention.
+ */
+function detectSkeletonConvention(scene: THREE.Object3D): 'tripo' | 'mixamo' | 'unknown' {
+  let hasMixamo = false;
+  let hasTripo = false;
+  scene.traverse((child) => {
+    if ((child as THREE.Bone).isBone) {
+      if (child.name.startsWith('mixamorig')) hasMixamo = true;
+      if (child.name === 'L_Upperarm' || child.name === 'R_Upperarm' || child.name === 'Hip') hasTripo = true;
+    }
+  });
+  if (hasTripo) return 'tripo';
+  if (hasMixamo) return 'mixamo';
+  return 'unknown';
+}
 
 /**
  * Categorize animation clips by matching clip names to AnimationState keywords.
@@ -79,8 +116,48 @@ function categorizeClips(clips: THREE.AnimationClip[]): Map<AnimationState, THRE
   return map;
 }
 
+/**
+ * Fix animation track names that have incorrect prefixes added by Blender re-export.
+ * e.g. "Armature.mixamorigLeftArm.quaternion" → "mixamorigLeftArm.quaternion"
+ * Also handles Tripo naming: "Armature.L_Upperarm.quaternion" → "L_Upperarm.quaternion"
+ */
+function repairTrackNames(clips: THREE.AnimationClip[], scene: THREE.Object3D): void {
+  // Build a set of all bone names in the scene for validation
+  const sceneBonesSet = new Set<string>();
+  scene.traverse((child) => {
+    if ((child as THREE.Bone).isBone) {
+      sceneBonesSet.add(child.name);
+    }
+  });
+
+  for (const clip of clips) {
+    for (const track of clip.tracks) {
+      // Track names are "BoneName.property" — extract the bone part
+      const dotIdx = track.name.lastIndexOf('.');
+      if (dotIdx < 0) continue;
+      const bonePart = track.name.substring(0, dotIdx);
+      const propPart = track.name.substring(dotIdx);
+
+      // If bone exists in scene, no repair needed
+      if (sceneBonesSet.has(bonePart)) continue;
+
+      // Try stripping common prefixes
+      const prefixes = ['Armature.', 'Armature/'];
+      for (const prefix of prefixes) {
+        if (bonePart.startsWith(prefix)) {
+          const stripped = bonePart.substring(prefix.length);
+          if (sceneBonesSet.has(stripped)) {
+            track.name = stripped + propPart;
+            break;
+          }
+        }
+      }
+    }
+  }
+}
+
 export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarProps) {
-  // Load the model (rigged with Mixamo skeleton)
+  // Load the model (rigged with Mixamo or Tripo skeleton)
   // IMPORTANT: animations live on the gltf root, NOT on scene.animations
   const { scene, animations: modelAnimations } = useGLTF(modelUrl);
 
@@ -117,6 +194,8 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
   const targetComputedRef = useRef(false);
   // True if the model came with its own animation; false = using external reference
   const usingOwnAnimRef = useRef(false);
+  // Detected skeleton convention for this model
+  const skeletonConventionRef = useRef<'tripo' | 'mixamo' | 'unknown'>('unknown');
 
   // Synthetic mouth overlay (only used when no full mouth rig)
   const mouthMeshRef = useRef<THREE.Mesh | null>(null);
@@ -188,7 +267,13 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     lipsLBaseRotRef.current = null;
     lipsRBaseRotRef.current = null;
 
+    // Detect skeleton convention
+    const convention = detectSkeletonConvention(scene);
+    skeletonConventionRef.current = convention;
+
+    let boneCount = 0;
     console.log('--- Skeleton Bone Scan ---');
+    console.log(`  Convention detected: ${convention.toUpperCase()}`);
 
     // Exact-name lookup for Blender mouth rig bones (from add_mouth_rig.py)
     const mouthBoneMap: Record<string, React.MutableRefObject<THREE.Bone | null>> = {
@@ -205,7 +290,7 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     scene.traverse((child) => {
       if ((child as THREE.Bone).isBone) {
         const name = child.name.toLowerCase();
-        console.log('  Bone:', child.name);
+        boneCount++;
 
         if (name.includes('head') && !name.includes('headtop') && !name.includes('head_end')) {
           if (!headBoneRef.current) headBoneRef.current = child as THREE.Bone;
@@ -216,7 +301,6 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
         if (name === 'jaw' || name.includes('jaw') || name.includes('chin') || name.includes('mandible')) {
           if (!jawBoneRef.current) {
             jawBoneRef.current = child as THREE.Bone;
-            console.log('  -> Native jaw bone found:', child.name);
           }
         }
         // Fuzzy lip bone detection (for models not rigged by our scripts)
@@ -224,13 +308,11 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
           if (name.includes('.l') || name.includes('_l') || name.includes('left')) {
             if (!lipsLRef.current) {
               lipsLRef.current = child as THREE.Bone;
-              console.log('  -> Lips.L bone found (fuzzy):', child.name);
             }
           }
           if (name.includes('.r') || name.includes('_r') || name.includes('right')) {
             if (!lipsRRef.current) {
               lipsRRef.current = child as THREE.Bone;
-              console.log('  -> Lips.R bone found (fuzzy):', child.name);
             }
           }
         }
@@ -245,7 +327,6 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
         const mouthRef = mouthBoneMap[child.name];
         if (mouthRef) {
           mouthRef.current = child as THREE.Bone;
-          console.log('  -> Mouth bone found (exact):', child.name);
         }
       }
     });
@@ -253,6 +334,7 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     // Determine if we have a full mouth rig (jaw + both lip corners at minimum)
     hasFullMouthRigRef.current = !!(jawBoneRef.current && lipsLRef.current && lipsRRef.current);
 
+    console.log(`  Total bones: ${boneCount}`);
     console.log('--- Bone Mapping Result ---');
     console.log('  Head:', headBoneRef.current?.name ?? 'MISSING');
     console.log('  Neck:', neckBoneRef.current?.name ?? 'MISSING');
@@ -263,12 +345,14 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     console.log('  lip.B:', lipBottomRef.current?.name ?? '-');
     console.log('  Spine:', spineBoneRef.current?.name ?? 'MISSING');
     console.log('  Root:', rootBoneRef.current?.name ?? 'MISSING');
-    console.log('  Full Mouth Rig:', hasFullMouthRigRef.current ? 'YES — native lip animation' : 'NO — will use synthetic mouth');
+    console.log('  Full Mouth Rig:', hasFullMouthRigRef.current ? 'YES' : 'NO (synthetic fallback)');
   }, [scene]);
 
   // =========================================================
   // EFFECT 2: Set up animations (AnimationMixer + clip map)
-  // Supports multi-clip models with categorization & crossfade
+  // Supports multi-clip models with categorization & crossfade.
+  // For fallback arm pose: extracts from idlebreathing.glb
+  // and creates alias entries for Tripo bone names.
   // =========================================================
   useEffect(() => {
     // Reset animation state
@@ -292,6 +376,9 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     console.log(`  modelAnimations: ${modelAnimations ? modelAnimations.length : 'null/undefined'} clips`);
 
     if (modelAnimations && modelAnimations.length > 0) {
+      // Repair track names (strip Armature. prefix from Blender re-exports)
+      repairTrackNames(modelAnimations, scene);
+
       // Log all available clips
       for (const clip of modelAnimations) {
         console.log(`  Clip: "${clip.name}" (${clip.duration.toFixed(2)}s, ${clip.tracks.length} tracks)`);
@@ -336,7 +423,21 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
             ));
           }
         }
-        console.log(`  Extracted ${poseMap.size} arm/shoulder bones from reference`);
+
+        // Create alias entries for Tripo bone names so models using
+        // Tripo naming can look up reference poses by their own bone names
+        for (const [tripoName, mixamoName] of Object.entries(TRIPO_TO_MIXAMO)) {
+          const mixamoQ = poseMap.get(mixamoName);
+          if (mixamoQ && !poseMap.has(tripoName)) {
+            poseMap.set(tripoName, mixamoQ.clone());
+          }
+        }
+
+        console.log(`  Extracted ${poseMap.size} arm/shoulder pose entries (with Tripo aliases)`);
+        const convention = skeletonConventionRef.current;
+        if (convention === 'tripo') {
+          console.log(`  Tripo model detected — alias mapping active`);
+        }
       }
       armPoseRef.current = poseMap;
     }
@@ -490,6 +591,7 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
           });
           armTargetRef.current = armOnly;
           targetComputedRef.current = true;
+          console.log(`  Arm pose targets computed: ${armOnly.size} bones`);
         }
       }
 
@@ -501,7 +603,9 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
           const bone = scene.getObjectByName(boneName) as THREE.Bone | undefined;
           const initQ = armInitRef.current!.get(boneName);
           if (bone && initQ) {
-            const blend = boneName.includes('ForeArm') ? FALLBACK_FOREARM_BLEND : FALLBACK_ARM_BLEND;
+            // Match both Mixamo 'ForeArm' and Tripo 'Forearm' (capital F)
+            const isForearm = boneName.includes('ForeArm') || boneName.includes('Forearm');
+            const blend = isForearm ? FALLBACK_FOREARM_BLEND : FALLBACK_ARM_BLEND;
             bone.quaternion.copy(initQ).slerp(targetQ, armT * blend);
           }
         });
@@ -607,32 +711,33 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
         };
       }
 
-      // Lips.L: width drives Y rotation (spread outward), jaw drives Z (open pull)
-      if (lipsLRef.current && lipsLBaseRotRef.current) {
-        const targetY = lipsLBaseRotRef.current.y + (-width * 0.12);
-        const targetZ = lipsLBaseRotRef.current.z + (jaw * 0.06);
-        lipsLRef.current.rotation.y = THREE.MathUtils.lerp(
-          lipsLRef.current.rotation.y, targetY, 0.35
-        );
-        lipsLRef.current.rotation.z = THREE.MathUtils.lerp(
-          lipsLRef.current.rotation.z, targetZ, 0.3
-        );
-      }
-
-      // Lips.R: mirror of lips.L (positive Y instead of negative)
-      if (lipsRRef.current && lipsRBaseRotRef.current) {
-        const targetY = lipsRBaseRotRef.current.y + (width * 0.12);
-        const targetZ = lipsRBaseRotRef.current.z + (jaw * 0.06);
-        lipsRRef.current.rotation.y = THREE.MathUtils.lerp(
-          lipsRRef.current.rotation.y, targetY, 0.35
-        );
-        lipsRRef.current.rotation.z = THREE.MathUtils.lerp(
-          lipsRRef.current.rotation.z, targetZ, 0.3
-        );
-      }
-
-      // Extended lip bones (from add_mouth_rig.py): position-based animation
       if (vol > 0.02) {
+        // ============ ACTIVE SPEECH ============
+        // Lips.L: width drives Y rotation (spread outward), jaw drives Z (open pull)
+        if (lipsLRef.current && lipsLBaseRotRef.current) {
+          const targetY = lipsLBaseRotRef.current.y + (-width * 0.12);
+          const targetZ = lipsLBaseRotRef.current.z + (jaw * 0.06);
+          lipsLRef.current.rotation.y = THREE.MathUtils.lerp(
+            lipsLRef.current.rotation.y, targetY, 0.35
+          );
+          lipsLRef.current.rotation.z = THREE.MathUtils.lerp(
+            lipsLRef.current.rotation.z, targetZ, 0.3
+          );
+        }
+
+        // Lips.R: mirror of lips.L (positive Y instead of negative)
+        if (lipsRRef.current && lipsRBaseRotRef.current) {
+          const targetY = lipsRBaseRotRef.current.y + (width * 0.12);
+          const targetZ = lipsRBaseRotRef.current.z + (jaw * 0.06);
+          lipsRRef.current.rotation.y = THREE.MathUtils.lerp(
+            lipsRRef.current.rotation.y, targetY, 0.35
+          );
+          lipsRRef.current.rotation.z = THREE.MathUtils.lerp(
+            lipsRRef.current.rotation.z, targetZ, 0.3
+          );
+        }
+
+        // Extended lip bones (from add_mouth_rig.py): position-based animation
         // Upper lip rises slightly on open vowels ("ah", "oh")
         if (lipTopRef.current) {
           lipTopRef.current.position.y = THREE.MathUtils.lerp(
@@ -665,6 +770,33 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
         if (lipBottomRRef.current) {
           lipBottomRRef.current.position.x = THREE.MathUtils.lerp(
             lipBottomRRef.current.position.x, -cornerSpread * 0.5, 0.2
+          );
+        }
+      } else {
+        // ============ IDLE — subtle breathing mouth micro-animation ============
+        // Makes the avatar look alive even before audio starts
+        const breathPhase = Math.sin(t * 1.8) * 0.5 + 0.5; // 0..1 oscillation
+
+        // Jaw: very subtle open/close with breathing
+        if (jawBoneRef.current) {
+          jawBoneRef.current.rotation.x = THREE.MathUtils.lerp(
+            jawBoneRef.current.rotation.x, breathPhase * 0.015, 0.08
+          );
+        }
+
+        // Lip corners: micro-movement in sync with breathing
+        if (lipsLRef.current && lipsLBaseRotRef.current) {
+          lipsLRef.current.rotation.y = THREE.MathUtils.lerp(
+            lipsLRef.current.rotation.y,
+            lipsLBaseRotRef.current.y + breathPhase * 0.008,
+            0.06
+          );
+        }
+        if (lipsRRef.current && lipsRBaseRotRef.current) {
+          lipsRRef.current.rotation.y = THREE.MathUtils.lerp(
+            lipsRRef.current.rotation.y,
+            lipsRBaseRotRef.current.y - breathPhase * 0.008,
+            0.06
           );
         }
       }
