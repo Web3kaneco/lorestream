@@ -462,6 +462,40 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
 
         const hasWeights = !!(skinnedMeshRef.current.geometry?.attributes?.skinWeight);
         const hasIndices = !!(skinnedMeshRef.current.geometry?.attributes?.skinIndex);
+
+        // ─── CRITICAL FIX: Create boneTexture if missing ───
+        // Without a boneTexture, bone matrices computed on CPU never reach
+        // the GPU vertex shader. The mesh stays frozen in bind pose (T-pose).
+        // Modern Three.js compiles the skinning shader with BONE_TEXTURE defined
+        // when floatVertexTextures is supported (all modern GPUs), but if the
+        // skeleton has no boneTexture the shader reads zeroes → frozen mesh.
+        if (!skel.boneTexture) {
+          const nBones = skel.bones.length;
+          const size = Math.ceil(Math.sqrt(nBones * 4));
+          // Create padded Float32Array to fit square texture dimensions
+          const paddedBoneMatrices = new Float32Array(size * size * 4);
+          // Copy existing bone matrix data (nBones*16 floats) into padded array
+          if (skel.boneMatrices && skel.boneMatrices.length > 0) {
+            paddedBoneMatrices.set(
+              skel.boneMatrices.subarray(0, Math.min(skel.boneMatrices.length, paddedBoneMatrices.length))
+            );
+          }
+          skel.boneMatrices = paddedBoneMatrices;
+          skel.boneTexture = new THREE.DataTexture(
+            paddedBoneMatrices, size, size, THREE.RGBAFormat, THREE.FloatType
+          );
+          skel.boneTexture.needsUpdate = true;
+          console.log(`%c[AVATAR-SKEL] ⚡ Created missing boneTexture (${size}×${size}, ${nBones} bones)!`, 'color: #ff00ff; font-weight: bold; font-size: 16px');
+        }
+
+        // Force shader recompile so it picks up the boneTexture define
+        const mat = skinnedMeshRef.current.material;
+        if (Array.isArray(mat)) {
+          mat.forEach((m: THREE.Material) => { m.needsUpdate = true; });
+        } else if (mat) {
+          (mat as THREE.Material).needsUpdate = true;
+        }
+
         const hasBoneTex = !!skel.boneTexture;
 
         console.log(`%c[AVATAR-SKEL] Using skeleton.bones directly! sameRefAsScene=${sameRef}`, 'color: #00ff00; font-weight: bold; font-size: 14px');
