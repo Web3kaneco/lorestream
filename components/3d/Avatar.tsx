@@ -485,7 +485,11 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
             paddedBoneMatrices, size, size, THREE.RGBAFormat, THREE.FloatType
           );
           skel.boneTexture.needsUpdate = true;
-          console.log(`%c[AVATAR-SKEL] ⚡ Created missing boneTexture (${size}×${size}, ${nBones} bones)!`, 'color: #ff00ff; font-weight: bold; font-size: 16px');
+          // CRITICAL: shader needs boneTextureSize to compute UV coordinates
+          // Without this, boneTextureSize=0 → shader divides by zero → reads all-zeroes → frozen T-pose
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (skel as any).boneTextureSize = size;
+          console.log(`%c[AVATAR-SKEL] ⚡ Created boneTexture (${size}×${size}, ${nBones} bones, boneTextureSize=${size})!`, 'color: #ff00ff; font-weight: bold; font-size: 16px');
         }
 
         // Force shader recompile so it picks up the boneTexture define
@@ -586,11 +590,18 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     if (diagFrameRef.current % 180 === 1) {
       const la = armLRef.current;
       const laQ = la ? `z=${la.quaternion.z.toFixed(3)} w=${la.quaternion.w.toFixed(3)}` : 'null';
-      // Also log first few boneMatrix values to verify they change
       const skel = skinnedMeshRef.current?.skeleton;
       const bm = skel?.boneMatrices;
-      const bmSample = bm ? `bm[0-3]=${bm[0].toFixed(2)},${bm[1].toFixed(2)},${bm[2].toFixed(2)},${bm[3].toFixed(2)}` : 'no-bm';
-      console.log(`[AVATAR] f=${diagFrameRef.current} vol=${vol.toFixed(3)} jaw=${smoothJawRef.current.toFixed(3)} armL.q(${laQ}) ${bmSample}`);
+      // Log arm bone matrix (index 38 = L_Upperarm, based on bone list order)
+      // Each bone = 16 floats, so L_Upperarm starts at index*16
+      const armIdx = skel ? skel.bones.findIndex(b => b.name === 'L_Upperarm') : -1;
+      const armOff = armIdx >= 0 ? armIdx * 16 : 0;
+      const bmArm = bm && armIdx >= 0
+        ? `armBM[0-3]=${bm[armOff].toFixed(2)},${bm[armOff+1].toFixed(2)},${bm[armOff+2].toFixed(2)},${bm[armOff+3].toFixed(2)}`
+        : 'no-arm-bm';
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const texSize = skel ? `texSz=${(skel as any).boneTextureSize ?? 'UNSET'}` : '';
+      console.log(`[AVATAR] f=${diagFrameRef.current} vol=${vol.toFixed(3)} jaw=${smoothJawRef.current.toFixed(3)} armL.q(${laQ}) ${bmArm} ${texSize}`);
     }
 
     // =======================================
