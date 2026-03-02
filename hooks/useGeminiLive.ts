@@ -421,8 +421,8 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
       }
 
       // Start frequency analysis for lip-sync (delegated)
-      if (analyzerRef.current) {
-        startAnalysis(analyzerRef.current);
+      if (analyzerRef.current && audioContextRef.current) {
+        startAnalysis(analyzerRef.current, audioContextRef.current.sampleRate);
       }
 
     } catch (error) {

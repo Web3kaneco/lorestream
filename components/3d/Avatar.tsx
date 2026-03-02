@@ -54,8 +54,9 @@ for (const [tripo, mixamo] of Object.entries(TRIPO_TO_MIXAMO)) {
 }
 
 // Fallback blend factors (module-scope to avoid per-frame allocation)
-const FALLBACK_ARM_BLEND = 0.15;
-const FALLBACK_FOREARM_BLEND = 0.10;
+// Higher values = arms drop more from T-pose toward natural idle
+const FALLBACK_ARM_BLEND = 0.55;
+const FALLBACK_FOREARM_BLEND = 0.40;
 
 // Animation clip name → state mapping keywords
 const CLIP_STATE_KEYWORDS: Record<AnimationState, string[]> = {
