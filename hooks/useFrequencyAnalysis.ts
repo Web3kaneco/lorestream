@@ -7,7 +7,7 @@ export function useFrequencyAnalysis() {
   const volumeRef = useRef<VisemeData>({ ...VISEME_ZERO });
   const rafIdRef = useRef<number | null>(null);
 
-  const startAnalysis = useCallback((analyser: AnalyserNode) => {
+  const startAnalysis = useCallback((analyser: AnalyserNode, sampleRate = 24000) => {
     // Stop any existing loop before starting a new one
     if (rafIdRef.current) {
       cancelAnimationFrame(rafIdRef.current);
@@ -15,7 +15,8 @@ export function useFrequencyAnalysis() {
     }
 
     const dataArray = new Uint8Array(analyser.frequencyBinCount);
-    const binHz = 62.5;
+    // Compute bin width from actual sample rate and FFT size
+    const binHz = sampleRate / analyser.fftSize;
 
     let frameCount = 0;
     const updateVolume = () => {
