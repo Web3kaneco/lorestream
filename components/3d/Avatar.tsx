@@ -40,22 +40,45 @@ function categorizeClips(clips: THREE.AnimationClip[]): Map<AnimationState, THRE
   return map;
 }
 
-function repairTrackNames(clips: THREE.AnimationClip[], boneNames: Set<string>): void {
+function repairTrackNames(clips: THREE.AnimationClip[], boneNames: Set<string>): number {
+  let repaired = 0;
+  const bnArray = Array.from(boneNames);
   for (const clip of clips) {
     for (const track of clip.tracks) {
       const di = track.name.lastIndexOf('.');
       if (di < 0) continue;
       const bn = track.name.substring(0, di);
-      const pp = track.name.substring(di);
+      const pp = track.name.substring(di); // .quaternion, .position, .scale
       if (boneNames.has(bn)) continue;
-      for (const pfx of ['Armature.', 'Armature/']) {
+
+      let fixed = false;
+      // Strategy 1: Strip known prefixes (Blender export artifacts)
+      for (const pfx of ['Armature.', 'Armature/', 'Scene.', 'Scene/', 'Object.', 'Object/']) {
         if (bn.startsWith(pfx)) {
-          const s = bn.substring(pfx.length);
-          if (boneNames.has(s)) { track.name = s + pp; break; }
+          const stripped = bn.substring(pfx.length);
+          if (boneNames.has(stripped)) { track.name = stripped + pp; repaired++; fixed = true; break; }
         }
       }
+      if (fixed) continue;
+
+      // Strategy 2: Extract last segment of hierarchical path
+      // Handles "Armature/Root/Hip/Waist.quaternion" → "Waist"
+      const segments = bn.split(/[./\\]/);
+      for (let i = segments.length - 1; i >= 0; i--) {
+        if (boneNames.has(segments[i])) {
+          track.name = segments[i] + pp;
+          repaired++; fixed = true; break;
+        }
+      }
+      if (fixed) continue;
+
+      // Strategy 3: Case-insensitive match on last segment
+      const lastSeg = segments[segments.length - 1].toLowerCase();
+      const ciMatch = bnArray.find(b => b.toLowerCase() === lastSeg);
+      if (ciMatch) { track.name = ciMatch + pp; repaired++; }
     }
   }
+  return repaired;
 }
 
 export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarProps) {
@@ -124,10 +147,16 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
 
     const allBoneNames: string[] = [];
     const mouthBoneMap: Record<string, React.MutableRefObject<THREE.Bone | null>> = {
+      // Blender dot convention (original rig names)
       'lip.T': lipTopRef, 'lip.B': lipBottomRef,
       'lip.T.L': lipTopLRef, 'lip.T.R': lipTopRRef,
       'lip.B.L': lipBottomLRef, 'lip.B.R': lipBottomRRef,
       'lips.L': lipsLRef, 'lips.R': lipsRRef,
+      // GLB export convention (dots stripped — Tripo/generic exporters)
+      'lipT': lipTopRef, 'lipB': lipBottomRef,
+      'lipTL': lipTopLRef, 'lipTR': lipTopRRef,
+      'lipBL': lipBottomLRef, 'lipBR': lipBottomRRef,
+      'lipsL': lipsLRef, 'lipsR': lipsRRef,
     };
 
     scene.traverse((child) => {
@@ -158,7 +187,8 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     console.log(`%c[AVATAR] ${allBoneNames.length} bones found`, 'color: #d4af37; font-weight: bold');
     console.log(`  Bones: ${allBoneNames.join(', ')}`);
     console.log(`  Head=${headBoneRef.current?.name ?? 'MISS'} Neck=${neckBoneRef.current?.name ?? 'MISS'} Jaw=${jawBoneRef.current?.name ?? 'MISS'}`);
-    console.log(`  Lips.L=${lipsLRef.current?.name ?? 'MISS'} Lips.R=${lipsRRef.current?.name ?? 'MISS'} MouthRig=${hasFullMouthRigRef.current ? 'FULL' : 'NONE'}`);
+    console.log(`  LipsL=${lipsLRef.current?.name ?? 'MISS'} LipsR=${lipsRRef.current?.name ?? 'MISS'} LipT=${lipTopRef.current?.name ?? 'MISS'} LipB=${lipBottomRef.current?.name ?? 'MISS'}`);
+    console.log(`  MouthRig=${hasFullMouthRigRef.current ? 'FULL' : 'NONE'} (jaw+lipsL+lipsR required)`);
   }, [scene]);
 
   // =========================================================
@@ -178,22 +208,52 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     if (modelAnimations && modelAnimations.length > 0) {
       const boneNames = new Set<string>();
       scene.traverse((c) => { if ((c as THREE.Bone).isBone) boneNames.add(c.name); });
-      repairTrackNames(modelAnimations, boneNames);
+      const repairedCount = repairTrackNames(modelAnimations, boneNames);
+      if (repairedCount > 0) console.log(`%c[AVATAR] Repaired ${repairedCount} animation track names`, 'color: #ffa500');
 
-      const mixer = new THREE.AnimationMixer(scene);
-      mixerRef.current = mixer;
-      hasClipAnimRef.current = true;
+      // Diagnostic: check each clip's tracks against actual bones
+      let totalBound = 0, totalUnbound = 0;
+      for (const clip of modelAnimations) {
+        let bound = 0, unbound = 0;
+        const unboundNames: string[] = [];
+        for (const track of clip.tracks) {
+          const di = track.name.lastIndexOf('.');
+          const bn = di >= 0 ? track.name.substring(0, di) : track.name;
+          if (scene.getObjectByName(bn)) { bound++; } else { unbound++; unboundNames.push(track.name); }
+        }
+        totalBound += bound;
+        totalUnbound += unbound;
+        console.log(`  Clip "${clip.name}" dur=${clip.duration.toFixed(2)}s tracks=${clip.tracks.length} bound=${bound} unbound=${unbound}`);
+        if (unboundNames.length > 0 && unboundNames.length <= 8) {
+          console.log(`    Unbound tracks: ${unboundNames.join(', ')}`);
+        } else if (unboundNames.length > 8) {
+          console.log(`    Unbound tracks: ${unboundNames.slice(0, 5).join(', ')} ... +${unboundNames.length - 5} more`);
+        }
+      }
 
-      const clipMap = categorizeClips(modelAnimations);
-      clipMapRef.current = clipMap;
+      const bindRate = totalBound + totalUnbound > 0 ? (totalBound / (totalBound + totalUnbound) * 100).toFixed(0) : '0';
+      console.log(`%c[AVATAR] Track binding: ${totalBound}/${totalBound + totalUnbound} (${bindRate}%)`,
+        totalBound === 0 ? 'color: #ff4444; font-weight: bold' : 'color: #00ff00; font-weight: bold');
 
-      const idleClip = clipMap.get('idle') || modelAnimations[0];
-      const action = mixer.clipAction(idleClip);
-      action.setLoop(THREE.LoopRepeat, Infinity);
-      action.play();
-      currentActionRef.current = action;
+      // Only use mixer if at least some tracks bind
+      if (totalBound > 0) {
+        const mixer = new THREE.AnimationMixer(scene);
+        mixerRef.current = mixer;
+        hasClipAnimRef.current = true;
 
-      console.log(`%c[AVATAR] Playing model clip: "${idleClip.name}" (${modelAnimations.length} clips total)`, 'color: #00ff00; font-weight: bold');
+        const clipMap = categorizeClips(modelAnimations);
+        clipMapRef.current = clipMap;
+
+        const idleClip = clipMap.get('idle') || modelAnimations[0];
+        const action = mixer.clipAction(idleClip);
+        action.setLoop(THREE.LoopRepeat, Infinity);
+        action.play();
+        currentActionRef.current = action;
+        console.log(`%c[AVATAR] Playing clip: "${idleClip.name}"`, 'color: #00ff00; font-weight: bold');
+      } else {
+        console.log(`%c[AVATAR] ⚠ All ${totalUnbound} tracks unbound — clips cannot animate this skeleton. Using procedural animation.`, 'color: #ff4444; font-weight: bold');
+        hasClipAnimRef.current = false;
+      }
     } else {
       console.log(`%c[AVATAR] No model clips — using procedural animation`, 'color: #ffa500; font-weight: bold');
     }
@@ -288,17 +348,23 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
 
     // =======================================
     // GROUP-LEVEL ANIMATION (never distorts mesh)
-    // This provides visible idle motion for ALL models
+    // This provides visible idle motion for ALL models.
+    // Amplitude is larger when clips aren't animating the body.
     // =======================================
     if (groupRef.current) {
+      // Stronger motion when no clip animation is active
+      const amp = hasClipAnimRef.current ? 1.0 : 2.5;
       // Gentle breathing bob
-      const breathY = Math.sin(t * 1.8) * 0.012;
-      // Subtle weight shift
-      const swayX = Math.sin(t * 0.6) * 0.008;
+      const breathY = Math.sin(t * 1.8) * 0.015 * amp;
+      // Subtle weight shift (torso lean)
+      const swayX = Math.sin(t * 0.6) * 0.012 * amp;
       // Looking around slowly
-      const lookY = Math.sin(t * 0.35) * 0.035;
+      const lookY = Math.sin(t * 0.35) * 0.04 * amp;
+      // Slight lateral sway (weight shift side-to-side)
+      const lateralX = Math.sin(t * 0.45) * 0.008 * amp;
 
       groupRef.current.position.y = -1 + breathY;
+      groupRef.current.position.x = lateralX;
       groupRef.current.rotation.x = swayX;
       groupRef.current.rotation.y = lookY;
     }
