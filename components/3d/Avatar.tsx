@@ -100,6 +100,25 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
   const lipsRRef = useRef<THREE.Bone | null>(null);
   const hasFullMouthRigRef = useRef(false);
 
+  // Arm bone refs (for T-pose fix)
+  const armLRef = useRef<THREE.Bone | null>(null);
+  const armRRef = useRef<THREE.Bone | null>(null);
+  const forearmLRef = useRef<THREE.Bone | null>(null);
+  const forearmRRef = useRef<THREE.Bone | null>(null);
+  const armLRestQ = useRef<THREE.Quaternion | null>(null);
+  const armRRestQ = useRef<THREE.Quaternion | null>(null);
+  const forearmLRestQ = useRef<THREE.Quaternion | null>(null);
+  const forearmRRestQ = useRef<THREE.Quaternion | null>(null);
+
+  // Pre-computed arm relaxation quaternions (rotate arms down from T-pose)
+  const armFixL = useMemo(() => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), 0.85), []);
+  const armFixR = useMemo(() => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -0.85), []);
+  const forearmFixL = useMemo(() => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), 0.3), []);
+  const forearmFixR = useMemo(() => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -0.3), []);
+
+  // Diagnostic frame counter
+  const diagFrameRef = useRef(0);
+
   // Smoothed viseme channels
   const smoothJawRef = useRef(0);
   const smoothWidthRef = useRef(0);
@@ -144,6 +163,14 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     neckBaseRotRef.current = null;
     lipsLBaseRotRef.current = null;
     lipsRBaseRotRef.current = null;
+    armLRef.current = null;
+    armRRef.current = null;
+    forearmLRef.current = null;
+    forearmRRef.current = null;
+    armLRestQ.current = null;
+    armRRestQ.current = null;
+    forearmLRestQ.current = null;
+    forearmRRestQ.current = null;
 
     const allBoneNames: string[] = [];
     const mouthBoneMap: Record<string, React.MutableRefObject<THREE.Bone | null>> = {
@@ -179,14 +206,37 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
         // Exact match for Blender mouth rig
         const mRef = mouthBoneMap[bone.name];
         if (mRef) mRef.current = bone;
+
+        // Arm bones (exact name match for Tripo convention)
+        if (bone.name === 'L_Upperarm') armLRef.current = bone;
+        if (bone.name === 'R_Upperarm') armRRef.current = bone;
+        if (bone.name === 'L_Forearm') forearmLRef.current = bone;
+        if (bone.name === 'R_Forearm') forearmRRef.current = bone;
       }
     });
 
+    // Capture arm rest quaternions BEFORE any animation
+    if (armLRef.current) armLRestQ.current = armLRef.current.quaternion.clone();
+    if (armRRef.current) armRRestQ.current = armRRef.current.quaternion.clone();
+    if (forearmLRef.current) forearmLRestQ.current = forearmLRef.current.quaternion.clone();
+    if (forearmRRef.current) forearmRRestQ.current = forearmRRef.current.quaternion.clone();
+
     hasFullMouthRigRef.current = !!(jawBoneRef.current && lipsLRef.current && lipsRRef.current);
 
-    console.log(`%c[AVATAR] ${allBoneNames.length} bones found`, 'color: #d4af37; font-weight: bold');
+    // Check SkinnedMesh binding
+    let skinnedCount = 0;
+    scene.traverse((child) => {
+      if ((child as THREE.SkinnedMesh).isSkinnedMesh) {
+        const sm = child as THREE.SkinnedMesh;
+        skinnedCount++;
+        console.log(`  SkinnedMesh: "${sm.name}" skeleton.bones=${sm.skeleton?.bones.length ?? 0}`);
+      }
+    });
+
+    console.log(`%c[AVATAR] ${allBoneNames.length} bones found, ${skinnedCount} SkinnedMesh(es)`, 'color: #d4af37; font-weight: bold');
     console.log(`  Bones: ${allBoneNames.join(', ')}`);
     console.log(`  Head=${headBoneRef.current?.name ?? 'MISS'} Neck=${neckBoneRef.current?.name ?? 'MISS'} Jaw=${jawBoneRef.current?.name ?? 'MISS'}`);
+    console.log(`  Arms: L=${armLRef.current?.name ?? 'MISS'} R=${armRRef.current?.name ?? 'MISS'} ForeL=${forearmLRef.current?.name ?? 'MISS'} ForeR=${forearmRRef.current?.name ?? 'MISS'}`);
     console.log(`  LipsL=${lipsLRef.current?.name ?? 'MISS'} LipsR=${lipsRRef.current?.name ?? 'MISS'} LipT=${lipTopRef.current?.name ?? 'MISS'} LipB=${lipBottomRef.current?.name ?? 'MISS'}`);
     console.log(`  MouthRig=${hasFullMouthRigRef.current ? 'FULL' : 'NONE'} (jaw+lipsL+lipsR required)`);
   }, [scene]);
@@ -235,8 +285,25 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       console.log(`%c[AVATAR] Track binding: ${totalBound}/${totalBound + totalUnbound} (${bindRate}%)`,
         totalBound === 0 ? 'color: #ff4444; font-weight: bold' : 'color: #00ff00; font-weight: bold');
 
-      // Only use mixer if at least some tracks bind
-      if (totalBound > 0) {
+      // Check if first clip is effectively static (all keyframes identical = baked T-pose)
+      const firstClip = modelAnimations[0];
+      const qTracks = firstClip.tracks.filter(t => t.name.endsWith('.quaternion'));
+      let staticTracks = 0, checkedTracks = 0;
+      const step = Math.max(1, Math.floor(qTracks.length / 20));
+      for (let qi = 0; qi < qTracks.length; qi += step) {
+        const v = qTracks[qi].values;
+        if (v.length < 8) continue;
+        checkedTracks++;
+        const n = Math.floor(v.length / 4);
+        const midIdx = Math.floor(n / 2) * 4;
+        const diff = Math.abs(v[0] - v[midIdx]) + Math.abs(v[1] - v[midIdx + 1]) + Math.abs(v[2] - v[midIdx + 2]) + Math.abs(v[3] - v[midIdx + 3]);
+        if (diff < 0.005) staticTracks++;
+      }
+      const isEffectivelyStatic = checkedTracks > 0 && staticTracks === checkedTracks;
+      console.log(`  Static check: ${staticTracks}/${checkedTracks} sampled tracks are static → ${isEffectivelyStatic ? 'STATIC (T-pose baked)' : 'ANIMATED'}`);
+
+      // Only use mixer if tracks bind AND animation has actual movement
+      if (totalBound > 0 && !isEffectivelyStatic) {
         const mixer = new THREE.AnimationMixer(scene);
         mixerRef.current = mixer;
         hasClipAnimRef.current = true;
@@ -251,7 +318,8 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
         currentActionRef.current = action;
         console.log(`%c[AVATAR] Playing clip: "${idleClip.name}"`, 'color: #00ff00; font-weight: bold');
       } else {
-        console.log(`%c[AVATAR] ⚠ All ${totalUnbound} tracks unbound — clips cannot animate this skeleton. Using procedural animation.`, 'color: #ff4444; font-weight: bold');
+        const reason = isEffectivelyStatic ? 'Clips are static (T-pose baked)' : `All ${totalUnbound} tracks unbound`;
+        console.log(`%c[AVATAR] ⚠ ${reason} — using procedural animation.`, 'color: #ff4444; font-weight: bold');
         hasClipAnimRef.current = false;
       }
     } else {
@@ -377,18 +445,45 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     }
 
     // =======================================
-    // HEAD/NECK ANIMATION (bone-level, small amplitude)
-    // Only runs if bones found — gentle additive layer
+    // T-POSE ARM FIX — applied AFTER mixer so we override T-pose
+    // Uses rest quaternion * fix rotation for consistent pose
+    // =======================================
+    if (armLRef.current && armLRestQ.current) {
+      armLRef.current.quaternion.copy(armLRestQ.current).multiply(armFixL);
+    }
+    if (armRRef.current && armRRestQ.current) {
+      armRRef.current.quaternion.copy(armRRestQ.current).multiply(armFixR);
+    }
+    if (forearmLRef.current && forearmLRestQ.current) {
+      forearmLRef.current.quaternion.copy(forearmLRestQ.current).multiply(forearmFixL);
+    }
+    if (forearmRRef.current && forearmRRestQ.current) {
+      forearmRRef.current.quaternion.copy(forearmRRestQ.current).multiply(forearmFixR);
+    }
+
+    // =======================================
+    // HEAD/NECK ANIMATION (bone-level, visible amplitude)
+    // Larger motion for obvious liveliness
     // =======================================
     if (neckBoneRef.current) {
       if (!neckBaseRotRef.current) neckBaseRotRef.current = neckBoneRef.current.rotation.clone();
-      neckBoneRef.current.rotation.y = neckBaseRotRef.current.y + Math.sin(t * 0.7) * 0.03;
-      neckBoneRef.current.rotation.x = neckBaseRotRef.current.x + Math.sin(t * 1.0) * 0.015;
+      neckBoneRef.current.rotation.y = neckBaseRotRef.current.y + Math.sin(t * 0.7) * 0.08;
+      neckBoneRef.current.rotation.x = neckBaseRotRef.current.x + Math.sin(t * 1.0) * 0.04;
     }
     if (headBoneRef.current) {
       if (!headBaseRotRef.current) headBaseRotRef.current = headBoneRef.current.rotation.clone();
-      headBoneRef.current.rotation.z = headBaseRotRef.current.z + Math.sin(t * 1.3) * 0.02;
-      headBoneRef.current.rotation.x = headBaseRotRef.current.x + Math.sin(t * 0.8) * 0.01;
+      headBoneRef.current.rotation.z = headBaseRotRef.current.z + Math.sin(t * 1.3) * 0.06;
+      headBoneRef.current.rotation.x = headBaseRotRef.current.x + Math.sin(t * 0.8) * 0.03;
+    }
+
+    // =======================================
+    // DIAGNOSTIC LOGGING (sampled, ~every 3 sec)
+    // =======================================
+    diagFrameRef.current++;
+    if (diagFrameRef.current % 180 === 1) {
+      const la = armLRef.current;
+      const laQ = la ? `z=${la.quaternion.z.toFixed(3)} w=${la.quaternion.w.toFixed(3)}` : 'N/A';
+      console.log(`[AVATAR] vol=${vol.toFixed(3)} jaw=${smoothJawRef.current.toFixed(3)} w=${smoothWidthRef.current.toFixed(3)} armL.q(${laQ})`);
     }
 
     // =======================================
