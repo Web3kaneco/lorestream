@@ -470,9 +470,9 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     console.log(`  MouthRig=${hasFullMouthRigRef.current ? 'FULL' : 'NONE'}`);
     console.log(`  All bones: ${allBoneNames.join(', ')}`);
 
-    // Create programmatic mouth morph targets for models WITHOUT facial bones.
-    // This deforms the actual mesh geometry (jaw opens, mouth widens) instead
-    // of using a floating overlay. Works on the bind-pose vertices.
+    // Mouth animation for models WITHOUT facial bones:
+    // 1. Check if the GLB has built-in morph targets (jawOpen, mouthWide)
+    // 2. If not, create programmatic morph targets from vertex analysis
     if (!hasFullMouthRigRef.current) {
       let targetMesh: THREE.SkinnedMesh | null = null;
       clone.traverse(c => {
@@ -481,10 +481,20 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
         }
       });
       if (targetMesh) {
-        hasMorphMouthRef.current = createMouthMorphTargets(targetMesh);
-        if (hasMorphMouthRef.current) {
+        // Check for built-in morph targets from GLB (created in Blender)
+        const dict = (targetMesh as THREE.SkinnedMesh).morphTargetDictionary;
+        if (dict && ('jawOpen' in dict) && ('mouthWide' in dict)) {
           morphMeshRef.current = targetMesh;
-          console.log('%c[AVATAR] Programmatic mouth morph targets active', 'color: #00ff00; font-weight: bold');
+          hasMorphMouthRef.current = true;
+          console.log('%c[AVATAR] Using built-in GLB morph targets: jawOpen=%d mouthWide=%d',
+            'color: #00ff00; font-weight: bold', dict['jawOpen'], dict['mouthWide']);
+        } else {
+          // Fallback: create programmatic morph targets from vertex analysis
+          hasMorphMouthRef.current = createMouthMorphTargets(targetMesh);
+          if (hasMorphMouthRef.current) {
+            morphMeshRef.current = targetMesh;
+            console.log('%c[AVATAR] Using programmatic morph targets (fallback)', 'color: #ffa500; font-weight: bold');
+          }
         }
       }
     }
@@ -818,20 +828,25 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
 
     // =======================================
     // MORPH TARGET MOUTH (for models WITHOUT facial bones)
-    // Drives programmatic jawOpen + mouthWide morph targets that
-    // deform the actual mesh geometry. No overlays or floating objects.
+    // Drives jawOpen + mouthWide morph targets — either from GLB
+    // (Blender shape keys) or programmatically created at load time.
     // =======================================
     if (hasMorphMouthRef.current && morphMeshRef.current?.morphTargetInfluences) {
-      const infl = morphMeshRef.current.morphTargetInfluences;
+      const mesh = morphMeshRef.current;
+      const infl = mesh.morphTargetInfluences;
+      const dict = mesh.morphTargetDictionary ?? {};
+      const jawIdx = dict['jawOpen'] ?? 0;
+      const wideIdx = dict['mouthWide'] ?? 1;
+
       if (vol > 0.02) {
         // Speaking: jaw opens proportional to audio, mouth widens with formants
-        infl[0] = THREE.MathUtils.lerp(infl[0], jaw * 0.85, 0.45);   // jawOpen
-        infl[1] = THREE.MathUtils.lerp(infl[1], width * 0.55, 0.35); // mouthWide
+        infl[jawIdx] = THREE.MathUtils.lerp(infl[jawIdx], jaw * 0.85, 0.45);
+        infl[wideIdx] = THREE.MathUtils.lerp(infl[wideIdx], width * 0.55, 0.35);
       } else {
         // Idle: subtle breathing micro-animation keeps face alive
         const bp = Math.sin(t * 1.8) * 0.5 + 0.5;
-        infl[0] = THREE.MathUtils.lerp(infl[0], bp * 0.03, 0.06);
-        infl[1] = THREE.MathUtils.lerp(infl[1], 0, 0.06);
+        infl[jawIdx] = THREE.MathUtils.lerp(infl[jawIdx], bp * 0.03, 0.06);
+        infl[wideIdx] = THREE.MathUtils.lerp(infl[wideIdx], 0, 0.06);
       }
     }
   });
