@@ -302,12 +302,15 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
 
     hasFullMouthRigRef.current = !!(jawBoneRef.current && lipsLRef.current && lipsRRef.current);
 
-    // SkinnedMesh diagnostics
+    // SkinnedMesh diagnostics + fix frustumCulled
     let skinnedCount = 0;
     clone.traverse((child) => {
       if ((child as THREE.SkinnedMesh).isSkinnedMesh) {
         const sm = child as THREE.SkinnedMesh;
         skinnedCount++;
+        // Disable frustum culling — animated models can have wrong bounding boxes
+        // causing them to disappear when the camera moves
+        sm.frustumCulled = false;
         console.log(`  SkinnedMesh: "${sm.name}" bones=${sm.skeleton?.bones.length ?? 0} bindMode=${sm.bindMode}`);
       }
     });
@@ -463,13 +466,26 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     // a natural hanging position, then apply it every frame.
     // =======================================
     if (!hasRealAnimation && !armFixComputedRef.current && armLRef.current) {
-      // Helper: compute local quaternion fix using ACTUAL bone→child direction
-      // (not local Y assumption which varies between skeleton conventions)
-      const computeArmFix = (bone: THREE.Bone): THREE.Quaternion => {
+      // Helper: compute local quaternion fix using bone→forearm direction
+      // Uses the known forearm ref (not first child, which may be a twist bone)
+      const computeArmFix = (bone: THREE.Bone, forearmBone: THREE.Bone | null): THREE.Quaternion => {
         bone.updateWorldMatrix(true, true);
 
-        // Find child bone to determine actual bone direction
-        const childBone = bone.children.find(c => (c as THREE.Bone).isBone) as THREE.Bone | undefined;
+        // Use forearm ref if available — twist bones (UpperarmTwist01) are too close
+        // to give a meaningful direction vector
+        let childBone: THREE.Bone | undefined = forearmBone || undefined;
+        if (!childBone) {
+          // Fallback: find a non-twist child bone
+          childBone = bone.children.find(c => {
+            if (!(c as THREE.Bone).isBone) return false;
+            const n = c.name.toLowerCase();
+            return !n.includes('twist') && !n.includes('helper') && !n.includes('roll');
+          }) as THREE.Bone | undefined;
+        }
+        if (!childBone) {
+          // Last resort: any bone child
+          childBone = bone.children.find(c => (c as THREE.Bone).isBone) as THREE.Bone | undefined;
+        }
         if (!childBone) {
           console.warn(`[AVATAR] Arm fix: no child bone for ${bone.name}`);
           return new THREE.Quaternion(); // identity = no change
@@ -511,8 +527,8 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
         return parentInv.multiply(worldFix).multiply(parentWQ);
       };
 
-      armFixLRef.current = computeArmFix(armLRef.current);
-      if (armRRef.current) armFixRRef.current = computeArmFix(armRRef.current);
+      armFixLRef.current = computeArmFix(armLRef.current, forearmLRef.current);
+      if (armRRef.current) armFixRRef.current = computeArmFix(armRRef.current, forearmRRef.current);
       // Skip forearm fix — they follow naturally after upper arm correction
       forearmFixLRef.current = null;
       forearmFixRRef.current = null;
@@ -589,6 +605,13 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
               bt ? 'color: #00ff00; font-weight: bold' : 'color: #ff0000; font-weight: bold');
           }
         });
+
+        // Mixer action diagnostics — verify actions are actually playing
+        if (hasRealAnimation && currentActionRef.current) {
+          const act = currentActionRef.current;
+          console.log(`%c[AVATAR] f=${diagFrameRef.current} MIXER: action="${act.getClip().name}" isRunning=${act.isRunning()} weight=${act.getEffectiveWeight().toFixed(3)} time=${act.time.toFixed(3)} mixerTime=${mixer.time.toFixed(3)}`,
+            act.isRunning() ? 'color: #00ff00; font-weight: bold' : 'color: #ff0000; font-weight: bold');
+        }
       }
 
       console.log(`[AVATAR] f=${diagFrameRef.current} vol=${vol.toFixed(3)} jaw=${smoothJawRef.current.toFixed(3)} armL.q(${laQ}) hasRealAnim=${hasRealAnimation}`);

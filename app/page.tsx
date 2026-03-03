@@ -57,6 +57,7 @@ export default function LandingPage() {
   const [animationState, setAnimationState] = useState<AnimationState>('idle');
   const animTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const transcriptEndRef = useRef<HTMLDivElement>(null);
+  const pendingVoiceRestartRef = useRef(false);
 
   // Handle the save_new_agent_lore tool callback from Architect
   const handleArchitectToolCallback = useCallback(async (toolName: string, args: any) => {
@@ -134,6 +135,17 @@ export default function LandingPage() {
   useEffect(() => {
     transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [transcripts]);
+
+  // Auto-restart session after model switch (for voice change)
+  // Gemini Live voice is set during WebSocket setup — can't change mid-session.
+  // So we stop + restart the session when the user switches models.
+  useEffect(() => {
+    if (pendingVoiceRestartRef.current && !isConnected && pageState === 'INTERVIEW') {
+      pendingVoiceRestartRef.current = false;
+      const timer = setTimeout(() => startSession(), 500);
+      return () => clearTimeout(timer);
+    }
+  }, [isConnected, pageState, startSession]);
 
   const handleBeginInterview = async () => {
     if (!auth.currentUser) {
@@ -399,7 +411,15 @@ export default function LandingPage() {
               {DEMO_MODELS.map((m, i) => (
                 <button
                   key={m.label}
-                  onClick={() => setDemoModelIdx(i)}
+                  onClick={() => {
+                    if (i === demoModelIdx) return;
+                    setDemoModelIdx(i);
+                    // Restart session for voice change — voice is locked at setup time
+                    if (isConnected) {
+                      pendingVoiceRestartRef.current = true;
+                      stopSession();
+                    }
+                  }}
                   className={`px-3 py-1 text-[10px] font-bold tracking-widest rounded transition-all ${
                     demoModelIdx === i
                       ? 'bg-[#d4af37] text-black'
