@@ -206,6 +206,9 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
   const mouthMeshRef = useRef<THREE.Mesh | null>(null);
   const mouthGeo = useMemo(() => { const g = new THREE.SphereGeometry(1, 16, 8); g.scale(1.5, 0.8, 0.5); return g; }, []);
   const mouthMat = useMemo(() => new THREE.MeshBasicMaterial({ color: 0x2a0808, transparent: true, opacity: 0.9, depthWrite: false }), []);
+  // Lazy-init synthetic mouth in useFrame (NOT useEffect) — world matrices must be valid
+  const mouthCreatedRef = useRef(false);
+  const modelHeightRef = useRef(0);
 
   // ============================================================
   // EFFECT 1: Scan CLONE skeleton for bones
@@ -393,34 +396,15 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     }
   }, [animationState, hasRealAnimation, actions, mixer]);
 
-  // ============================================================
-  // EFFECT 4: Synthetic mouth (fallback for models without jaw/lip)
-  // ============================================================
+  // Cleanup synthetic mouth on unmount (mouth is now created lazily in useFrame)
   useEffect(() => {
-    if (mouthMeshRef.current) { mouthMeshRef.current.removeFromParent(); mouthMeshRef.current = null; }
-    if (hasFullMouthRigRef.current || !headBoneRef.current) return;
-
-    const ws = new THREE.Vector3();
-    headBoneRef.current.getWorldScale(ws);
-    const avgS = (Math.abs(ws.x) + Math.abs(ws.y) + Math.abs(ws.z)) / 3;
-    // Scale mouth relative to head size — 6% of head for visibility
-    const sz = Math.max(avgS * 0.06, 0.012);
-
-    const m = new THREE.Mesh(mouthGeo, mouthMat);
-    m.name = 'SyntheticMouth';
-    m.scale.set(sz, sz * 0.15, sz * 0.8);
-    // Position: below center of head, forward-facing
-    m.position.set(0, -avgS * 0.05, avgS * 0.08);
-    m.renderOrder = 1;
-    console.log(`%c[AVATAR] Synthetic mouth created: headScale=${avgS.toFixed(4)} mouthSize=${sz.toFixed(4)}`, 'color: #ff69b4; font-weight: bold');
-
-    headBoneRef.current.add(m);
-    mouthMeshRef.current = m;
-
     return () => {
-      if (mouthMeshRef.current) { mouthMeshRef.current.removeFromParent(); mouthMeshRef.current = null; }
+      if (mouthMeshRef.current) {
+        mouthMeshRef.current.removeFromParent();
+        mouthMeshRef.current = null;
+      }
     };
-  }, [clone, mouthGeo, mouthMat]);
+  }, []);
 
   // ============================================================
   // RENDER LOOP — Custom bone overrides on top of mixer
@@ -503,11 +487,12 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
         const hLen = horizontalDir.length();
         if (hLen > 0.01) horizontalDir.divideScalar(hLen);
 
-        // Target: mostly down, slightly outward in current horizontal direction
+        // Target: mostly down, slightly outward + forward for natural resting pose
+        // (pure straight-down looks robotic; adding Z=0.2 gives natural slight-forward hang)
         const target = new THREE.Vector3(
-          horizontalDir.x * 0.25,
-          -0.92,
-          horizontalDir.z * 0.25
+          horizontalDir.x * 0.15,
+          -0.90,
+          0.20
         ).normalize();
 
         console.log(`[AVATAR] Arm fix ${bone.name}: child=${childBone.name} dir=(${boneDir.x.toFixed(3)}, ${boneDir.y.toFixed(3)}, ${boneDir.z.toFixed(3)}) → target=(${target.x.toFixed(3)}, ${target.y.toFixed(3)}, ${target.z.toFixed(3)})`);
@@ -614,7 +599,8 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
         }
       }
 
-      console.log(`[AVATAR] f=${diagFrameRef.current} vol=${vol.toFixed(3)} jaw=${smoothJawRef.current.toFixed(3)} armL.q(${laQ}) hasRealAnim=${hasRealAnimation}`);
+      const mouthInfo = mouthMeshRef.current ? `mouthY=${mouthMeshRef.current.scale.y.toFixed(4)} pos=(${mouthMeshRef.current.position.x.toFixed(2)},${mouthMeshRef.current.position.y.toFixed(2)},${mouthMeshRef.current.position.z.toFixed(2)})` : (hasFullMouthRigRef.current ? 'boneRig' : 'pending');
+      console.log(`[AVATAR] f=${diagFrameRef.current} vol=${vol.toFixed(3)} jaw=${smoothJawRef.current.toFixed(3)} mouth=${mouthInfo} armL.q(${laQ}) hasRealAnim=${hasRealAnimation}`);
     }
 
     // =======================================
@@ -673,23 +659,67 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       headBoneRef.current.rotation.z += Math.sin(t * 6) * jaw * 0.006;
     }
 
-    // Synthetic mouth overlay (for models without mouth bones)
-    if (mouthMeshRef.current && !hasFullMouthRigRef.current) {
+    // =======================================
+    // SYNTHETIC MOUTH (for models WITHOUT mouth bones)
+    // Created LAZILY in useFrame (not useEffect) because:
+    //   - useEffect runs before Three.js computes world matrices
+    //   - bone.getWorldScale() returns 0 → mouth size = 0
+    //   - useFrame runs AFTER renderer has processed the scene
+    // Added to GROUP (not head bone) to avoid bone-local coordinate issues.
+    // Position updated every frame to follow head bone's world position.
+    // =======================================
+
+    // Lazy-create mouth mesh (frame 3+ ensures world matrices are valid)
+    if (!mouthCreatedRef.current && !hasFullMouthRigRef.current && headBoneRef.current && groupRef.current && diagFrameRef.current >= 3) {
+      // Use model bounding box for sizing — much more reliable than bone.getWorldScale()
+      const bbox = new THREE.Box3().setFromObject(clone);
+      const mh = bbox.max.y - bbox.min.y;
+      modelHeightRef.current = mh;
+
+      // Mouth width ~2.2% of model height → ~3.7cm for 1.7m model
+      const sz = Math.max(mh * 0.022, 0.015);
+
+      const m = new THREE.Mesh(mouthGeo, mouthMat);
+      m.name = 'SyntheticMouth';
+      m.scale.set(sz, sz * 0.2, sz * 0.5);
+      m.renderOrder = 999;
+      groupRef.current.add(m);
+      mouthMeshRef.current = m;
+      mouthCreatedRef.current = true;
+
+      console.log(`%c[AVATAR] Synthetic mouth created: modelHeight=${mh.toFixed(3)} mouthSize=${sz.toFixed(4)} bbox=(${bbox.min.y.toFixed(2)}→${bbox.max.y.toFixed(2)})`, 'color: #ff69b4; font-weight: bold');
+    }
+
+    // Update mouth position every frame (follows head bone) + animate scale
+    if (mouthMeshRef.current && headBoneRef.current && !hasFullMouthRigRef.current) {
+      // Get head bone world position, convert to group-local space
+      const headWP = new THREE.Vector3();
+      headBoneRef.current.getWorldPosition(headWP);
+      groupRef.current.worldToLocal(headWP);
+
+      // Position mouth below head center and forward toward camera
+      // In group-local space: -Y = down, +Z = face forward (model has rotation={[0, -PI/2, 0]})
+      const mh = modelHeightRef.current;
+      headWP.y -= mh * 0.025;   // ~4cm below head bone (chin area)
+      headWP.z += mh * 0.048;   // ~8cm forward (face surface)
+      mouthMeshRef.current.position.copy(headWP);
+
+      // Scale animation driven by viseme data
       const base = mouthMeshRef.current.userData.baseSize || mouthMeshRef.current.scale.x;
       if (!mouthMeshRef.current.userData.baseSize) mouthMeshRef.current.userData.baseSize = base;
 
       if (vol > 0.02) {
-        // Speaking: mouth opens wide, scales with jaw/width
-        mouthMeshRef.current.scale.y = THREE.MathUtils.lerp(mouthMeshRef.current.scale.y, base * (0.3 + jaw * 2.5), 0.5);
-        mouthMeshRef.current.scale.x = THREE.MathUtils.lerp(mouthMeshRef.current.scale.x, base * (0.8 + width * 0.8 + jaw * 0.3), 0.4);
+        // Speaking: mouth opens, scales with jaw/width
+        mouthMeshRef.current.scale.y = THREE.MathUtils.lerp(mouthMeshRef.current.scale.y, base * (0.4 + jaw * 2.0), 0.5);
+        mouthMeshRef.current.scale.x = THREE.MathUtils.lerp(mouthMeshRef.current.scale.x, base * (0.8 + width * 0.6 + jaw * 0.3), 0.4);
         mouthMeshRef.current.scale.z = THREE.MathUtils.lerp(mouthMeshRef.current.scale.z, base * (0.6 + jaw * 0.4), 0.35);
         mouthMat.opacity = THREE.MathUtils.lerp(mouthMat.opacity, 0.95, 0.35);
       } else {
-        // Idle: subtle breathing animation keeps mouth visible as a thin line
+        // Idle: subtle breathing keeps mouth visible as a thin line
         const bp = Math.sin(t * 1.8) * 0.5 + 0.5;
-        mouthMeshRef.current.scale.y = THREE.MathUtils.lerp(mouthMeshRef.current.scale.y, base * (0.12 + bp * 0.05), 0.08);
-        mouthMeshRef.current.scale.x = THREE.MathUtils.lerp(mouthMeshRef.current.scale.x, base * 0.75, 0.08);
-        mouthMeshRef.current.scale.z = THREE.MathUtils.lerp(mouthMeshRef.current.scale.z, base * 0.7, 0.08);
+        mouthMeshRef.current.scale.y = THREE.MathUtils.lerp(mouthMeshRef.current.scale.y, base * (0.15 + bp * 0.05), 0.08);
+        mouthMeshRef.current.scale.x = THREE.MathUtils.lerp(mouthMeshRef.current.scale.x, base * 0.8, 0.08);
+        mouthMeshRef.current.scale.z = THREE.MathUtils.lerp(mouthMeshRef.current.scale.z, base * 0.6, 0.08);
         mouthMat.opacity = THREE.MathUtils.lerp(mouthMat.opacity, 0.7, 0.06);
       }
     }
