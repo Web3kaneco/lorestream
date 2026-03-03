@@ -840,12 +840,13 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
 
       if (vol > 0.02) {
         // Speaking: jaw opens proportional to audio, mouth widens with formants
-        infl[jawIdx] = THREE.MathUtils.lerp(infl[jawIdx], jaw * 0.85, 0.45);
-        infl[wideIdx] = THREE.MathUtils.lerp(infl[wideIdx], width * 0.55, 0.35);
+        // Shape keys are focused on lips only (11.7mm max), so drive harder for visibility
+        infl[jawIdx] = THREE.MathUtils.lerp(infl[jawIdx], jaw * 1.1, 0.45);
+        infl[wideIdx] = THREE.MathUtils.lerp(infl[wideIdx], width * 0.7, 0.35);
       } else {
         // Idle: subtle breathing micro-animation keeps face alive
         const bp = Math.sin(t * 1.8) * 0.5 + 0.5;
-        infl[jawIdx] = THREE.MathUtils.lerp(infl[jawIdx], bp * 0.03, 0.06);
+        infl[jawIdx] = THREE.MathUtils.lerp(infl[jawIdx], bp * 0.04, 0.06);
         infl[wideIdx] = THREE.MathUtils.lerp(infl[wideIdx], 0, 0.06);
       }
     }
