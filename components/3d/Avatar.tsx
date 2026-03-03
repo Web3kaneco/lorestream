@@ -975,9 +975,9 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       if (vol > 0.02) {
         // Speaking: power curve softens the attack (less "forced" snap),
         // organic sine variation adds natural micro-movements
-        const jawTarget = Math.pow(jaw, 0.75) * 1.0
+        const jawTarget = Math.pow(jaw, 0.75) * 1.5
           + Math.sin(t * 5.3) * 0.025 + Math.sin(t * 8.7) * 0.012;
-        const wideTarget = Math.pow(width, 0.8) * 0.65
+        const wideTarget = Math.pow(width, 0.8) * 0.85
           + Math.sin(t * 4.1) * 0.015;
         // Slower lerp (0.25) = smoother motion, less snappy/robotic
         infl[jawIdx] = THREE.MathUtils.lerp(infl[jawIdx], Math.max(0, jawTarget), 0.25);
