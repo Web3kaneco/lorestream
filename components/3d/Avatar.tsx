@@ -361,6 +361,11 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
   // Arm gesture blending (smooth idle↔talking transition)
   const armTalkBlendRef = useRef(0);
 
+  // Eye blink state
+  const blinkTimerRef = useRef(0);      // countdown to next blink
+  const blinkPhaseRef = useRef(0);      // 0=open, >0 = blinking (counts down)
+  const nextBlinkRef = useRef(2 + Math.random() * 4); // time until next blink
+
   // ============================================================
   // EFFECT 1: Scan CLONE skeleton for bones
   // ============================================================
@@ -600,16 +605,26 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     // GROUP-LEVEL ANIMATION (never distorts mesh — moves whole model)
     // =======================================
     if (groupRef.current) {
-      const amp = hasRealAnimation ? 0.4 : 2.5;  // Reduced when real anim plays (avoid doubling body sway)
-      const breathY = Math.sin(t * 1.8) * 0.015 * amp;
-      const swayX = Math.sin(t * 0.6) * 0.012 * amp;
-      const lookY = Math.sin(t * 0.35) * 0.04 * amp;
-      const lateralX = Math.sin(t * 0.45) * 0.008 * amp;
+      if (hasRealAnimation) {
+        // Real animation drives body movement — only add tiny vertical breathing
+        const breathY = Math.sin(t * 1.8) * 0.003;
+        groupRef.current.position.y = -1 + breathY;
+        groupRef.current.position.x = 0;
+        groupRef.current.rotation.x = 0;
+        groupRef.current.rotation.y = 0;
+      } else {
+        // No animation clip — move the whole group for life-like sway
+        const amp = 2.5;
+        const breathY = Math.sin(t * 1.8) * 0.015 * amp;
+        const swayX = Math.sin(t * 0.6) * 0.012 * amp;
+        const lookY = Math.sin(t * 0.35) * 0.04 * amp;
+        const lateralX = Math.sin(t * 0.45) * 0.008 * amp;
 
-      groupRef.current.position.y = -1 + breathY;
-      groupRef.current.position.x = lateralX;
-      groupRef.current.rotation.x = swayX;
-      groupRef.current.rotation.y = lookY;
+        groupRef.current.position.y = -1 + breathY;
+        groupRef.current.position.x = lateralX;
+        groupRef.current.rotation.x = swayX;
+        groupRef.current.rotation.y = lookY;
+      }
     }
 
     // NOTE: mixer.update(delta) already called by drei's useAnimations
@@ -919,6 +934,43 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       // Keep relaxedHands morph target locked at 1.0 (finger curl shape key)
       const relaxedIdx = dict['relaxedHands'];
       if (relaxedIdx !== undefined) infl[relaxedIdx] = 1.0;
+
+      // ---- Random eye blinks ----
+      const eyesIdx = dict['eyesClosed'];
+      if (eyesIdx !== undefined) {
+        blinkTimerRef.current += 1 / 60; // ~60fps
+        if (blinkPhaseRef.current > 0) {
+          // Currently blinking: quick close then open (total ~0.15s)
+          blinkPhaseRef.current -= 1 / 60;
+          const halfBlink = 0.075; // half of blink duration
+          const remaining = blinkPhaseRef.current;
+          const blinkDuration = 0.15;
+          const elapsed = blinkDuration - remaining;
+          // Triangle wave: 0→1→0 over blink duration
+          const blinkVal = elapsed < halfBlink
+            ? elapsed / halfBlink
+            : remaining / halfBlink;
+          infl[eyesIdx] = Math.max(0, Math.min(1, blinkVal));
+          if (blinkPhaseRef.current <= 0) {
+            blinkPhaseRef.current = 0;
+            infl[eyesIdx] = 0;
+            // Schedule next blink: 2-6 seconds, occasionally a double-blink
+            nextBlinkRef.current = 2 + Math.random() * 4;
+            blinkTimerRef.current = 0;
+          }
+        } else {
+          infl[eyesIdx] = 0;
+          if (blinkTimerRef.current >= nextBlinkRef.current) {
+            // Start a blink
+            blinkPhaseRef.current = 0.15;
+            blinkTimerRef.current = 0;
+            // 20% chance of double-blink (quick follow-up)
+            if (Math.random() < 0.2) {
+              nextBlinkRef.current = 0.3; // blink again quickly
+            }
+          }
+        }
+      }
 
       if (vol > 0.02) {
         // Speaking: power curve softens the attack (less "forced" snap),
