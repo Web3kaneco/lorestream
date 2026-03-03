@@ -600,7 +600,7 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     // GROUP-LEVEL ANIMATION (never distorts mesh — moves whole model)
     // =======================================
     if (groupRef.current) {
-      const amp = hasRealAnimation ? 1.0 : 2.5;
+      const amp = hasRealAnimation ? 0.4 : 2.5;  // Reduced when real anim plays (avoid doubling body sway)
       const breathY = Math.sin(t * 1.8) * 0.015 * amp;
       const swayX = Math.sin(t * 0.6) * 0.012 * amp;
       const lookY = Math.sin(t * 0.35) * 0.04 * amp;
@@ -784,17 +784,20 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     }
 
     // =======================================
-    // HEAD/NECK IDLE ANIMATION
+    // HEAD/NECK IDLE ANIMATION — only for models WITHOUT real animation clips
+    // When a real animation is playing, the mixer already drives head/neck bones.
     // =======================================
-    if (neckBoneRef.current) {
-      if (!neckBaseRotRef.current) neckBaseRotRef.current = neckBoneRef.current.rotation.clone();
-      neckBoneRef.current.rotation.y = neckBaseRotRef.current.y + Math.sin(t * 0.7) * 0.15;
-      neckBoneRef.current.rotation.x = neckBaseRotRef.current.x + Math.sin(t * 1.0) * 0.08;
-    }
-    if (headBoneRef.current) {
-      if (!headBaseRotRef.current) headBaseRotRef.current = headBoneRef.current.rotation.clone();
-      headBoneRef.current.rotation.z = headBaseRotRef.current.z + Math.sin(t * 1.3) * 0.12;
-      headBoneRef.current.rotation.x = headBaseRotRef.current.x + Math.sin(t * 0.8) * 0.06;
+    if (!hasRealAnimation) {
+      if (neckBoneRef.current) {
+        if (!neckBaseRotRef.current) neckBaseRotRef.current = neckBoneRef.current.rotation.clone();
+        neckBoneRef.current.rotation.y = neckBaseRotRef.current.y + Math.sin(t * 0.7) * 0.15;
+        neckBoneRef.current.rotation.x = neckBaseRotRef.current.x + Math.sin(t * 1.0) * 0.08;
+      }
+      if (headBoneRef.current) {
+        if (!headBaseRotRef.current) headBaseRotRef.current = headBoneRef.current.rotation.clone();
+        headBoneRef.current.rotation.z = headBaseRotRef.current.z + Math.sin(t * 1.3) * 0.12;
+        headBoneRef.current.rotation.x = headBaseRotRef.current.x + Math.sin(t * 0.8) * 0.06;
+      }
     }
 
     // =======================================
@@ -891,8 +894,8 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       }
     }
 
-    // Speech head gestures
-    if (headBoneRef.current && headBaseRotRef.current && vol > 0.05) {
+    // Speech head gestures — adds on top of either animation or manual idle override
+    if (headBoneRef.current && vol > 0.05) {
       headBoneRef.current.rotation.x += jaw * 0.012;
       headBoneRef.current.rotation.z += Math.sin(t * 6) * jaw * 0.006;
     }
