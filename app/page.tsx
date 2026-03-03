@@ -22,8 +22,8 @@ const Scene = dynamic(() => import('@/components/3d/Scene'), { ssr: false });
 type LandingState = 'LANDING' | 'INTERVIEW' | 'REDIRECT';
 
 const DEMO_MODELS = [
-  { url: '/kanecov1.glb', label: 'KANE' },
-  { url: '/WOW.glb', label: 'WOW' },
+  { url: '/kanecov1.glb', label: 'KANE', voiceName: 'Fenrir' },
+  { url: '/WOW.glb', label: 'WOW', voiceName: 'Aoede' },
 ] as const;
 
 interface CharacterLore {
@@ -96,11 +96,12 @@ export default function LandingPage() {
     }
   }, []);
 
-  // Architect config with callback wired in
+  // Architect config with callback + per-model voice
   const architectConfig = useMemo(() => ({
     ...ARCHITECT_CONFIG,
+    voiceName: DEMO_MODELS[demoModelIdx].voiceName,
     onToolCallback: handleArchitectToolCallback
-  }), [handleArchitectToolCallback]);
+  }), [handleArchitectToolCallback, demoModelIdx]);
 
   const {
     isConnected,

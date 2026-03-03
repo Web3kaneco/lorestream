@@ -176,11 +176,12 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
   const forearmLRestQ = useRef<THREE.Quaternion | null>(null);
   const forearmRRestQ = useRef<THREE.Quaternion | null>(null);
 
-  // Pre-computed arm relaxation quaternions (rotate arms down from T-pose)
-  const armFixL = useMemo(() => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), 0.85), []);
-  const armFixR = useMemo(() => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -0.85), []);
-  const forearmFixL = useMemo(() => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), 0.3), []);
-  const forearmFixR = useMemo(() => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -0.3), []);
+  // World-space computed arm fix quaternions (computed once in useFrame)
+  const armFixLRef = useRef<THREE.Quaternion | null>(null);
+  const armFixRRef = useRef<THREE.Quaternion | null>(null);
+  const forearmFixLRef = useRef<THREE.Quaternion | null>(null);
+  const forearmFixRRef = useRef<THREE.Quaternion | null>(null);
+  const armFixComputedRef = useRef(false);
 
   // Diagnostic frame counter
   const diagFrameRef = useRef(0);
@@ -203,8 +204,8 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
 
   // Synthetic mouth (for models without jaw/lip bones)
   const mouthMeshRef = useRef<THREE.Mesh | null>(null);
-  const mouthGeo = useMemo(() => { const g = new THREE.SphereGeometry(1, 16, 8); g.scale(1.5, 0.6, 0.5); return g; }, []);
-  const mouthMat = useMemo(() => new THREE.MeshBasicMaterial({ color: 0x1a0a0a, transparent: true, opacity: 0.85, depthWrite: false }), []);
+  const mouthGeo = useMemo(() => { const g = new THREE.SphereGeometry(1, 16, 8); g.scale(1.5, 0.8, 0.5); return g; }, []);
+  const mouthMat = useMemo(() => new THREE.MeshBasicMaterial({ color: 0x2a0808, transparent: true, opacity: 0.9, depthWrite: false }), []);
 
   // ============================================================
   // EFFECT 1: Scan CLONE skeleton for bones
@@ -235,6 +236,11 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     armRRestQ.current = null;
     forearmLRestQ.current = null;
     forearmRRestQ.current = null;
+    armFixLRef.current = null;
+    armFixRRef.current = null;
+    forearmFixLRef.current = null;
+    forearmFixRRef.current = null;
+    armFixComputedRef.current = false;
 
     const allBoneNames: string[] = [];
     const mouthBoneMap: Record<string, React.MutableRefObject<THREE.Bone | null>> = {
@@ -394,13 +400,16 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     const ws = new THREE.Vector3();
     headBoneRef.current.getWorldScale(ws);
     const avgS = (Math.abs(ws.x) + Math.abs(ws.y) + Math.abs(ws.z)) / 3;
-    const sz = Math.max(avgS * 0.04, 0.008);
+    // Scale mouth relative to head size — 6% of head for visibility
+    const sz = Math.max(avgS * 0.06, 0.012);
 
     const m = new THREE.Mesh(mouthGeo, mouthMat);
     m.name = 'SyntheticMouth';
-    m.scale.set(sz, sz * 0.1, sz);
-    m.position.set(0, -avgS * 0.04, avgS * 0.07);
+    m.scale.set(sz, sz * 0.15, sz * 0.8);
+    // Position: below center of head, forward-facing
+    m.position.set(0, -avgS * 0.05, avgS * 0.08);
     m.renderOrder = 1;
+    console.log(`%c[AVATAR] Synthetic mouth created: headScale=${avgS.toFixed(4)} mouthSize=${sz.toFixed(4)}`, 'color: #ff69b4; font-weight: bold');
 
     headBoneRef.current.add(m);
     mouthMeshRef.current = m;
@@ -447,19 +456,67 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     // NOTE: mixer.update(delta) already called by drei's useAnimations
 
     // =======================================
-    // T-POSE ARM FIX — applied AFTER mixer so we override
+    // ARM REST POSE — only for models WITHOUT animation clips
+    // Models WITH clips: the mixer drives arm bones naturally.
+    // Models WITHOUT clips: arms stay in bind pose (often T-pose or
+    // arms-up). We compute a world-space fix ONCE to bring arms to
+    // a natural hanging position, then apply it every frame.
     // =======================================
-    if (armLRef.current && armLRestQ.current) {
-      armLRef.current.quaternion.copy(armLRestQ.current).multiply(armFixL);
+    if (!hasRealAnimation && !armFixComputedRef.current && armLRef.current) {
+      // Helper: compute local quaternion to rotate bone's world Y-axis to target direction
+      const computeArmFix = (bone: THREE.Bone, targetDir: THREE.Vector3): THREE.Quaternion => {
+        bone.updateWorldMatrix(true, false);
+        const worldQ = new THREE.Quaternion();
+        bone.getWorldQuaternion(worldQ);
+
+        // Bone's current world-space "along" direction (local Y in world)
+        const boneDir = new THREE.Vector3(0, 1, 0).applyQuaternion(worldQ);
+
+        // World-space rotation from current direction to target
+        const worldFix = new THREE.Quaternion().setFromUnitVectors(boneDir, targetDir);
+
+        // Convert world fix to local space:
+        // localFix = inv(parentWorldQ) * worldFix * parentWorldQ
+        const parentWQ = new THREE.Quaternion();
+        if (bone.parent) {
+          bone.parent.updateWorldMatrix(true, false);
+          bone.parent.getWorldQuaternion(parentWQ);
+        }
+        const parentInv = parentWQ.clone().invert();
+        return parentInv.multiply(worldFix).multiply(parentWQ);
+      };
+
+      // NOTE: model is rotated -90° around Y in <primitive>, so
+      // model's "left" maps to world -X, model's "right" to world +X
+      // Target: arms hanging at ~25° from body (slightly outward, mostly down)
+      const targetL = new THREE.Vector3(-0.35, -0.85, 0.1).normalize();
+      const targetR = new THREE.Vector3(0.35, -0.85, 0.1).normalize();
+      const targetForeL = new THREE.Vector3(-0.15, -0.95, 0.15).normalize();
+      const targetForeR = new THREE.Vector3(0.15, -0.95, 0.15).normalize();
+
+      armFixLRef.current = computeArmFix(armLRef.current, targetL);
+      if (armRRef.current) armFixRRef.current = computeArmFix(armRRef.current, targetR);
+      if (forearmLRef.current) forearmFixLRef.current = computeArmFix(forearmLRef.current, targetForeL);
+      if (forearmRRef.current) forearmFixRRef.current = computeArmFix(forearmRRef.current, targetForeR);
+
+      armFixComputedRef.current = true;
+      console.log('%c[AVATAR] Computed world-space arm rest pose (no animation clips)', 'color: #ffa500; font-weight: bold');
     }
-    if (armRRef.current && armRRestQ.current) {
-      armRRef.current.quaternion.copy(armRRestQ.current).multiply(armFixR);
-    }
-    if (forearmLRef.current && forearmLRestQ.current) {
-      forearmLRef.current.quaternion.copy(forearmLRestQ.current).multiply(forearmFixL);
-    }
-    if (forearmRRef.current && forearmRRestQ.current) {
-      forearmRRef.current.quaternion.copy(forearmRRestQ.current).multiply(forearmFixR);
+
+    // Apply arm fix (only when no real animation)
+    if (!hasRealAnimation && armFixComputedRef.current) {
+      if (armLRef.current && armLRestQ.current && armFixLRef.current) {
+        armLRef.current.quaternion.copy(armLRestQ.current).multiply(armFixLRef.current);
+      }
+      if (armRRef.current && armRRestQ.current && armFixRRef.current) {
+        armRRef.current.quaternion.copy(armRRestQ.current).multiply(armFixRRef.current);
+      }
+      if (forearmLRef.current && forearmLRestQ.current && forearmFixLRef.current) {
+        forearmLRef.current.quaternion.copy(forearmLRestQ.current).multiply(forearmFixLRef.current);
+      }
+      if (forearmRRef.current && forearmRRestQ.current && forearmFixRRef.current) {
+        forearmRRef.current.quaternion.copy(forearmRRestQ.current).multiply(forearmFixRRef.current);
+      }
     }
 
     // =======================================
@@ -558,15 +615,18 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       if (!mouthMeshRef.current.userData.baseSize) mouthMeshRef.current.userData.baseSize = base;
 
       if (vol > 0.02) {
-        mouthMeshRef.current.scale.y = THREE.MathUtils.lerp(mouthMeshRef.current.scale.y, base * (0.15 + jaw * 2.0), 0.5);
-        mouthMeshRef.current.scale.x = THREE.MathUtils.lerp(mouthMeshRef.current.scale.x, base * (0.7 + width * 0.8 + jaw * 0.2), 0.4);
-        mouthMeshRef.current.scale.z = THREE.MathUtils.lerp(mouthMeshRef.current.scale.z, base * (0.7 + jaw * 0.5 - width * 0.15), 0.35);
-        mouthMat.opacity = THREE.MathUtils.lerp(mouthMat.opacity, 0.92, 0.3);
+        // Speaking: mouth opens wide, scales with jaw/width
+        mouthMeshRef.current.scale.y = THREE.MathUtils.lerp(mouthMeshRef.current.scale.y, base * (0.3 + jaw * 2.5), 0.5);
+        mouthMeshRef.current.scale.x = THREE.MathUtils.lerp(mouthMeshRef.current.scale.x, base * (0.8 + width * 0.8 + jaw * 0.3), 0.4);
+        mouthMeshRef.current.scale.z = THREE.MathUtils.lerp(mouthMeshRef.current.scale.z, base * (0.6 + jaw * 0.4), 0.35);
+        mouthMat.opacity = THREE.MathUtils.lerp(mouthMat.opacity, 0.95, 0.35);
       } else {
-        mouthMeshRef.current.scale.y = THREE.MathUtils.lerp(mouthMeshRef.current.scale.y, base * 0.05, 0.08);
-        mouthMeshRef.current.scale.x = THREE.MathUtils.lerp(mouthMeshRef.current.scale.x, base * 0.7, 0.08);
-        mouthMeshRef.current.scale.z = THREE.MathUtils.lerp(mouthMeshRef.current.scale.z, base, 0.08);
-        mouthMat.opacity = THREE.MathUtils.lerp(mouthMat.opacity, 0.5, 0.04);
+        // Idle: subtle breathing animation keeps mouth visible as a thin line
+        const bp = Math.sin(t * 1.8) * 0.5 + 0.5;
+        mouthMeshRef.current.scale.y = THREE.MathUtils.lerp(mouthMeshRef.current.scale.y, base * (0.12 + bp * 0.05), 0.08);
+        mouthMeshRef.current.scale.x = THREE.MathUtils.lerp(mouthMeshRef.current.scale.x, base * 0.75, 0.08);
+        mouthMeshRef.current.scale.z = THREE.MathUtils.lerp(mouthMeshRef.current.scale.z, base * 0.7, 0.08);
+        mouthMat.opacity = THREE.MathUtils.lerp(mouthMat.opacity, 0.7, 0.06);
       }
     }
   });
