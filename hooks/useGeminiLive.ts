@@ -216,6 +216,12 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
       wsRef.current = ws;
 
       ws.onopen = () => {
+        // Guard: if this WS was superseded before it opened, close it immediately
+        if (wsRef.current !== ws) {
+          console.log('[WS] Stale onopen — closing superseded connection');
+          try { ws.close(); } catch(e) {}
+          return;
+        }
         console.log(`%c[WS] Connected! Sending setup with voice="${voiceName}"`, 'color: #00ff00; font-weight: bold');
         const setupMessage = {
           setup: {
@@ -242,6 +248,13 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
       };
 
       ws.onclose = (event) => {
+        // Guard: if a newer WebSocket is already active, don't touch shared state.
+        // This prevents the old connection's onclose from killing a new session.
+        if (wsRef.current && wsRef.current !== ws) {
+          console.log(`[WS] Stale onclose ignored (new session already active) code=${event.code}`);
+          return;
+        }
+
         console.warn(`[WS CLOSED] code=${event.code} reason=${event.reason || 'none'}`);
         wsRef.current = null;
         socketReadyRef.current = false;
@@ -269,6 +282,8 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
 
       // Message handler — delegates to modular hooks
       ws.onmessage = async (event) => {
+        // Guard: ignore messages from superseded connections
+        if (wsRef.current !== ws) return;
         try {
           let msgText = event.data;
           if (event.data instanceof Blob) msgText = await event.data.text();
