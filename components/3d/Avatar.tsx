@@ -801,6 +801,53 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     }
 
     // =======================================
+    // SPEECH GESTURE OVERLAY — natural arm movements when speaking
+    // Runs ON TOP of whatever the mixer produces (additive).
+    // Uses multi-frequency oscillators to create non-repetitive,
+    // organic gesture patterns that look like explaining/conversation.
+    // =======================================
+    if (hasRealAnimation && armLRef.current && armRRef.current) {
+      // Smooth blend: resting(0) ↔ gesturing(1)
+      const gestTarget = vol > 0.04 ? 1.0 : 0.0;
+      armTalkBlendRef.current = THREE.MathUtils.lerp(armTalkBlendRef.current, gestTarget, 0.03);
+      const gb = armTalkBlendRef.current;
+
+      if (gb > 0.005) {
+        // Slow "gesture phase" — shifts which arm is more active over ~6-10s
+        const gestPhase = Math.sin(t * 0.55) * 0.5 + 0.5; // 0→1→0 every ~11s
+        const gestPhaseR = 1.0 - gestPhase; // opposite arm
+
+        // Speech energy drives gesture amplitude (bigger jaw = bigger gesture)
+        const energy = Math.min(jaw * 1.5, 1.0);
+
+        // --- Left arm: explaining gesture (slight lift + outward) ---
+        const liftL = gb * gestPhase * energy * 0.08; // max ~4.6° lift
+        const outL = gb * gestPhase * energy * Math.sin(t * 1.3) * 0.04; // rhythmic outward
+        _e.set(liftL * 0.3, 0, -liftL); // lift = rotate around Z (arm goes up)
+        armLRef.current.quaternion.multiply(_q.setFromEuler(_e));
+
+        // Forearm: slight bend forward when gesturing
+        if (forearmLRef.current) {
+          const bendL = gb * gestPhase * energy * 0.06;
+          _e.set(bendL, outL, 0);
+          forearmLRef.current.quaternion.multiply(_q.setFromEuler(_e));
+        }
+
+        // --- Right arm: complementary gesture ---
+        const liftR = gb * gestPhaseR * energy * 0.06;
+        const outR = gb * gestPhaseR * energy * Math.sin(t * 1.7 + 2.0) * 0.03;
+        _e.set(liftR * 0.3, 0, liftR); // positive Z for right arm lift
+        armRRef.current.quaternion.multiply(_q.setFromEuler(_e));
+
+        if (forearmRRef.current) {
+          const bendR = gb * gestPhaseR * energy * 0.05;
+          _e.set(bendR, outR, 0);
+          forearmRRef.current.quaternion.multiply(_q.setFromEuler(_e));
+        }
+      }
+    }
+
+    // =======================================
     // DIAGNOSTIC LOGGING (~every 3 sec)
     // =======================================
     if (diagFrameRef.current % 180 === 1) {
