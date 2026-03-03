@@ -629,23 +629,22 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     const width = smoothWidthRef.current;
 
     // =======================================
-    // ARM REST POSE — only for models WITHOUT animation clips
-    // Models WITH clips: the mixer drives arm bones naturally.
-    // Models WITHOUT clips: arms stay in bind pose (often T-pose or
-    // arms-up). We compute a world-space fix ONCE to bring arms to
-    // a natural hanging position, then apply it every frame.
+    // ARM POSE SYSTEM — models WITHOUT animation clips
+    // Computes world-space fixes ONCE to bring arms from T-pose to
+    // a natural resting pose, then applies subtle dynamic offsets.
     // =======================================
     if (!hasRealAnimation && !armFixComputedRef.current && armLRef.current) {
-      // Helper: compute local quaternion fix using bone→forearm direction
-      // Uses the known forearm ref (not first child, which may be a twist bone)
-      const computeArmFix = (bone: THREE.Bone, forearmBone: THREE.Bone | null): THREE.Quaternion => {
+      // Helper: compute fix quaternion to rotate a bone's direction toward a target
+      const computeBoneFix = (
+        bone: THREE.Bone,
+        childBoneHint: THREE.Bone | null,
+        targetDir: THREE.Vector3,
+        strength: number
+      ): THREE.Quaternion => {
         bone.updateWorldMatrix(true, true);
 
-        // Use forearm ref if available — twist bones (UpperarmTwist01) are too close
-        // to give a meaningful direction vector
-        let childBone: THREE.Bone | undefined = forearmBone || undefined;
+        let childBone: THREE.Bone | undefined = childBoneHint || undefined;
         if (!childBone) {
-          // Fallback: find a non-twist child bone
           childBone = bone.children.find(c => {
             if (!(c as THREE.Bone).isBone) return false;
             const n = c.name.toLowerCase();
@@ -653,13 +652,9 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
           }) as THREE.Bone | undefined;
         }
         if (!childBone) {
-          // Last resort: any bone child
           childBone = bone.children.find(c => (c as THREE.Bone).isBone) as THREE.Bone | undefined;
         }
-        if (!childBone) {
-          console.warn(`[AVATAR] Arm fix: no child bone for ${bone.name}`);
-          return new THREE.Quaternion(); // identity = no change
-        }
+        if (!childBone) return new THREE.Quaternion();
 
         const bonePos = new THREE.Vector3();
         const childPos = new THREE.Vector3();
@@ -667,91 +662,124 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
         childBone.getWorldPosition(childPos);
         const boneDir = childPos.clone().sub(bonePos).normalize();
 
-        // Derive "outward" from the bone's current horizontal direction
-        // (works regardless of model rotation — T-pose arms point sideways)
-        const horizontalDir = new THREE.Vector3(boneDir.x, 0, boneDir.z);
-        const hLen = horizontalDir.length();
-        if (hLen > 0.01) horizontalDir.divideScalar(hLen);
+        console.log(`[AVATAR] Bone fix ${bone.name}: child=${childBone.name} dir=(${boneDir.x.toFixed(3)}, ${boneDir.y.toFixed(3)}, ${boneDir.z.toFixed(3)}) → target=(${targetDir.x.toFixed(3)}, ${targetDir.y.toFixed(3)}, ${targetDir.z.toFixed(3)}) str=${strength}`);
 
-        // Target: mostly down, slightly outward + forward for natural resting pose
-        // (pure straight-down looks robotic; adding Z=0.2 gives natural slight-forward hang)
-        const target = new THREE.Vector3(
-          horizontalDir.x * 0.15,
-          -0.90,
-          0.20
-        ).normalize();
+        const worldFix = new THREE.Quaternion().setFromUnitVectors(boneDir, targetDir.clone().normalize());
+        worldFix.slerp(new THREE.Quaternion(), 1.0 - strength); // strength=0.95 → keep 95%
 
-        console.log(`[AVATAR] Arm fix ${bone.name}: child=${childBone.name} dir=(${boneDir.x.toFixed(3)}, ${boneDir.y.toFixed(3)}, ${boneDir.z.toFixed(3)}) → target=(${target.x.toFixed(3)}, ${target.y.toFixed(3)}, ${target.z.toFixed(3)})`);
-
-        // World-space rotation from current direction to target
-        const worldFix = new THREE.Quaternion().setFromUnitVectors(boneDir, target);
-
-        // Only apply 65% of the fix to avoid over-rotation
-        worldFix.slerp(new THREE.Quaternion(), 0.35);
-
-        // Convert to local space: localFix = inv(parentWorldQ) * worldFix * parentWorldQ
         const parentWQ = new THREE.Quaternion();
-        if (bone.parent) {
-          bone.parent.getWorldQuaternion(parentWQ);
-        }
+        if (bone.parent) bone.parent.getWorldQuaternion(parentWQ);
         const parentInv = parentWQ.clone().invert();
         return parentInv.multiply(worldFix).multiply(parentWQ);
       };
 
-      armFixLRef.current = computeArmFix(armLRef.current, forearmLRef.current);
-      if (armRRef.current) armFixRRef.current = computeArmFix(armRRef.current, forearmRRef.current);
-      // Skip forearm fix — they follow naturally after upper arm correction
-      forearmFixLRef.current = null;
-      forearmFixRRef.current = null;
+      // Detect outward direction from T-pose arm
+      const getArmOutward = (bone: THREE.Bone, childBone: THREE.Bone | null): THREE.Vector3 => {
+        bone.updateWorldMatrix(true, true);
+        const child = childBone || bone.children.find(c => (c as THREE.Bone).isBone) as THREE.Bone | undefined;
+        if (!child) return new THREE.Vector3(1, 0, 0);
+        const bp = new THREE.Vector3(); const cp = new THREE.Vector3();
+        bone.getWorldPosition(bp); child.getWorldPosition(cp);
+        const dir = cp.clone().sub(bp).normalize();
+        return new THREE.Vector3(dir.x, 0, dir.z).normalize();
+      };
+
+      // Upper arms: hang nearly straight down, tiny outward angle
+      const outL = getArmOutward(armLRef.current, forearmLRef.current);
+      armFixLRef.current = computeBoneFix(
+        armLRef.current, forearmLRef.current,
+        new THREE.Vector3(outL.x * 0.06, -0.98, 0.08), // Nearly straight down
+        0.95 // 95% application (was 65%)
+      );
+      if (armRRef.current) {
+        const outR = getArmOutward(armRRef.current, forearmRRef.current);
+        armFixRRef.current = computeBoneFix(
+          armRRef.current, forearmRRef.current,
+          new THREE.Vector3(outR.x * 0.06, -0.98, 0.08),
+          0.95
+        );
+      }
+
+      // Apply upper arm fixes first, then compute forearm fixes
+      // (forearm world direction changes after upper arm is rotated)
+      if (armLRef.current && armLRestQ.current && armFixLRef.current) {
+        armLRef.current.quaternion.copy(armLRestQ.current).premultiply(armFixLRef.current);
+        armLRef.current.updateWorldMatrix(true, true);
+      }
+      if (armRRef.current && armRRestQ.current && armFixRRef.current) {
+        armRRef.current.quaternion.copy(armRRestQ.current).premultiply(armFixRRef.current);
+        armRRef.current.updateWorldMatrix(true, true);
+      }
+
+      // Forearms: slight forward bend for natural elbow angle
+      if (forearmLRef.current) {
+        forearmFixLRef.current = computeBoneFix(
+          forearmLRef.current, null,
+          new THREE.Vector3(0.15, -0.75, 0.65), // Forward + slightly inward
+          0.40
+        );
+      }
+      if (forearmRRef.current) {
+        forearmFixRRef.current = computeBoneFix(
+          forearmRRef.current, null,
+          new THREE.Vector3(-0.15, -0.75, 0.65), // Forward + slightly inward (mirrored)
+          0.40
+        );
+      }
+
+      // Restore rest quaternions for upper arms (will be re-applied each frame)
+      if (armLRef.current && armLRestQ.current) armLRef.current.quaternion.copy(armLRestQ.current);
+      if (armRRef.current && armRRestQ.current) armRRef.current.quaternion.copy(armRRestQ.current);
 
       armFixComputedRef.current = true;
-      console.log('%c[AVATAR] Computed arm rest pose (bone→child direction method)', 'color: #ffa500; font-weight: bold');
+      console.log('%c[AVATAR] Computed arm + forearm rest poses', 'color: #ffa500; font-weight: bold');
     }
 
-    // Apply arm fix + dynamic gestures (only when no real animation)
-    // Base fix brings arms from T-pose to resting; gestures add life on top.
+    // Apply arm poses + subtle dynamic offsets (only when no real animation)
     if (!hasRealAnimation && armFixComputedRef.current) {
       // Smooth blend: idle(0) ↔ talking(1)
       const talkTarget = vol > 0.03 ? 1.0 : 0.0;
       armTalkBlendRef.current = THREE.MathUtils.lerp(armTalkBlendRef.current, talkTarget, 0.04);
       const tb = armTalkBlendRef.current;
 
-      // --- Left upper arm ---
+      // --- Upper arms: base fix + very subtle offsets ---
       if (armLRef.current && armLRestQ.current && armFixLRef.current) {
         armLRef.current.quaternion.copy(armLRestQ.current).premultiply(armFixLRef.current);
-        // Idle: gentle breathing sway (slow, organic)
-        const idleZ = Math.sin(t * 0.4) * 0.04;
-        const idleX = Math.sin(t * 0.55 + 1.0) * 0.025;
-        // Talk: voice-driven gestures (asymmetric left emphasis)
-        const talkZ = Math.sin(t * 2.1) * jaw * 0.2 + Math.sin(t * 3.5) * vol * 0.08;
-        const talkX = Math.sin(t * 1.6 + 0.7) * jaw * 0.12;
-        _e.set(idleX + tb * talkX, 0, idleZ + tb * talkZ);
+        // Idle: barely perceptible weight shift (no rocking)
+        const idleZ = Math.sin(t * 0.3) * 0.012;
+        const idleX = Math.sin(t * 0.45 + 1.0) * 0.008;
+        // Talk: small emphasis gestures tied to speech energy
+        const talkZ = tb * Math.sin(t * 1.8) * jaw * 0.06;
+        const talkX = tb * jaw * 0.04; // Slight forward lift when speaking
+        _e.set(idleX + talkX, 0, idleZ + talkZ);
         armLRef.current.quaternion.multiply(_q.setFromEuler(_e));
       }
-
-      // --- Right upper arm (mirrored + phase offset for asymmetry) ---
       if (armRRef.current && armRRestQ.current && armFixRRef.current) {
         armRRef.current.quaternion.copy(armRRestQ.current).premultiply(armFixRRef.current);
-        const idleZ = Math.sin(t * 0.45 + 2.0) * 0.035;
-        const idleX = Math.sin(t * 0.5 + 2.5) * 0.02;
-        const talkZ = Math.sin(t * 1.8 + Math.PI) * jaw * 0.16 + Math.sin(t * 3.0 + 1.5) * vol * 0.06;
-        const talkX = Math.sin(t * 1.4 + 1.2) * jaw * 0.09;
-        _e.set(idleX + tb * talkX, 0, -(idleZ + tb * talkZ));
+        const idleZ = Math.sin(t * 0.35 + 2.0) * 0.010;
+        const idleX = Math.sin(t * 0.4 + 2.5) * 0.007;
+        const talkZ = tb * Math.sin(t * 1.5 + Math.PI) * jaw * 0.04;
+        const talkX = tb * jaw * 0.03;
+        _e.set(idleX + talkX, 0, -(idleZ + talkZ));
         armRRef.current.quaternion.multiply(_q.setFromEuler(_e));
       }
 
-      // --- Forearms: slight elbow bend + talk variation ---
-      if (forearmLRef.current && forearmLRestQ.current) {
-        forearmLRef.current.quaternion.copy(forearmLRestQ.current);
-        const bend = 0.15 + tb * jaw * 0.2 + Math.sin(t * 0.7) * 0.04;
-        _e.set(bend, 0, 0);
+      // --- Forearms: base elbow bend fix + tiny talk variation ---
+      if (forearmLRef.current && forearmLRestQ.current && forearmFixLRef.current) {
+        forearmLRef.current.quaternion.copy(forearmLRestQ.current).premultiply(forearmFixLRef.current);
+        const talkBend = tb * jaw * 0.03;
+        _e.set(talkBend, 0, 0);
         forearmLRef.current.quaternion.multiply(_q.setFromEuler(_e));
+      } else if (forearmLRef.current && forearmLRestQ.current) {
+        forearmLRef.current.quaternion.copy(forearmLRestQ.current);
       }
-      if (forearmRRef.current && forearmRRestQ.current) {
-        forearmRRef.current.quaternion.copy(forearmRRestQ.current);
-        const bend = 0.12 + tb * jaw * 0.16 + Math.sin(t * 0.65 + 0.5) * 0.035;
-        _e.set(bend, 0, 0);
+      if (forearmRRef.current && forearmRRestQ.current && forearmFixRRef.current) {
+        forearmRRef.current.quaternion.copy(forearmRRestQ.current).premultiply(forearmFixRRef.current);
+        const talkBend = tb * jaw * 0.025;
+        _e.set(talkBend, 0, 0);
         forearmRRef.current.quaternion.multiply(_q.setFromEuler(_e));
+      } else if (forearmRRef.current && forearmRRestQ.current) {
+        forearmRRef.current.quaternion.copy(forearmRRestQ.current);
       }
     }
 
