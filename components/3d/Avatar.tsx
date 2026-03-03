@@ -234,16 +234,9 @@ function createMouthMorphTargets(mesh: THREE.SkinnedMesh): boolean {
   return true;
 }
 
-// Shared animation library path — kanecov1 uses the same Tripo skeleton
-// as other Tripo models (Root, Hip, L_Upperarm, etc.) so its full-body
-// animations can be reused for any model with compatible bone names.
-const SHARED_ANIM_LIB = '/kanecov1.glb';
-
 export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarProps) {
   const groupRef = useRef<THREE.Group>(null!);
   const { scene, animations } = useGLTF(modelUrl);
-  // Pre-load shared animation library (animations only — mesh is ignored)
-  const { animations: sharedAnimLib } = useGLTF(SHARED_ANIM_LIB);
 
   // ============================================================
   // CRITICAL FIX #1: Clone scene with SkeletonUtils
@@ -270,22 +263,9 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     clone.traverse(c => { if ((c as THREE.Bone).isBone) boneNames.add(c.name); });
 
     // Filter out static clips and clone surviving ones
-    let realClips = animations
+    const realClips = animations
       .filter(clip => clip.duration > MIN_CLIP_DURATION)
       .map(clip => clip.clone());
-
-    // Fallback: if model has no real animations but uses Tripo skeleton,
-    // borrow body animations from shared library (same bone names)
-    if (realClips.length === 0 && sharedAnimLib.length > 0 && boneNames.has('L_Upperarm')) {
-      const shared = sharedAnimLib
-        .filter(clip => clip.duration > MIN_CLIP_DURATION)
-        .map(clip => clip.clone());
-      if (shared.length > 0) {
-        console.log(`%c[AVATAR] No embedded animations — loading ${shared.length} clips from shared Tripo library`,
-          'color: #d4af37; font-weight: bold');
-        realClips = shared;
-      }
-    }
 
     if (realClips.length > 0) {
       const count = repairTrackNames(realClips, boneNames);
@@ -310,7 +290,7 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     if (skipped > 0) console.log(`%c[AVATAR] Skipped ${skipped} static clips (<${MIN_CLIP_DURATION}s)`, 'color: #ff8800');
 
     return { repairedClips: realClips, hasRealAnimation: realClips.length > 0 };
-  }, [clone, animations, sharedAnimLib]);
+  }, [clone, animations]);
 
   // ============================================================
   // CRITICAL FIX #3: Use drei's useAnimations hook
@@ -954,6 +934,3 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     </group>
   );
 }
-
-// Preload shared animation library so it's ready when models need it
-useGLTF.preload(SHARED_ANIM_LIB);
