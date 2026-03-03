@@ -599,7 +599,7 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
         }
       }
 
-      const mouthInfo = mouthMeshRef.current ? `mouthY=${mouthMeshRef.current.scale.y.toFixed(4)} pos=(${mouthMeshRef.current.position.x.toFixed(2)},${mouthMeshRef.current.position.y.toFixed(2)},${mouthMeshRef.current.position.z.toFixed(2)})` : (hasFullMouthRigRef.current ? 'boneRig' : 'pending');
+      const mouthInfo = mouthMeshRef.current ? `mouthScaleY=${mouthMeshRef.current.scale.y.toFixed(4)} pos=(${mouthMeshRef.current.position.y.toFixed(2)})` : (hasFullMouthRigRef.current ? 'boneRig' : 'pending');
       console.log(`[AVATAR] f=${diagFrameRef.current} vol=${vol.toFixed(3)} jaw=${smoothJawRef.current.toFixed(3)} mouth=${mouthInfo} armL.q(${laQ}) hasRealAnim=${hasRealAnimation}`);
     }
 
@@ -671,7 +671,11 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
 
     // Lazy-create mouth mesh (frame 3+ ensures world matrices are valid)
     if (!mouthCreatedRef.current && !hasFullMouthRigRef.current && headBoneRef.current && groupRef.current && diagFrameRef.current >= 3) {
-      // Use model bounding box for sizing — much more reliable than bone.getWorldScale()
+      // Use model bounding box for BOTH sizing AND positioning.
+      // CRITICAL: In Tripo/exported models, skeleton bone positions are often
+      // offset from the visual mesh. The "Head" bone's world position may be
+      // near the feet while the visual head is at bbox.max.y. Using the bbox
+      // top-center gives us the actual visual head location.
       const bbox = new THREE.Box3().setFromObject(clone);
       const mh = bbox.max.y - bbox.min.y;
       modelHeightRef.current = mh;
@@ -683,28 +687,40 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       m.name = 'SyntheticMouth';
       m.scale.set(sz, sz * 0.2, sz * 0.5);
       m.renderOrder = 999;
+
+      // Position from bbox top-center (visual head location), NOT bone position
+      const topCenter = new THREE.Vector3(
+        (bbox.min.x + bbox.max.x) / 2,
+        bbox.max.y,
+        (bbox.min.z + bbox.max.z) / 2
+      );
+      groupRef.current.worldToLocal(topCenter);
+
+      // Offset: below model top for mouth level, forward for face surface
+      // In group-local: -Y = down, +Z = face forward (model has rotation={[0,-PI/2,0]})
+      m.position.set(
+        topCenter.x,
+        topCenter.y - mh * 0.08,   // ~8% below model top (mouth area on face)
+        topCenter.z + mh * 0.05    // ~5% forward (face surface depth)
+      );
+
       groupRef.current.add(m);
       mouthMeshRef.current = m;
       mouthCreatedRef.current = true;
 
-      console.log(`%c[AVATAR] Synthetic mouth created: modelHeight=${mh.toFixed(3)} mouthSize=${sz.toFixed(4)} bbox=(${bbox.min.y.toFixed(2)}→${bbox.max.y.toFixed(2)})`, 'color: #ff69b4; font-weight: bold');
-    }
-
-    // Update mouth position every frame (follows head bone) + animate scale
-    if (mouthMeshRef.current && headBoneRef.current && !hasFullMouthRigRef.current) {
-      // Get head bone world position, convert to group-local space
+      // Diagnostic: compare visual top vs bone position to show the offset
       const headWP = new THREE.Vector3();
       headBoneRef.current.getWorldPosition(headWP);
+      const headWorldY = headWP.y;
       groupRef.current.worldToLocal(headWP);
+      console.log(`%c[AVATAR] Synthetic mouth created: modelHeight=${mh.toFixed(3)} mouthSize=${sz.toFixed(4)} bbox=(${bbox.min.y.toFixed(2)}→${bbox.max.y.toFixed(2)})`, 'color: #ff69b4; font-weight: bold');
+      console.log(`  mouth pos=(${m.position.x.toFixed(3)}, ${m.position.y.toFixed(3)}, ${m.position.z.toFixed(3)}) bboxTop local=(${topCenter.x.toFixed(3)}, ${topCenter.y.toFixed(3)}, ${topCenter.z.toFixed(3)})`);
+      console.log(`  headBone worldY=${headWorldY.toFixed(3)} localY=${headWP.y.toFixed(3)} (offset from top: ${(topCenter.y - headWP.y).toFixed(3)})`);
+    }
 
-      // Position mouth below head center and forward toward camera
-      // In group-local space: -Y = down, +Z = face forward (model has rotation={[0, -PI/2, 0]})
-      const mh = modelHeightRef.current;
-      headWP.y -= mh * 0.025;   // ~4cm below head bone (chin area)
-      headWP.z += mh * 0.048;   // ~8cm forward (face surface)
-      mouthMeshRef.current.position.copy(headWP);
-
-      // Scale animation driven by viseme data
+    // Animate mouth scale (position is set once during creation from bbox top,
+    // moves naturally with group-level breathing/sway since mouth is group child)
+    if (mouthMeshRef.current && !hasFullMouthRigRef.current) {
       const base = mouthMeshRef.current.userData.baseSize || mouthMeshRef.current.scale.x;
       if (!mouthMeshRef.current.userData.baseSize) mouthMeshRef.current.userData.baseSize = base;
 
