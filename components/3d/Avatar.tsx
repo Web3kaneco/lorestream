@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { useGLTF } from '@react-three/drei';
+import { useGLTF, useAnimations } from '@react-three/drei';
+import { SkeletonUtils } from 'three-stdlib';
 import * as THREE from 'three';
 import type { VisemeData } from '@/hooks/useGeminiLive';
 
@@ -23,6 +24,7 @@ const CLIP_STATE_KEYWORDS: Record<AnimationState, string[]> = {
 };
 
 const CROSSFADE_DURATION = 0.4;
+const MIN_CLIP_DURATION = 0.1; // Clips shorter than this are "baked pose" (static)
 
 function categorizeClips(clips: THREE.AnimationClip[]): Map<AnimationState, THREE.AnimationClip> {
   const map = new Map<AnimationState, THREE.AnimationClip>();
@@ -81,11 +83,76 @@ function repairTrackNames(clips: THREE.AnimationClip[], boneNames: Set<string>):
 }
 
 export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarProps) {
-  const { scene, animations: modelAnimations } = useGLTF(modelUrl);
-
   const groupRef = useRef<THREE.Group>(null!);
+  const { scene, animations } = useGLTF(modelUrl);
 
-  // Bone refs — head, jaw, lip sync
+  // ============================================================
+  // CRITICAL FIX #1: Clone scene with SkeletonUtils
+  // useGLTF caches scenes — reusing the same Three.js scene object
+  // across React renders corrupts skeleton bindings (bone references
+  // get stale, boneInverses don't match). SkeletonUtils.clone()
+  // deep-clones the scene WITH proper skeleton re-binding.
+  // ============================================================
+  const clone = useMemo(() => {
+    const c = SkeletonUtils.clone(scene);
+    console.log('%c[AVATAR] Scene cloned via SkeletonUtils', 'color: #d4af37; font-weight: bold');
+    return c;
+  }, [scene]);
+
+  // ============================================================
+  // CRITICAL FIX #2: Clone + repair clips (never mutate cached originals)
+  // useGLTF caches animation clips too. repairTrackNames() mutates
+  // track names in-place — if we modify the cached clips, switching
+  // models and switching back produces double-repaired garbage names.
+  // Also filter out "baked pose" clips (<0.1s) that are static.
+  // ============================================================
+  const { repairedClips, hasRealAnimation } = useMemo(() => {
+    const boneNames = new Set<string>();
+    clone.traverse(c => { if ((c as THREE.Bone).isBone) boneNames.add(c.name); });
+
+    // Filter out static clips and clone surviving ones
+    const realClips = animations
+      .filter(clip => clip.duration > MIN_CLIP_DURATION)
+      .map(clip => clip.clone());
+
+    if (realClips.length > 0) {
+      const count = repairTrackNames(realClips, boneNames);
+      if (count > 0) console.log(`%c[AVATAR] Repaired ${count} track names`, 'color: #ffa500');
+
+      // Binding diagnostic
+      let bound = 0, total = 0;
+      for (const clip of realClips) {
+        for (const track of clip.tracks) {
+          total++;
+          const di = track.name.lastIndexOf('.');
+          const bn = di >= 0 ? track.name.substring(0, di) : track.name;
+          if (clone.getObjectByName(bn)) bound++;
+        }
+        console.log(`  Clip "${clip.name}" dur=${clip.duration.toFixed(2)}s tracks=${clip.tracks.length}`);
+      }
+      console.log(`%c[AVATAR] Track binding: ${bound}/${total} (${total > 0 ? (bound / total * 100).toFixed(0) : 0}%)`,
+        bound === total ? 'color: #00ff00; font-weight: bold' : 'color: #ffa500; font-weight: bold');
+    }
+
+    const skipped = animations.length - realClips.length;
+    if (skipped > 0) console.log(`%c[AVATAR] Skipped ${skipped} static clips (<${MIN_CLIP_DURATION}s)`, 'color: #ff8800');
+
+    return { repairedClips: realClips, hasRealAnimation: realClips.length > 0 };
+  }, [clone, animations]);
+
+  // ============================================================
+  // CRITICAL FIX #3: Use drei's useAnimations hook
+  // This is the standard, proven R3F animation pipeline.
+  // Internally it:
+  //   1. Creates AnimationMixer with useState (persistent)
+  //   2. Sets mixer._root = groupRef.current via useLayoutEffect
+  //      on EVERY render (keeps root synced with React reconciler)
+  //   3. Creates actions lazily via mixer.clipAction(clip, root)
+  //   4. Calls mixer.update(delta) in its own useFrame hook
+  // ============================================================
+  const { actions, mixer, names } = useAnimations(repairedClips, groupRef);
+
+  // ------- Bone refs -------
   const headBoneRef = useRef<THREE.Bone | null>(null);
   const neckBoneRef = useRef<THREE.Bone | null>(null);
   const jawBoneRef = useRef<THREE.Bone | null>(null);
@@ -115,9 +182,6 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
   const forearmFixL = useMemo(() => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), 0.3), []);
   const forearmFixR = useMemo(() => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -0.3), []);
 
-  // Lazy-init flag for skeleton bone remapping in useFrame
-  const skelInitDoneRef = useRef(false);
-
   // Diagnostic frame counter
   const diagFrameRef = useRef(0);
 
@@ -126,28 +190,27 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
   const smoothWidthRef = useRef(0);
   const smoothVolRef = useRef(0);
 
-  // Base rotations (captured once, used as anchor)
+  // Base rotations (captured once from bind pose, used as anchor for offsets)
   const headBaseRotRef = useRef<THREE.Euler | null>(null);
   const neckBaseRotRef = useRef<THREE.Euler | null>(null);
   const lipsLBaseRotRef = useRef<THREE.Euler | null>(null);
   const lipsRBaseRotRef = useRef<THREE.Euler | null>(null);
 
-  // AnimationMixer + clip management
-  const mixerRef = useRef<THREE.AnimationMixer | null>(null);
+  // Animation state tracking
   const clipMapRef = useRef<Map<AnimationState, THREE.AnimationClip>>(new Map());
   const currentActionRef = useRef<THREE.AnimationAction | null>(null);
   const currentAnimStateRef = useRef<AnimationState>('idle');
-  const hasClipAnimRef = useRef(false);
 
-  // Synthetic mouth
+  // Synthetic mouth (for models without jaw/lip bones)
   const mouthMeshRef = useRef<THREE.Mesh | null>(null);
   const mouthGeo = useMemo(() => { const g = new THREE.SphereGeometry(1, 16, 8); g.scale(1.5, 0.6, 0.5); return g; }, []);
   const mouthMat = useMemo(() => new THREE.MeshBasicMaterial({ color: 0x1a0a0a, transparent: true, opacity: 0.85, depthWrite: false }), []);
 
-  // =========================================================
-  // EFFECT 1: Scan skeleton for head/jaw/lip/arm bones
-  // =========================================================
+  // ============================================================
+  // EFFECT 1: Scan CLONE skeleton for bones
+  // ============================================================
   useEffect(() => {
+    // Reset all bone refs
     headBoneRef.current = null;
     neckBoneRef.current = null;
     jawBoneRef.current = null;
@@ -172,7 +235,6 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     armRRestQ.current = null;
     forearmLRestQ.current = null;
     forearmRRestQ.current = null;
-    skelInitDoneRef.current = false;
 
     const allBoneNames: string[] = [];
     const mouthBoneMap: Record<string, React.MutableRefObject<THREE.Bone | null>> = {
@@ -188,32 +250,41 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       'lipsL': lipsLRef, 'lipsR': lipsRRef,
     };
 
-    scene.traverse((child) => {
-      if ((child as THREE.Bone).isBone) {
-        const bone = child as THREE.Bone;
-        allBoneNames.push(bone.name);
-        const lname = bone.name.toLowerCase();
+    clone.traverse((child) => {
+      if (!(child as THREE.Bone).isBone) return;
+      const bone = child as THREE.Bone;
+      allBoneNames.push(bone.name);
+      const lname = bone.name.toLowerCase();
 
-        if (lname.includes('head') && !lname.includes('headtop') && !lname.includes('head_end') && !headBoneRef.current)
-          headBoneRef.current = bone;
-        if (lname.includes('neck') && !lname.includes('necklace') && !neckBoneRef.current)
-          neckBoneRef.current = bone;
-        if ((lname === 'jaw' || lname.includes('jaw') || lname.includes('chin') || lname.includes('mandible')) && !jawBoneRef.current)
-          jawBoneRef.current = bone;
-        if ((lname.includes('lips') || lname.includes('lip')) && !lname.includes('headtop')) {
-          if ((lname.includes('.l') || lname.includes('_l') || lname.includes('left')) && !lipsLRef.current) lipsLRef.current = bone;
-          if ((lname.includes('.r') || lname.includes('_r') || lname.includes('right')) && !lipsRRef.current) lipsRRef.current = bone;
-        }
+      // Head / Neck / Jaw detection
+      if (lname.includes('head') && !lname.includes('headtop') && !lname.includes('head_end') && !headBoneRef.current)
+        headBoneRef.current = bone;
+      if (lname.includes('neck') && !lname.includes('necklace') && !neckBoneRef.current)
+        neckBoneRef.current = bone;
+      if ((lname === 'jaw' || lname.includes('jaw') || lname.includes('chin') || lname.includes('mandible')) && !jawBoneRef.current)
+        jawBoneRef.current = bone;
 
-        // Exact match for Blender mouth rig
-        const mRef = mouthBoneMap[bone.name];
-        if (mRef) mRef.current = bone;
+      // Lip detection by pattern
+      if ((lname.includes('lips') || lname.includes('lip')) && !lname.includes('headtop')) {
+        if ((lname.includes('.l') || lname.includes('_l') || lname.includes('left') || lname.endsWith('l')) && !lipsLRef.current) lipsLRef.current = bone;
+        if ((lname.includes('.r') || lname.includes('_r') || lname.includes('right') || lname.endsWith('r')) && !lipsRRef.current) lipsRRef.current = bone;
+      }
 
-        // Arm bones (exact name match for Tripo convention)
-        if (bone.name === 'L_Upperarm') armLRef.current = bone;
-        if (bone.name === 'R_Upperarm') armRRef.current = bone;
-        if (bone.name === 'L_Forearm') forearmLRef.current = bone;
-        if (bone.name === 'R_Forearm') forearmRRef.current = bone;
+      // Exact-name mouth rig (overrides pattern matching)
+      const mRef = mouthBoneMap[bone.name];
+      if (mRef) mRef.current = bone;
+
+      // Arm bones — multi-convention support
+      const isLeft = lname.startsWith('l_') || lname.includes('left') || lname.includes('.l') || lname.includes('_l');
+      const isRight = lname.startsWith('r_') || lname.includes('right') || lname.includes('.r') || lname.includes('_r');
+
+      if (lname.includes('forearm') || lname.includes('fore_arm')) {
+        if (isLeft && !forearmLRef.current) forearmLRef.current = bone;
+        if (isRight && !forearmRRef.current) forearmRRef.current = bone;
+      } else if (lname.includes('upperarm') || lname.includes('upper_arm') ||
+                 (lname.includes('arm') && !lname.includes('forearm'))) {
+        if (isLeft && !armLRef.current) armLRef.current = bone;
+        if (isRight && !armRRef.current) armRRef.current = bone;
       }
     });
 
@@ -225,98 +296,59 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
 
     hasFullMouthRigRef.current = !!(jawBoneRef.current && lipsLRef.current && lipsRRef.current);
 
+    // SkinnedMesh diagnostics
     let skinnedCount = 0;
-    scene.traverse((child) => {
+    clone.traverse((child) => {
       if ((child as THREE.SkinnedMesh).isSkinnedMesh) {
         const sm = child as THREE.SkinnedMesh;
         skinnedCount++;
-        console.log(`  SkinnedMesh: "${sm.name}" skeleton.bones=${sm.skeleton?.bones.length ?? 0}`);
+        console.log(`  SkinnedMesh: "${sm.name}" bones=${sm.skeleton?.bones.length ?? 0} bindMode=${sm.bindMode}`);
       }
     });
 
-    console.log(`%c[AVATAR] ${allBoneNames.length} bones found, ${skinnedCount} SkinnedMesh(es)`, 'color: #d4af37; font-weight: bold');
+    console.log(`%c[AVATAR] ${allBoneNames.length} bones, ${skinnedCount} SkinnedMesh(es)`, 'color: #d4af37; font-weight: bold');
     console.log(`  Head=${headBoneRef.current?.name ?? 'MISS'} Neck=${neckBoneRef.current?.name ?? 'MISS'} Jaw=${jawBoneRef.current?.name ?? 'MISS'}`);
-    console.log(`  Arms: L=${armLRef.current?.name ?? 'MISS'} R=${armRRef.current?.name ?? 'MISS'}`);
+    console.log(`  Arms: L=${armLRef.current?.name ?? 'MISS'} R=${armRRef.current?.name ?? 'MISS'} ForeL=${forearmLRef.current?.name ?? 'MISS'} ForeR=${forearmRRef.current?.name ?? 'MISS'}`);
     console.log(`  MouthRig=${hasFullMouthRigRef.current ? 'FULL' : 'NONE'}`);
-  }, [scene]);
+    console.log(`  All bones: ${allBoneNames.join(', ')}`);
+  }, [clone]);
 
-  // =========================================================
-  // EFFECT 2: AnimationMixer (only if model has own clips)
-  // =========================================================
+  // ============================================================
+  // EFFECT 2: Play initial animation via drei actions
+  // drei's useAnimations creates actions lazily — accessing
+  // actions[name] calls mixer.clipAction(clip, groupRef.current)
+  // which properly binds tracks to the clone's bone hierarchy.
+  // ============================================================
   useEffect(() => {
-    if (mixerRef.current) {
-      mixerRef.current.stopAllAction();
-      mixerRef.current.uncacheRoot(scene);
-      mixerRef.current = null;
+    if (!hasRealAnimation || names.length === 0) return;
+
+    const clipMap = categorizeClips(repairedClips);
+    clipMapRef.current = clipMap;
+
+    const idleClip = clipMap.get('idle') || repairedClips[0];
+    const action = actions[idleClip.name];
+    if (action) {
+      action.reset();
+      action.setLoop(THREE.LoopRepeat, Infinity);
+      action.play();
+      currentActionRef.current = action;
+      currentAnimStateRef.current = 'idle';
+      console.log(`%c[AVATAR] Playing: "${idleClip.name}" via drei actions`, 'color: #00ff00; font-weight: bold');
     }
-    currentActionRef.current = null;
-    currentAnimStateRef.current = 'idle';
-    clipMapRef.current = new Map();
-    hasClipAnimRef.current = false;
+  }, [actions, names, repairedClips, hasRealAnimation]);
 
-    if (modelAnimations && modelAnimations.length > 0) {
-      const boneNames = new Set<string>();
-      scene.traverse((c) => { if ((c as THREE.Bone).isBone) boneNames.add(c.name); });
-      const repairedCount = repairTrackNames(modelAnimations, boneNames);
-      if (repairedCount > 0) console.log(`%c[AVATAR] Repaired ${repairedCount} track names`, 'color: #ffa500');
-
-      let totalBound = 0, totalUnbound = 0;
-      for (const clip of modelAnimations) {
-        let bound = 0, unbound = 0;
-        for (const track of clip.tracks) {
-          const di = track.name.lastIndexOf('.');
-          const bn = di >= 0 ? track.name.substring(0, di) : track.name;
-          if (scene.getObjectByName(bn)) { bound++; } else { unbound++; }
-        }
-        totalBound += bound;
-        totalUnbound += unbound;
-        console.log(`  Clip "${clip.name}" dur=${clip.duration.toFixed(2)}s bound=${bound}/${clip.tracks.length}`);
-      }
-
-      const bindRate = totalBound + totalUnbound > 0 ? (totalBound / (totalBound + totalUnbound) * 100).toFixed(0) : '0';
-      console.log(`%c[AVATAR] Track binding: ${totalBound}/${totalBound + totalUnbound} (${bindRate}%)`,
-        totalBound === 0 ? 'color: #ff4444; font-weight: bold' : 'color: #00ff00; font-weight: bold');
-
-      if (totalBound > 0) {
-        const mixer = new THREE.AnimationMixer(scene);
-        mixerRef.current = mixer;
-        hasClipAnimRef.current = true;
-
-        const clipMap = categorizeClips(modelAnimations);
-        clipMapRef.current = clipMap;
-
-        const idleClip = clipMap.get('idle') || modelAnimations[0];
-        const action = mixer.clipAction(idleClip);
-        action.setLoop(THREE.LoopRepeat, Infinity);
-        action.play();
-        currentActionRef.current = action;
-        console.log(`%c[AVATAR] Playing clip: "${idleClip.name}"`, 'color: #00ff00; font-weight: bold');
-      } else {
-        console.log(`%c[AVATAR] No tracks bound — using procedural animation`, 'color: #ff4444; font-weight: bold');
-      }
-    }
-
-    return () => {
-      if (mixerRef.current) {
-        mixerRef.current.stopAllAction();
-        mixerRef.current.uncacheRoot(scene);
-        mixerRef.current = null;
-      }
-    };
-  }, [scene, modelAnimations]);
-
-  // =========================================================
+  // ============================================================
   // EFFECT 3: Crossfade on animationState changes
-  // =========================================================
+  // ============================================================
   useEffect(() => {
-    if (!mixerRef.current || clipMapRef.current.size === 0) return;
+    if (!hasRealAnimation || clipMapRef.current.size === 0) return;
     if (animationState === currentAnimStateRef.current) return;
     const targetClip = clipMapRef.current.get(animationState);
     if (!targetClip) return;
 
-    const mixer = mixerRef.current;
     const prevAction = currentActionRef.current;
-    const nextAction = mixer.clipAction(targetClip);
+    const nextAction = actions[targetClip.name];
+    if (!nextAction) return;
 
     if (animationState === 'greeting') {
       nextAction.setLoop(THREE.LoopOnce, 1);
@@ -337,22 +369,24 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
         mixer.removeEventListener('finished', onDone);
         const idleClip = clipMapRef.current.get('idle');
         if (idleClip) {
-          const a = mixer.clipAction(idleClip);
-          a.reset();
-          a.setLoop(THREE.LoopRepeat, Infinity);
-          a.crossFadeFrom(nextAction, CROSSFADE_DURATION, true);
-          a.play();
-          currentActionRef.current = a;
-          currentAnimStateRef.current = 'idle';
+          const a = actions[idleClip.name];
+          if (a) {
+            a.reset();
+            a.setLoop(THREE.LoopRepeat, Infinity);
+            a.crossFadeFrom(nextAction, CROSSFADE_DURATION, true);
+            a.play();
+            currentActionRef.current = a;
+            currentAnimStateRef.current = 'idle';
+          }
         }
       };
       mixer.addEventListener('finished', onDone);
     }
-  }, [animationState]);
+  }, [animationState, hasRealAnimation, actions, mixer]);
 
-  // =========================================================
-  // EFFECT 4: Synthetic mouth (fallback for no mouth rig)
-  // =========================================================
+  // ============================================================
+  // EFFECT 4: Synthetic mouth (fallback for models without jaw/lip)
+  // ============================================================
   useEffect(() => {
     if (mouthMeshRef.current) { mouthMeshRef.current.removeFromParent(); mouthMeshRef.current = null; }
     if (hasFullMouthRigRef.current || !headBoneRef.current) return;
@@ -373,68 +407,32 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
 
     return () => {
       if (mouthMeshRef.current) { mouthMeshRef.current.removeFromParent(); mouthMeshRef.current = null; }
-      mouthGeo.dispose(); mouthMat.dispose();
     };
-  }, [scene, mouthGeo, mouthMat]);
+  }, [clone, mouthGeo, mouthMat]);
 
-  // =========================================================
-  // RENDER LOOP
-  // NOTE: Three.js v0.164 renderer auto-handles skeleton:
+  // ============================================================
+  // RENDER LOOP — Custom bone overrides on top of mixer
+  //
+  // ORDERING: drei's useAnimations registers its useFrame FIRST
+  // (when the hook was called above), so mixer.update(delta) runs
+  // BEFORE this callback. We apply overrides AFTER the mixer has
+  // set bone transforms from the animation clips.
+  //
+  // Three.js v0.164 renderer auto-handles skeleton:
   //   - Auto-creates boneTexture via skeleton.computeBoneTexture()
   //   - Auto-calls skeleton.update() every frame
   //   - Auto-uploads boneTexture to GPU
-  // We must NOT manually create boneTexture (wrong size breaks it!)
-  // We only: (1) update mixer, (2) modify bone transforms, (3) lip sync
-  // =========================================================
-  useFrame(({ clock }, delta) => {
+  // ============================================================
+  useFrame(({ clock }) => {
     const t = clock.getElapsedTime();
     const vol = smoothVolRef.current;
     diagFrameRef.current++;
 
     // =======================================
-    // LAZY SKELETON RE-MAP (once, for HMR resilience)
-    // Re-map bone refs from skeleton.bones after first render
-    // =======================================
-    if (!skelInitDoneRef.current && scene) {
-      let sm: THREE.SkinnedMesh | null = null;
-      scene.traverse((c: THREE.Object3D) => {
-        if ((c as THREE.SkinnedMesh).isSkinnedMesh && !sm) {
-          sm = c as THREE.SkinnedMesh;
-        }
-      });
-
-      if (sm) {
-        const skel = (sm as THREE.SkinnedMesh).skeleton;
-        const bonesMap = new Map<string, THREE.Bone>();
-        for (const bone of skel.bones) bonesMap.set(bone.name, bone);
-
-        // Re-map all bone refs from skeleton.bones (same objects as scene, confirmed)
-        const sArmL = bonesMap.get('L_Upperarm') ?? null;
-        const sArmR = bonesMap.get('R_Upperarm') ?? null;
-        const sForeL = bonesMap.get('L_Forearm') ?? null;
-        const sForeR = bonesMap.get('R_Forearm') ?? null;
-        if (sArmL) { armLRef.current = sArmL; armLRestQ.current = sArmL.quaternion.clone(); }
-        if (sArmR) { armRRef.current = sArmR; armRRestQ.current = sArmR.quaternion.clone(); }
-        if (sForeL) { forearmLRef.current = sForeL; forearmLRestQ.current = sForeL.quaternion.clone(); }
-        if (sForeR) { forearmRRef.current = sForeR; forearmRRestQ.current = sForeR.quaternion.clone(); }
-
-        const sHead = bonesMap.get('Head') ?? null;
-        const sNeck = bonesMap.get('NeckTwist01') ?? null;
-        const sJaw = bonesMap.get('jaw') ?? null;
-        if (sHead) { headBoneRef.current = sHead; headBaseRotRef.current = null; }
-        if (sNeck) { neckBoneRef.current = sNeck; neckBaseRotRef.current = null; }
-        if (sJaw) jawBoneRef.current = sJaw;
-
-        console.log(`%c[AVATAR] Skeleton ready: ${skel.bones.length} bones, boneTexture=${!!skel.boneTexture} (renderer will auto-create if null)`, 'color: #00ff00; font-weight: bold');
-        skelInitDoneRef.current = true;
-      }
-    }
-
-    // =======================================
-    // GROUP-LEVEL ANIMATION (never distorts mesh)
+    // GROUP-LEVEL ANIMATION (never distorts mesh — moves whole model)
     // =======================================
     if (groupRef.current) {
-      const amp = hasClipAnimRef.current ? 1.0 : 2.5;
+      const amp = hasRealAnimation ? 1.0 : 2.5;
       const breathY = Math.sin(t * 1.8) * 0.015 * amp;
       const swayX = Math.sin(t * 0.6) * 0.012 * amp;
       const lookY = Math.sin(t * 0.35) * 0.04 * amp;
@@ -446,16 +444,10 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       groupRef.current.rotation.y = lookY;
     }
 
-    // =======================================
-    // CLIP ANIMATION (mixer.update drives bone transforms)
-    // =======================================
-    if (mixerRef.current) {
-      mixerRef.current.update(delta);
-    }
+    // NOTE: mixer.update(delta) already called by drei's useAnimations
 
     // =======================================
     // T-POSE ARM FIX — applied AFTER mixer so we override
-    // Renderer will call updateMatrixWorld() + skeleton.update()
     // =======================================
     if (armLRef.current && armLRestQ.current) {
       armLRef.current.quaternion.copy(armLRestQ.current).multiply(armFixL);
@@ -484,15 +476,23 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       headBoneRef.current.rotation.x = headBaseRotRef.current.x + Math.sin(t * 0.8) * 0.06;
     }
 
-    // NOTE: No manual skeleton.update() or boneTexture.needsUpdate!
-    // Three.js v0.164 renderer handles both automatically.
-
     // =======================================
     // DIAGNOSTIC LOGGING (~every 3 sec)
     // =======================================
     if (diagFrameRef.current % 180 === 1) {
       const la = armLRef.current;
       const laQ = la ? `z=${la.quaternion.z.toFixed(3)} w=${la.quaternion.w.toFixed(3)}` : 'null';
+      // Check skeleton state on first diagnostic
+      if (diagFrameRef.current === 1) {
+        clone.traverse(c => {
+          if ((c as THREE.SkinnedMesh).isSkinnedMesh) {
+            const sm = c as THREE.SkinnedMesh;
+            const skel = sm.skeleton;
+            console.log(`%c[AVATAR] Runtime: boneTexture=${!!skel?.boneTexture} bones=${skel?.bones.length}`,
+              'color: #00ff00; font-weight: bold');
+          }
+        });
+      }
       console.log(`[AVATAR] f=${diagFrameRef.current} vol=${vol.toFixed(3)} jaw=${smoothJawRef.current.toFixed(3)} armL.q(${laQ})`);
     }
 
@@ -538,6 +538,7 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
         if (lipBottomLRef.current) lipBottomLRef.current.position.x = THREE.MathUtils.lerp(lipBottomLRef.current.position.x, cs * 0.5, 0.2);
         if (lipBottomRRef.current) lipBottomRRef.current.position.x = THREE.MathUtils.lerp(lipBottomRRef.current.position.x, -cs * 0.5, 0.2);
       } else {
+        // Idle breathing micro-animation for mouth
         const bp = Math.sin(t * 1.8) * 0.5 + 0.5;
         if (jawBoneRef.current) jawBoneRef.current.rotation.x = THREE.MathUtils.lerp(jawBoneRef.current.rotation.x, bp * 0.01, 0.06);
         if (lipsLRef.current && lipsLBaseRotRef.current) lipsLRef.current.rotation.y = THREE.MathUtils.lerp(lipsLRef.current.rotation.y, lipsLBaseRotRef.current.y + bp * 0.005, 0.05);
@@ -551,7 +552,7 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       headBoneRef.current.rotation.z += Math.sin(t * 6) * jaw * 0.006;
     }
 
-    // Synthetic mouth overlay
+    // Synthetic mouth overlay (for models without mouth bones)
     if (mouthMeshRef.current && !hasFullMouthRigRef.current) {
       const base = mouthMeshRef.current.userData.baseSize || mouthMeshRef.current.scale.x;
       if (!mouthMeshRef.current.userData.baseSize) mouthMeshRef.current.userData.baseSize = base;
@@ -572,7 +573,7 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
 
   return (
     <group ref={groupRef} position={[0, -1, 0]}>
-      <primitive object={scene} dispose={null} rotation={[0, -Math.PI / 2, 0]} />
+      <primitive object={clone} dispose={null} rotation={[0, -Math.PI / 2, 0]} />
     </group>
   );
 }
