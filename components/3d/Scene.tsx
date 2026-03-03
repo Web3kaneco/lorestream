@@ -25,8 +25,11 @@ export default function Scene({ modelUrl, volumeRef, animationState }: SceneProp
   >
       <Environment preset="city" />
       <Suspense fallback={null}>
-         {/* 2. Pass the data straight down into your flawless Avatar component */}
-         <Avatar modelUrl={modelUrl} volumeRef={volumeRef} animationState={animationState} />
+         {/* key={modelUrl} forces full remount per model — this is CRITICAL
+             because drei's useAnimations reuses the same AnimationMixer via useState.
+             On model switch, the mixer's PropertyBinding cache (keyed by rootUuid+trackName)
+             retains stale bindings pointing to the OLD clone's bones. Fresh mount = fresh mixer. */}
+         <Avatar key={modelUrl} modelUrl={modelUrl} volumeRef={volumeRef} animationState={animationState} />
       </Suspense>
       <OrbitControls enableZoom={false} enablePan={false} maxPolarAngle={Math.PI / 2 + 0.1} minPolarAngle={Math.PI / 3} />
     </Canvas>
