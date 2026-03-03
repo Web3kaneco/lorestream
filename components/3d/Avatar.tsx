@@ -9,6 +9,10 @@ import type { VisemeData } from '@/hooks/useGeminiLive';
 
 export type AnimationState = 'idle' | 'speaking' | 'thinking' | 'greeting';
 
+// Reusable temp objects — avoid GC churn in 60fps useFrame loop
+const _q = new THREE.Quaternion();
+const _e = new THREE.Euler();
+
 interface AvatarProps {
   modelUrl: string;
   volumeRef: React.MutableRefObject<VisemeData>;
@@ -354,6 +358,9 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
   const morphMeshRef = useRef<THREE.SkinnedMesh | null>(null);
   const hasMorphMouthRef = useRef(false);
 
+  // Arm gesture blending (smooth idle↔talking transition)
+  const armTalkBlendRef = useRef(0);
+
   // ============================================================
   // EFFECT 1: Scan CLONE skeleton for bones
   // ============================================================
@@ -608,6 +615,20 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     // NOTE: mixer.update(delta) already called by drei's useAnimations
 
     // =======================================
+    // FREQUENCY-DRIVEN LIP SYNC (computed early — used by arms + mouth)
+    // =======================================
+    const viseme = volumeRef.current;
+    const jawAlpha = viseme.jawOpen > smoothJawRef.current ? 0.5 : 0.12;
+    smoothJawRef.current += (viseme.jawOpen - smoothJawRef.current) * jawAlpha;
+    const widthAlpha = viseme.mouthWidth > smoothWidthRef.current ? 0.4 : 0.15;
+    smoothWidthRef.current += (viseme.mouthWidth - smoothWidthRef.current) * widthAlpha;
+    const volAlpha = viseme.volume > smoothVolRef.current ? 0.45 : 0.1;
+    smoothVolRef.current += (viseme.volume - smoothVolRef.current) * volAlpha;
+
+    const jaw = smoothJawRef.current;
+    const width = smoothWidthRef.current;
+
+    // =======================================
     // ARM REST POSE — only for models WITHOUT animation clips
     // Models WITH clips: the mixer drives arm bones naturally.
     // Models WITHOUT clips: arms stay in bind pose (often T-pose or
@@ -687,14 +708,50 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       console.log('%c[AVATAR] Computed arm rest pose (bone→child direction method)', 'color: #ffa500; font-weight: bold');
     }
 
-    // Apply arm fix (only when no real animation)
-    // CRITICAL: use premultiply — localFix * restQ (not restQ * localFix)
+    // Apply arm fix + dynamic gestures (only when no real animation)
+    // Base fix brings arms from T-pose to resting; gestures add life on top.
     if (!hasRealAnimation && armFixComputedRef.current) {
+      // Smooth blend: idle(0) ↔ talking(1)
+      const talkTarget = vol > 0.03 ? 1.0 : 0.0;
+      armTalkBlendRef.current = THREE.MathUtils.lerp(armTalkBlendRef.current, talkTarget, 0.04);
+      const tb = armTalkBlendRef.current;
+
+      // --- Left upper arm ---
       if (armLRef.current && armLRestQ.current && armFixLRef.current) {
         armLRef.current.quaternion.copy(armLRestQ.current).premultiply(armFixLRef.current);
+        // Idle: gentle breathing sway (slow, organic)
+        const idleZ = Math.sin(t * 0.4) * 0.04;
+        const idleX = Math.sin(t * 0.55 + 1.0) * 0.025;
+        // Talk: voice-driven gestures (asymmetric left emphasis)
+        const talkZ = Math.sin(t * 2.1) * jaw * 0.2 + Math.sin(t * 3.5) * vol * 0.08;
+        const talkX = Math.sin(t * 1.6 + 0.7) * jaw * 0.12;
+        _e.set(idleX + tb * talkX, 0, idleZ + tb * talkZ);
+        armLRef.current.quaternion.multiply(_q.setFromEuler(_e));
       }
+
+      // --- Right upper arm (mirrored + phase offset for asymmetry) ---
       if (armRRef.current && armRRestQ.current && armFixRRef.current) {
         armRRef.current.quaternion.copy(armRRestQ.current).premultiply(armFixRRef.current);
+        const idleZ = Math.sin(t * 0.45 + 2.0) * 0.035;
+        const idleX = Math.sin(t * 0.5 + 2.5) * 0.02;
+        const talkZ = Math.sin(t * 1.8 + Math.PI) * jaw * 0.16 + Math.sin(t * 3.0 + 1.5) * vol * 0.06;
+        const talkX = Math.sin(t * 1.4 + 1.2) * jaw * 0.09;
+        _e.set(idleX + tb * talkX, 0, -(idleZ + tb * talkZ));
+        armRRef.current.quaternion.multiply(_q.setFromEuler(_e));
+      }
+
+      // --- Forearms: slight elbow bend + talk variation ---
+      if (forearmLRef.current && forearmLRestQ.current) {
+        forearmLRef.current.quaternion.copy(forearmLRestQ.current);
+        const bend = 0.15 + tb * jaw * 0.2 + Math.sin(t * 0.7) * 0.04;
+        _e.set(bend, 0, 0);
+        forearmLRef.current.quaternion.multiply(_q.setFromEuler(_e));
+      }
+      if (forearmRRef.current && forearmRRestQ.current) {
+        forearmRRef.current.quaternion.copy(forearmRRestQ.current);
+        const bend = 0.12 + tb * jaw * 0.16 + Math.sin(t * 0.65 + 0.5) * 0.035;
+        _e.set(bend, 0, 0);
+        forearmRRef.current.quaternion.multiply(_q.setFromEuler(_e));
       }
     }
 
@@ -770,20 +827,6 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       console.log(`[AVATAR] f=${diagFrameRef.current} vol=${vol.toFixed(3)} jaw=${smoothJawRef.current.toFixed(3)} mouth=${mouthInfo} armL.q(${laQ}) hasRealAnim=${hasRealAnimation}`);
     }
 
-    // =======================================
-    // FREQUENCY-DRIVEN LIP SYNC
-    // =======================================
-    const viseme = volumeRef.current;
-    const jawAlpha = viseme.jawOpen > smoothJawRef.current ? 0.5 : 0.12;
-    smoothJawRef.current += (viseme.jawOpen - smoothJawRef.current) * jawAlpha;
-    const widthAlpha = viseme.mouthWidth > smoothWidthRef.current ? 0.4 : 0.15;
-    smoothWidthRef.current += (viseme.mouthWidth - smoothWidthRef.current) * widthAlpha;
-    const volAlpha = viseme.volume > smoothVolRef.current ? 0.45 : 0.1;
-    smoothVolRef.current += (viseme.volume - smoothVolRef.current) * volAlpha;
-
-    const jaw = smoothJawRef.current;
-    const width = smoothWidthRef.current;
-
     // Jaw bone
     if (jawBoneRef.current) {
       const amp = hasFullMouthRigRef.current ? 0.45 : 0.35;
@@ -839,15 +882,20 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       const wideIdx = dict['mouthWide'] ?? 1;
 
       if (vol > 0.02) {
-        // Speaking: jaw opens proportional to audio, mouth widens with formants
-        // Shape keys are focused on lips only (11.7mm max), so drive harder for visibility
-        infl[jawIdx] = THREE.MathUtils.lerp(infl[jawIdx], jaw * 1.1, 0.45);
-        infl[wideIdx] = THREE.MathUtils.lerp(infl[wideIdx], width * 0.7, 0.35);
+        // Speaking: power curve softens the attack (less "forced" snap),
+        // organic sine variation adds natural micro-movements
+        const jawTarget = Math.pow(jaw, 0.75) * 1.0
+          + Math.sin(t * 5.3) * 0.025 + Math.sin(t * 8.7) * 0.012;
+        const wideTarget = Math.pow(width, 0.8) * 0.65
+          + Math.sin(t * 4.1) * 0.015;
+        // Slower lerp (0.25) = smoother motion, less snappy/robotic
+        infl[jawIdx] = THREE.MathUtils.lerp(infl[jawIdx], Math.max(0, jawTarget), 0.25);
+        infl[wideIdx] = THREE.MathUtils.lerp(infl[wideIdx], Math.max(0, wideTarget), 0.22);
       } else {
         // Idle: subtle breathing micro-animation keeps face alive
         const bp = Math.sin(t * 1.8) * 0.5 + 0.5;
-        infl[jawIdx] = THREE.MathUtils.lerp(infl[jawIdx], bp * 0.04, 0.06);
-        infl[wideIdx] = THREE.MathUtils.lerp(infl[wideIdx], 0, 0.06);
+        infl[jawIdx] = THREE.MathUtils.lerp(infl[jawIdx], bp * 0.05, 0.06);
+        infl[wideIdx] = THREE.MathUtils.lerp(infl[wideIdx], bp * 0.01, 0.04);
       }
     }
   });
