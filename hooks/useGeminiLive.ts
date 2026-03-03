@@ -216,6 +216,7 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
       wsRef.current = ws;
 
       ws.onopen = () => {
+        console.log(`%c[WS] Connected! Sending setup with voice="${voiceName}"`, 'color: #00ff00; font-weight: bold');
         const setupMessage = {
           setup: {
             model: "models/gemini-2.5-flash-native-audio-preview-12-2025",
@@ -231,6 +232,13 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
         };
         ws.send(JSON.stringify(setupMessage));
         setIsConnected(true);
+
+        // Warn if handshake doesn't complete within 5 seconds
+        setTimeout(() => {
+          if (!socketReadyRef.current && wsRef.current === ws) {
+            console.warn('%c[WS] WARNING: setupComplete not received after 5s — API may be unresponsive. Check API key and model availability.', 'color: #ff6600; font-weight: bold');
+          }
+        }, 5000);
       };
 
       ws.onclose = (event) => {
@@ -393,9 +401,12 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
         });
         workletNodeRef.current = workletNode;
 
+        let micSendCount = 0;
         workletNode.port.onmessage = (event) => {
           if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || !socketReadyRef.current) return;
           const { pcmData } = event.data;
+          if (micSendCount === 0) console.log('%c[MIC] First audio chunk sent to Gemini', 'color: #00ff00');
+          micSendCount++;
 
           const bytes = new Uint8Array(pcmData.buffer);
           let binary = '';

@@ -463,59 +463,72 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     // a natural hanging position, then apply it every frame.
     // =======================================
     if (!hasRealAnimation && !armFixComputedRef.current && armLRef.current) {
-      // Helper: compute local quaternion to rotate bone's world Y-axis to target direction
-      const computeArmFix = (bone: THREE.Bone, targetDir: THREE.Vector3): THREE.Quaternion => {
-        bone.updateWorldMatrix(true, false);
-        const worldQ = new THREE.Quaternion();
-        bone.getWorldQuaternion(worldQ);
+      // Helper: compute local quaternion fix using ACTUAL bone→child direction
+      // (not local Y assumption which varies between skeleton conventions)
+      const computeArmFix = (bone: THREE.Bone): THREE.Quaternion => {
+        bone.updateWorldMatrix(true, true);
 
-        // Bone's current world-space "along" direction (local Y in world)
-        const boneDir = new THREE.Vector3(0, 1, 0).applyQuaternion(worldQ);
+        // Find child bone to determine actual bone direction
+        const childBone = bone.children.find(c => (c as THREE.Bone).isBone) as THREE.Bone | undefined;
+        if (!childBone) {
+          console.warn(`[AVATAR] Arm fix: no child bone for ${bone.name}`);
+          return new THREE.Quaternion(); // identity = no change
+        }
+
+        const bonePos = new THREE.Vector3();
+        const childPos = new THREE.Vector3();
+        bone.getWorldPosition(bonePos);
+        childBone.getWorldPosition(childPos);
+        const boneDir = childPos.clone().sub(bonePos).normalize();
+
+        // Derive "outward" from the bone's current horizontal direction
+        // (works regardless of model rotation — T-pose arms point sideways)
+        const horizontalDir = new THREE.Vector3(boneDir.x, 0, boneDir.z);
+        const hLen = horizontalDir.length();
+        if (hLen > 0.01) horizontalDir.divideScalar(hLen);
+
+        // Target: mostly down, slightly outward in current horizontal direction
+        const target = new THREE.Vector3(
+          horizontalDir.x * 0.25,
+          -0.92,
+          horizontalDir.z * 0.25
+        ).normalize();
+
+        console.log(`[AVATAR] Arm fix ${bone.name}: child=${childBone.name} dir=(${boneDir.x.toFixed(3)}, ${boneDir.y.toFixed(3)}, ${boneDir.z.toFixed(3)}) → target=(${target.x.toFixed(3)}, ${target.y.toFixed(3)}, ${target.z.toFixed(3)})`);
 
         // World-space rotation from current direction to target
-        const worldFix = new THREE.Quaternion().setFromUnitVectors(boneDir, targetDir);
+        const worldFix = new THREE.Quaternion().setFromUnitVectors(boneDir, target);
 
-        // Convert world fix to local space:
-        // localFix = inv(parentWorldQ) * worldFix * parentWorldQ
+        // Only apply 65% of the fix to avoid over-rotation
+        worldFix.slerp(new THREE.Quaternion(), 0.35);
+
+        // Convert to local space: localFix = inv(parentWorldQ) * worldFix * parentWorldQ
         const parentWQ = new THREE.Quaternion();
         if (bone.parent) {
-          bone.parent.updateWorldMatrix(true, false);
           bone.parent.getWorldQuaternion(parentWQ);
         }
         const parentInv = parentWQ.clone().invert();
         return parentInv.multiply(worldFix).multiply(parentWQ);
       };
 
-      // NOTE: model is rotated -90° around Y in <primitive>, so
-      // model's "left" maps to world -X, model's "right" to world +X
-      // Target: arms hanging at ~25° from body (slightly outward, mostly down)
-      const targetL = new THREE.Vector3(-0.35, -0.85, 0.1).normalize();
-      const targetR = new THREE.Vector3(0.35, -0.85, 0.1).normalize();
-      const targetForeL = new THREE.Vector3(-0.15, -0.95, 0.15).normalize();
-      const targetForeR = new THREE.Vector3(0.15, -0.95, 0.15).normalize();
-
-      armFixLRef.current = computeArmFix(armLRef.current, targetL);
-      if (armRRef.current) armFixRRef.current = computeArmFix(armRRef.current, targetR);
-      if (forearmLRef.current) forearmFixLRef.current = computeArmFix(forearmLRef.current, targetForeL);
-      if (forearmRRef.current) forearmFixRRef.current = computeArmFix(forearmRRef.current, targetForeR);
+      armFixLRef.current = computeArmFix(armLRef.current);
+      if (armRRef.current) armFixRRef.current = computeArmFix(armRRef.current);
+      // Skip forearm fix — they follow naturally after upper arm correction
+      forearmFixLRef.current = null;
+      forearmFixRRef.current = null;
 
       armFixComputedRef.current = true;
-      console.log('%c[AVATAR] Computed world-space arm rest pose (no animation clips)', 'color: #ffa500; font-weight: bold');
+      console.log('%c[AVATAR] Computed arm rest pose (bone→child direction method)', 'color: #ffa500; font-weight: bold');
     }
 
     // Apply arm fix (only when no real animation)
+    // CRITICAL: use premultiply — localFix * restQ (not restQ * localFix)
     if (!hasRealAnimation && armFixComputedRef.current) {
       if (armLRef.current && armLRestQ.current && armFixLRef.current) {
-        armLRef.current.quaternion.copy(armLRestQ.current).multiply(armFixLRef.current);
+        armLRef.current.quaternion.copy(armLRestQ.current).premultiply(armFixLRef.current);
       }
       if (armRRef.current && armRRestQ.current && armFixRRef.current) {
-        armRRef.current.quaternion.copy(armRRestQ.current).multiply(armFixRRef.current);
-      }
-      if (forearmLRef.current && forearmLRestQ.current && forearmFixLRef.current) {
-        forearmLRef.current.quaternion.copy(forearmLRestQ.current).multiply(forearmFixLRef.current);
-      }
-      if (forearmRRef.current && forearmRRestQ.current && forearmFixRRef.current) {
-        forearmRRef.current.quaternion.copy(forearmRRestQ.current).multiply(forearmFixRRef.current);
+        armRRef.current.quaternion.copy(armRRestQ.current).premultiply(armFixRRef.current);
       }
     }
 
@@ -539,18 +552,46 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     if (diagFrameRef.current % 180 === 1) {
       const la = armLRef.current;
       const laQ = la ? `z=${la.quaternion.z.toFixed(3)} w=${la.quaternion.w.toFixed(3)}` : 'null';
-      // Check skeleton state on first diagnostic
+
+      // Frame 1: initial skeleton check
       if (diagFrameRef.current === 1) {
         clone.traverse(c => {
           if ((c as THREE.SkinnedMesh).isSkinnedMesh) {
             const sm = c as THREE.SkinnedMesh;
             const skel = sm.skeleton;
-            console.log(`%c[AVATAR] Runtime: boneTexture=${!!skel?.boneTexture} bones=${skel?.bones.length}`,
+            console.log(`%c[AVATAR] f=1 "${sm.name}" boneTexture=${!!skel?.boneTexture} bones=${skel?.bones.length} bindMode=${sm.bindMode} visible=${sm.visible}`,
               'color: #00ff00; font-weight: bold');
           }
         });
       }
-      console.log(`[AVATAR] f=${diagFrameRef.current} vol=${vol.toFixed(3)} jaw=${smoothJawRef.current.toFixed(3)} armL.q(${laQ})`);
+
+      // Frame ~10+: deep skeleton verification (after renderer has had time to process)
+      if (diagFrameRef.current >= 10 && diagFrameRef.current < 20) {
+        clone.traverse(c => {
+          if ((c as THREE.SkinnedMesh).isSkinnedMesh) {
+            const sm = c as THREE.SkinnedMesh;
+            const skel = sm.skeleton;
+            const bt = skel?.boneTexture;
+            const btInfo = bt ? `${bt.image.width}x${bt.image.height}` : 'NONE';
+
+            // Verify skeleton bones are the SAME objects we're manipulating
+            const headBone = headBoneRef.current;
+            let headInSkeleton = false;
+            if (headBone && skel?.bones) {
+              headInSkeleton = skel.bones.some(b => b === headBone);
+            }
+
+            // Check if boneMatrices are changing
+            const bm = skel?.boneMatrices;
+            const sample = bm ? `[0..3]=${bm[0]?.toFixed(3)},${bm[1]?.toFixed(3)},${bm[2]?.toFixed(3)},${bm[3]?.toFixed(3)}` : 'null';
+
+            console.log(`%c[AVATAR] f=${diagFrameRef.current} DEEP: "${sm.name}" boneTexture=${btInfo} headInSkeleton=${headInSkeleton} boneMatrices=${sample} frustumCulled=${sm.frustumCulled}`,
+              bt ? 'color: #00ff00; font-weight: bold' : 'color: #ff0000; font-weight: bold');
+          }
+        });
+      }
+
+      console.log(`[AVATAR] f=${diagFrameRef.current} vol=${vol.toFixed(3)} jaw=${smoothJawRef.current.toFixed(3)} armL.q(${laQ}) hasRealAnim=${hasRealAnimation}`);
     }
 
     // =======================================
