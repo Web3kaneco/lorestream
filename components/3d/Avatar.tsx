@@ -82,6 +82,154 @@ function repairTrackNames(clips: THREE.AnimationClip[], boneNames: Set<string>):
   return repaired;
 }
 
+/**
+ * Create programmatic morph targets (jawOpen + mouthWide) for models
+ * that have no facial bones. Identifies head/mouth vertices by position
+ * and creates displacement morph attributes on the geometry.
+ * Works on the bind-pose vertex positions before skinning — deltas are
+ * applied by the GPU before bone transforms, so the jaw deforms naturally.
+ */
+function createMouthMorphTargets(mesh: THREE.SkinnedMesh): boolean {
+  const geo = mesh.geometry;
+  const posAttr = geo.getAttribute('position');
+  if (!posAttr) return false;
+  const count = posAttr.count;
+  if (count < 100) return false;
+
+  // 1. Compute bounding box from geometry positions (bind-pose / local space)
+  const bbox = new THREE.Box3();
+  const v = new THREE.Vector3();
+  for (let i = 0; i < count; i++) {
+    v.set(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i));
+    bbox.expandByPoint(v);
+  }
+  const totalH = bbox.max.y - bbox.min.y;
+  if (totalH < 0.01) return false;
+
+  // 2. Head region = top ~14% of model height
+  const headMinY = bbox.max.y - totalH * 0.14;
+
+  // 3. Collect head vertices + compute head bounding box
+  const headIdxs: number[] = [];
+  const headBbox = new THREE.Box3();
+  for (let i = 0; i < count; i++) {
+    const y = posAttr.getY(i);
+    if (y >= headMinY) {
+      headIdxs.push(i);
+      v.set(posAttr.getX(i), y, posAttr.getZ(i));
+      headBbox.expandByPoint(v);
+    }
+  }
+  if (headIdxs.length < 20) {
+    console.warn('[MORPH] Too few head vertices:', headIdxs.length);
+    return false;
+  }
+
+  const headCenter = new THREE.Vector3();
+  headBbox.getCenter(headCenter);
+  const headH = headBbox.max.y - headBbox.min.y;
+
+  // 4. Detect face-forward axis via extent asymmetry.
+  //    The nose protrudes, making one side extend further from centroid.
+  //    For Tripo models with rotation [0,-π/2,0], face forward = +X in bind pose.
+  const extPosX = headBbox.max.x - headCenter.x;
+  const extNegX = headCenter.x - headBbox.min.x;
+  const extPosZ = headBbox.max.z - headCenter.z;
+  const extNegZ = headCenter.z - headBbox.min.z;
+
+  const asymX = Math.abs(extPosX - extNegX);
+  const asymZ = Math.abs(extPosZ - extNegZ);
+
+  let faceAxis: 0 | 2;   // 0 = X axis, 2 = Z axis
+  let faceSign: 1 | -1;  // positive or negative direction
+  let lrAxis: 0 | 2;     // left-right axis (perpendicular to face)
+
+  if (asymX >= asymZ) {
+    faceAxis = 0;
+    faceSign = extPosX >= extNegX ? 1 : -1;
+    lrAxis = 2;
+  } else {
+    faceAxis = 2;
+    faceSign = extPosZ >= extNegZ ? 1 : -1;
+    lrAxis = 0;
+  }
+
+  const faceCenter = faceAxis === 0 ? headCenter.x : headCenter.z;
+  const faceExtent = faceAxis === 0
+    ? (faceSign > 0 ? extPosX : extNegX)
+    : (faceSign > 0 ? extPosZ : extNegZ);
+  const lrCenter = lrAxis === 0 ? headCenter.x : headCenter.z;
+
+  // 5. Mouth Y level: ~35% up from head bottom (chin/lips area)
+  const mouthY = headBbox.min.y + headH * 0.35;
+
+  // 6. Build morph target deltas
+  const jawDelta = new Float32Array(count * 3);
+  const wideDelta = new Float32Array(count * 3);
+  let jawVerts = 0, wideVerts = 0;
+
+  for (const i of headIdxs) {
+    const y = posAttr.getY(i);
+    const faceVal = faceAxis === 0 ? posAttr.getX(i) : posAttr.getZ(i);
+    const lrVal = lrAxis === 0 ? posAttr.getX(i) : posAttr.getZ(i);
+
+    // Frontness: 0 at centroid, 1 at face surface
+    const frontness = faceExtent > 0.001
+      ? ((faceVal - faceCenter) * faceSign) / faceExtent
+      : 0;
+    if (frontness < -0.1) continue; // back of head → skip
+
+    const frontFade = Math.max(Math.min((frontness + 0.1) / 0.6, 1), 0);
+
+    // JAW OPEN: pull lower-face vertices downward
+    const mouthUpper = mouthY + headH * 0.10;
+    if (y < mouthUpper) {
+      const downFactor = Math.min((mouthUpper - y) / (mouthUpper - headBbox.min.y), 1);
+      const eased = downFactor * downFactor; // quadratic for natural falloff
+      const disp = eased * frontFade * headH * 0.20; // 20% of head height max
+      jawDelta[i * 3 + 1] = -disp;
+      if (disp > 0.0001) jawVerts++;
+    }
+
+    // MOUTH WIDE: push mouth-level vertices apart horizontally
+    const yDist = Math.abs(y - mouthY);
+    if (yDist < headH * 0.15) {
+      const yFade = 1 - yDist / (headH * 0.15);
+      const lrOff = lrVal - lrCenter;
+      const disp = Math.sign(lrOff) * yFade * frontFade * headH * 0.08;
+      wideDelta[i * 3 + lrAxis] = disp;
+      if (Math.abs(disp) > 0.0001) wideVerts++;
+    }
+  }
+
+  if (jawVerts < 5) {
+    console.warn('[MORPH] Too few jaw vertices found:', jawVerts);
+    return false;
+  }
+
+  // 7. Attach morph attributes to geometry
+  const jawAttr = new THREE.Float32BufferAttribute(jawDelta, 3);
+  jawAttr.name = 'jawOpen';
+  const wideAttr = new THREE.Float32BufferAttribute(wideDelta, 3);
+  wideAttr.name = 'mouthWide';
+
+  geo.morphAttributes.position = [jawAttr, wideAttr];
+  geo.morphTargetsRelative = true;
+
+  mesh.updateMorphTargets();
+
+  // Force shader recompile to include morph target support
+  const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  mats.forEach(m => { (m as THREE.Material).needsUpdate = true; });
+
+  console.log(
+    `%c[MORPH] Created mouth morphs: headVerts=${headIdxs.length} jawVerts=${jawVerts} wideVerts=${wideVerts} ` +
+    `faceAxis=${faceAxis === 0 ? 'X' : 'Z'}${faceSign > 0 ? '+' : '-'} headH=${headH.toFixed(4)}`,
+    'color: #ff69b4; font-weight: bold'
+  );
+  return true;
+}
+
 export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarProps) {
   const groupRef = useRef<THREE.Group>(null!);
   const { scene, animations } = useGLTF(modelUrl);
@@ -202,13 +350,9 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
   const currentActionRef = useRef<THREE.AnimationAction | null>(null);
   const currentAnimStateRef = useRef<AnimationState>('idle');
 
-  // Synthetic mouth (for models without jaw/lip bones)
-  const mouthMeshRef = useRef<THREE.Mesh | null>(null);
-  const mouthGeo = useMemo(() => { const g = new THREE.SphereGeometry(1, 16, 8); g.scale(1.5, 0.8, 0.5); return g; }, []);
-  const mouthMat = useMemo(() => new THREE.MeshBasicMaterial({ color: 0x2a0808, transparent: true, opacity: 0.9, depthWrite: false }), []);
-  // Lazy-init synthetic mouth in useFrame (NOT useEffect) — world matrices must be valid
-  const mouthCreatedRef = useRef(false);
-  const modelHeightRef = useRef(0);
+  // Morph-target mouth (for models without jaw/lip bones)
+  const morphMeshRef = useRef<THREE.SkinnedMesh | null>(null);
+  const hasMorphMouthRef = useRef(false);
 
   // ============================================================
   // EFFECT 1: Scan CLONE skeleton for bones
@@ -244,6 +388,8 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     forearmFixLRef.current = null;
     forearmFixRRef.current = null;
     armFixComputedRef.current = false;
+    morphMeshRef.current = null;
+    hasMorphMouthRef.current = false;
 
     const allBoneNames: string[] = [];
     const mouthBoneMap: Record<string, React.MutableRefObject<THREE.Bone | null>> = {
@@ -323,6 +469,25 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     console.log(`  Arms: L=${armLRef.current?.name ?? 'MISS'} R=${armRRef.current?.name ?? 'MISS'} ForeL=${forearmLRef.current?.name ?? 'MISS'} ForeR=${forearmRRef.current?.name ?? 'MISS'}`);
     console.log(`  MouthRig=${hasFullMouthRigRef.current ? 'FULL' : 'NONE'}`);
     console.log(`  All bones: ${allBoneNames.join(', ')}`);
+
+    // Create programmatic mouth morph targets for models WITHOUT facial bones.
+    // This deforms the actual mesh geometry (jaw opens, mouth widens) instead
+    // of using a floating overlay. Works on the bind-pose vertices.
+    if (!hasFullMouthRigRef.current) {
+      let targetMesh: THREE.SkinnedMesh | null = null;
+      clone.traverse(c => {
+        if ((c as THREE.SkinnedMesh).isSkinnedMesh && !targetMesh) {
+          targetMesh = c as THREE.SkinnedMesh;
+        }
+      });
+      if (targetMesh) {
+        hasMorphMouthRef.current = createMouthMorphTargets(targetMesh);
+        if (hasMorphMouthRef.current) {
+          morphMeshRef.current = targetMesh;
+          console.log('%c[AVATAR] Programmatic mouth morph targets active', 'color: #00ff00; font-weight: bold');
+        }
+      }
+    }
   }, [clone]);
 
   // ============================================================
@@ -395,16 +560,6 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       mixer.addEventListener('finished', onDone);
     }
   }, [animationState, hasRealAnimation, actions, mixer]);
-
-  // Cleanup synthetic mouth on unmount (mouth is now created lazily in useFrame)
-  useEffect(() => {
-    return () => {
-      if (mouthMeshRef.current) {
-        mouthMeshRef.current.removeFromParent();
-        mouthMeshRef.current = null;
-      }
-    };
-  }, []);
 
   // ============================================================
   // RENDER LOOP — Custom bone overrides on top of mixer
@@ -599,7 +754,9 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
         }
       }
 
-      const mouthInfo = mouthMeshRef.current ? `mouthScaleY=${mouthMeshRef.current.scale.y.toFixed(4)} pos=(${mouthMeshRef.current.position.y.toFixed(2)})` : (hasFullMouthRigRef.current ? 'boneRig' : 'pending');
+      const mouthInfo = hasMorphMouthRef.current
+        ? `morphJaw=${morphMeshRef.current?.morphTargetInfluences?.[0]?.toFixed(3) ?? '?'} morphWide=${morphMeshRef.current?.morphTargetInfluences?.[1]?.toFixed(3) ?? '?'}`
+        : (hasFullMouthRigRef.current ? 'boneRig' : 'NONE');
       console.log(`[AVATAR] f=${diagFrameRef.current} vol=${vol.toFixed(3)} jaw=${smoothJawRef.current.toFixed(3)} mouth=${mouthInfo} armL.q(${laQ}) hasRealAnim=${hasRealAnimation}`);
     }
 
@@ -660,83 +817,21 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     }
 
     // =======================================
-    // SYNTHETIC MOUTH (for models WITHOUT mouth bones)
-    // Created LAZILY in useFrame (not useEffect) because:
-    //   - useEffect runs before Three.js computes world matrices
-    //   - bone.getWorldScale() returns 0 → mouth size = 0
-    //   - useFrame runs AFTER renderer has processed the scene
-    // Added to GROUP (not head bone) to avoid bone-local coordinate issues.
-    // Position updated every frame to follow head bone's world position.
+    // MORPH TARGET MOUTH (for models WITHOUT facial bones)
+    // Drives programmatic jawOpen + mouthWide morph targets that
+    // deform the actual mesh geometry. No overlays or floating objects.
     // =======================================
-
-    // Lazy-create mouth mesh (frame 3+ ensures world matrices are valid)
-    if (!mouthCreatedRef.current && !hasFullMouthRigRef.current && headBoneRef.current && groupRef.current && diagFrameRef.current >= 3) {
-      // Use model bounding box for BOTH sizing AND positioning.
-      // CRITICAL: In Tripo/exported models, skeleton bone positions are often
-      // offset from the visual mesh. The "Head" bone's world position may be
-      // near the feet while the visual head is at bbox.max.y. Using the bbox
-      // top-center gives us the actual visual head location.
-      const bbox = new THREE.Box3().setFromObject(clone);
-      const mh = bbox.max.y - bbox.min.y;
-      modelHeightRef.current = mh;
-
-      // Mouth width ~2.2% of model height → ~3.7cm for 1.7m model
-      const sz = Math.max(mh * 0.022, 0.015);
-
-      const m = new THREE.Mesh(mouthGeo, mouthMat);
-      m.name = 'SyntheticMouth';
-      m.scale.set(sz, sz * 0.2, sz * 0.5);
-      m.renderOrder = 999;
-
-      // Position from bbox top-center (visual head location), NOT bone position
-      const topCenter = new THREE.Vector3(
-        (bbox.min.x + bbox.max.x) / 2,
-        bbox.max.y,
-        (bbox.min.z + bbox.max.z) / 2
-      );
-      groupRef.current.worldToLocal(topCenter);
-
-      // Offset: below model top for mouth level, forward for face surface
-      // In group-local: -Y = down, +Z = face forward (model has rotation={[0,-PI/2,0]})
-      m.position.set(
-        topCenter.x,
-        topCenter.y - mh * 0.08,   // ~8% below model top (mouth area on face)
-        topCenter.z + mh * 0.05    // ~5% forward (face surface depth)
-      );
-
-      groupRef.current.add(m);
-      mouthMeshRef.current = m;
-      mouthCreatedRef.current = true;
-
-      // Diagnostic: compare visual top vs bone position to show the offset
-      const headWP = new THREE.Vector3();
-      headBoneRef.current.getWorldPosition(headWP);
-      const headWorldY = headWP.y;
-      groupRef.current.worldToLocal(headWP);
-      console.log(`%c[AVATAR] Synthetic mouth created: modelHeight=${mh.toFixed(3)} mouthSize=${sz.toFixed(4)} bbox=(${bbox.min.y.toFixed(2)}→${bbox.max.y.toFixed(2)})`, 'color: #ff69b4; font-weight: bold');
-      console.log(`  mouth pos=(${m.position.x.toFixed(3)}, ${m.position.y.toFixed(3)}, ${m.position.z.toFixed(3)}) bboxTop local=(${topCenter.x.toFixed(3)}, ${topCenter.y.toFixed(3)}, ${topCenter.z.toFixed(3)})`);
-      console.log(`  headBone worldY=${headWorldY.toFixed(3)} localY=${headWP.y.toFixed(3)} (offset from top: ${(topCenter.y - headWP.y).toFixed(3)})`);
-    }
-
-    // Animate mouth scale (position is set once during creation from bbox top,
-    // moves naturally with group-level breathing/sway since mouth is group child)
-    if (mouthMeshRef.current && !hasFullMouthRigRef.current) {
-      const base = mouthMeshRef.current.userData.baseSize || mouthMeshRef.current.scale.x;
-      if (!mouthMeshRef.current.userData.baseSize) mouthMeshRef.current.userData.baseSize = base;
-
+    if (hasMorphMouthRef.current && morphMeshRef.current?.morphTargetInfluences) {
+      const infl = morphMeshRef.current.morphTargetInfluences;
       if (vol > 0.02) {
-        // Speaking: mouth opens, scales with jaw/width
-        mouthMeshRef.current.scale.y = THREE.MathUtils.lerp(mouthMeshRef.current.scale.y, base * (0.4 + jaw * 2.0), 0.5);
-        mouthMeshRef.current.scale.x = THREE.MathUtils.lerp(mouthMeshRef.current.scale.x, base * (0.8 + width * 0.6 + jaw * 0.3), 0.4);
-        mouthMeshRef.current.scale.z = THREE.MathUtils.lerp(mouthMeshRef.current.scale.z, base * (0.6 + jaw * 0.4), 0.35);
-        mouthMat.opacity = THREE.MathUtils.lerp(mouthMat.opacity, 0.95, 0.35);
+        // Speaking: jaw opens proportional to audio, mouth widens with formants
+        infl[0] = THREE.MathUtils.lerp(infl[0], jaw * 0.85, 0.45);   // jawOpen
+        infl[1] = THREE.MathUtils.lerp(infl[1], width * 0.55, 0.35); // mouthWide
       } else {
-        // Idle: subtle breathing keeps mouth visible as a thin line
+        // Idle: subtle breathing micro-animation keeps face alive
         const bp = Math.sin(t * 1.8) * 0.5 + 0.5;
-        mouthMeshRef.current.scale.y = THREE.MathUtils.lerp(mouthMeshRef.current.scale.y, base * (0.15 + bp * 0.05), 0.08);
-        mouthMeshRef.current.scale.x = THREE.MathUtils.lerp(mouthMeshRef.current.scale.x, base * 0.8, 0.08);
-        mouthMeshRef.current.scale.z = THREE.MathUtils.lerp(mouthMeshRef.current.scale.z, base * 0.6, 0.08);
-        mouthMat.opacity = THREE.MathUtils.lerp(mouthMat.opacity, 0.7, 0.06);
+        infl[0] = THREE.MathUtils.lerp(infl[0], bp * 0.03, 0.06);
+        infl[1] = THREE.MathUtils.lerp(infl[1], 0, 0.06);
       }
     }
   });
