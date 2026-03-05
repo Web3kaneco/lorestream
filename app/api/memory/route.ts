@@ -13,9 +13,12 @@ export async function POST(req: Request) {
     const body = await req.json();
     const { agentId, userId, transcript, speaker } = body;
 
-    // 1. Strict transcript validation (catches spaces and empty strings)
+    // 1. Strict validation
     if (!transcript || typeof transcript !== 'string' || transcript.trim() === '') {
       return NextResponse.json({ error: "Missing or invalid transcript" }, { status: 400 });
+    }
+    if (!agentId || !userId) {
+      return NextResponse.json({ error: "Missing agentId or userId" }, { status: 400 });
     }
 
     const apiKey = process.env.NEXT_PUBLIC_GEMINI_KEY;
@@ -33,8 +36,11 @@ export async function POST(req: Request) {
       })
     });
 
+    if (!res.ok) {
+      throw new Error(`Gemini Embedding API returned HTTP ${res.status}`);
+    }
     const data = await res.json();
-    
+
     if (data.error) throw new Error(`Google API Error: ${data.error.message}`);
     
     // 🛠️ TYPE FIX 1: Explicitly tell TypeScript this is an array of numbers

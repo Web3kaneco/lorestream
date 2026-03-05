@@ -36,6 +36,9 @@ export async function POST(req: Request) {
       })
     });
 
+    if (!embeddingRes.ok) {
+      throw new Error(`Gemini Embedding API returned HTTP ${embeddingRes.status}`);
+    }
     const embeddingData = await embeddingRes.json();
 
     if (embeddingData.error) {
@@ -53,14 +56,11 @@ export async function POST(req: Request) {
     const index = getPinecone().Index('agent-memory');
     const namespace = index.namespace(`${userId}_${agentId}`);
 
+    // Namespace already isolates by user+agent, so no filter needed
     const queryResult = await namespace.query({
       vector,
       topK: 5,
       includeMetadata: true,
-      filter: {
-        userId: { $eq: String(userId) },
-        agentId: { $eq: String(agentId) }
-      }
     });
 
     // 3. Extract text from matches above relevance threshold
@@ -73,29 +73,6 @@ export async function POST(req: Request) {
           const speaker = match.metadata.speaker || 'unknown';
           const text = String(match.metadata.text);
           memories.push(`[${speaker}]: ${text}`);
-        }
-      }
-    }
-
-    // Also query without namespace for backwards compatibility with older records
-    if (memories.length === 0) {
-      const fallbackResult = await index.query({
-        vector,
-        topK: 5,
-        includeMetadata: true,
-        filter: {
-          userId: { $eq: String(userId) },
-          agentId: { $eq: String(agentId) }
-        }
-      });
-
-      if (fallbackResult.matches && fallbackResult.matches.length > 0) {
-        for (const match of fallbackResult.matches) {
-          if ((match.score ?? 0) >= MIN_SCORE && match.metadata?.text) {
-            const speaker = match.metadata.speaker || 'unknown';
-            const text = String(match.metadata.text);
-            memories.push(`[${speaker}]: ${text}`);
-          }
         }
       }
     }

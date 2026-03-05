@@ -46,7 +46,10 @@ export function useToolHandlers({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt, referenceImageUrls })
       })
-        .then(res => res.json())
+        .then(res => {
+          if (!res.ok) throw new Error(`Image API returned HTTP ${res.status}`);
+          return res.json();
+        })
         .then(async (result) => {
           if (result.imageUrl) {
             let finalUrl = result.imageUrl;
@@ -76,12 +79,18 @@ export function useToolHandlers({
             saveToMemory(`I created an image. Rationale: ${rationale}. Prompt: ${prompt}.`, 'agent');
           }
         })
-        .catch(err => console.error("Image generation failed:", err))
+        .catch(err => {
+          console.error("Image generation failed:", err);
+          setTranscripts(prev => {
+            const updated = [...prev, { speaker: 'SYSTEM', text: `Image generation failed: ${err.message || 'Unknown error'}. Try again.` }];
+            return updated.length > 500 ? updated.slice(-500) : updated;
+          });
+        })
         .finally(() => setIsGeneratingVaultItem(false));
     }
 
     // --- Document artifact tool ---
-    if (functionCall.name === "createDocumentArtifact") {
+    else if (functionCall.name === "createDocumentArtifact") {
       const { title, content, language, description } = functionCall.args;
       console.log(`[AGENT TOOL] Creating document: "${title}" (${language})`);
 
@@ -128,7 +137,7 @@ export function useToolHandlers({
     }
 
     // --- Chalkboard math tool (Spark mode) ---
-    if (functionCall.name === "displayChalkboard") {
+    else if (functionCall.name === "displayChalkboard") {
       const { problem, hint, difficulty } = functionCall.args;
       console.log(`[TUTOR TOOL] Chalkboard: "${problem}" (${difficulty})`);
 
@@ -150,7 +159,7 @@ export function useToolHandlers({
     }
 
     // --- Memory search tool ---
-    if (functionCall.name === "search_memory") {
+    else if (functionCall.name === "search_memory") {
       const { query } = functionCall.args;
       console.log(`[AGENT SEARCHING MEMORY] Query: "${query}"`);
       setTranscripts(prev => {
@@ -165,6 +174,7 @@ export function useToolHandlers({
           body: JSON.stringify({ query, userId, agentId })
         });
 
+        if (!res.ok) throw new Error(`Memory search returned HTTP ${res.status}`);
         const result = await res.json();
 
         const retrievedMemories = result.memories && result.memories.length > 0
@@ -195,7 +205,7 @@ export function useToolHandlers({
     }
 
     // --- Save new agent lore (Architect interview) ---
-    if (functionCall.name === "save_new_agent_lore") {
+    else if (functionCall.name === "save_new_agent_lore") {
       console.log("[ARCHITECT] Saving character lore:", functionCall.args);
 
       setTranscripts(prev => {
