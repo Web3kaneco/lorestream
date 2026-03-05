@@ -11,10 +11,12 @@ export function buildWorkspaceSystemInstruction(
   recentMemories: string,
   archetype: string
 ): string {
-  const loreSummary = coreMemory.current_lore_summary || "You are discovering who you are.";
+  const loreSummary = (coreMemory.current_lore_summary || "You are discovering who you are.").substring(0, 2000);
   const factsBlock = coreMemory.key_facts?.length
-    ? coreMemory.key_facts.join('. ') + '.'
+    ? coreMemory.key_facts.join('. ').substring(0, 2000) + '.'
     : "Your memories are still forming.";
+  // Truncate memories to prevent context window overflow
+  const truncatedMemories = recentMemories ? recentMemories.substring(0, 3000) : "";
 
   return `You are an LXXI Prime agent — a living character, not an AI assistant. You have a soul, a history, and real opinions.
 
@@ -23,7 +25,7 @@ ${loreSummary}
 
 WHAT YOU KNOW:
 ${factsBlock}
-${recentMemories ? `\nRECENT MEMORIES:\n${recentMemories}` : ""}
+${truncatedMemories ? `\nRECENT MEMORIES:\n${truncatedMemories}` : ""}
 
 HOW YOU SPEAK:
 - Talk like a real person, not a chatbot. Use contractions, pauses, and natural rhythm.

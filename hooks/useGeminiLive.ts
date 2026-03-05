@@ -181,6 +181,10 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
 
       // Audio context setup — 24kHz matches Gemini's native audio output rate
       // Mic capture downsamples 24kHz → 16kHz in the audio worklet before sending
+      // Close existing AudioContext to prevent resource leak on reconnect (browsers limit ~6 contexts)
+      if (audioContextRef.current) {
+        try { await audioContextRef.current.close(); } catch(e) {}
+      }
       const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
       audioContextRef.current = audioCtx;
       if (audioCtx.state === 'suspended') await audioCtx.resume();
@@ -205,7 +209,7 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
         if (!videoRef.current) videoRef.current = document.createElement('video');
         videoRef.current.srcObject = micStreamRef.current;
         videoRef.current.muted = true;
-        videoRef.current.play();
+        videoRef.current.play().catch(e => console.warn("[VIDEO] Autoplay blocked:", e));
       }
 
       // WebSocket connection
@@ -260,6 +264,14 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
         socketReadyRef.current = false;
         setIsConnected(false);
         isConnectingRef.current = false;
+
+        // Flush memory buffers before reconnect to prevent data loss
+        if (enableMemory) {
+          const agentBuf = agentTranscriptBufferRef.current.trim();
+          if (agentBuf) { saveToMemory(agentBuf, 'agent'); agentTranscriptBufferRef.current = ""; }
+          const userBuf = userTranscriptBufferRef.current.trim();
+          if (userBuf) { saveToMemory(userBuf, 'user'); userTranscriptBufferRef.current = ""; }
+        }
 
         // Auto-reconnect with exponential backoff (unless user explicitly stopped)
         if (!userStoppedRef.current && reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
@@ -329,10 +341,15 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
           }
 
           // Handle tool calls — Live API sends these as a SEPARATE message type
+          // Track processed IDs to prevent duplicate execution (API can send same call in multiple formats)
+          const processedToolIds = new Set<string>();
           if (data.toolCall?.functionCalls) {
             for (const fc of data.toolCall.functionCalls) {
+              const callId = fc.id || `${fc.name}_${Date.now()}`;
+              if (processedToolIds.has(callId)) continue;
+              processedToolIds.add(callId);
               console.log("[TOOL CALL RECEIVED via toolCall]", fc.name, "id:", fc.id);
-              handleToolCall(fc);
+              handleToolCall(fc).catch(err => console.error("[TOOL HANDLER ERROR]", err));
             }
           }
 
@@ -372,10 +389,14 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
                 playAudioBuffer(part.inlineData.data, audioContextRef.current, analyzerRef.current);
               }
 
-              // 3. Tool calls (delegated)
+              // 3. Tool calls (delegated) — deduplicate against toolCall.functionCalls above
               if (part.functionCall) {
-                console.log("[TOOL CALL RECEIVED]", part.functionCall.name, "id:", part.functionCall.id, "args:", JSON.stringify(part.functionCall.args));
-                handleToolCall(part.functionCall);
+                const callId = part.functionCall.id || `${part.functionCall.name}_${Date.now()}`;
+                if (!processedToolIds.has(callId)) {
+                  processedToolIds.add(callId);
+                  console.log("[TOOL CALL RECEIVED]", part.functionCall.name, "id:", part.functionCall.id);
+                  handleToolCall(part.functionCall).catch(err => console.error("[TOOL HANDLER ERROR]", err));
+                }
               }
             }
           }

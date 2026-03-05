@@ -1,12 +1,18 @@
 import { useCallback, useRef, useEffect } from 'react';
 
 export function useAgentMemory(agentId: string, userId: string) {
-  const abortControllerRef = useRef<AbortController | null>(null);
+  // Track all active controllers for proper cleanup (fixes race condition with single ref)
+  const activeControllersRef = useRef<Set<AbortController>>(new Set());
+  const lastSavedRef = useRef<string>('');
 
   const saveToMemory = useCallback(async (text: string, speaker: 'user' | 'agent') => {
     if (!text || text.trim() === '') return;
+    // Skip duplicate saves (same text within short window)
+    if (text === lastSavedRef.current) return;
+    lastSavedRef.current = text;
 
-    abortControllerRef.current = new AbortController();
+    const controller = new AbortController();
+    activeControllersRef.current.add(controller);
 
     const doFetch = async (attempt: number) => {
       try {
@@ -14,7 +20,7 @@ export function useAgentMemory(agentId: string, userId: string) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ agentId, userId, transcript: text, speaker }),
-          signal: abortControllerRef.current?.signal
+          signal: controller.signal
         });
 
         if (!res.ok) {
@@ -29,16 +35,19 @@ export function useAgentMemory(agentId: string, userId: string) {
           return doFetch(attempt + 1);
         }
         console.error("[MEMORY SAVE FAILED]", err);
+      } finally {
+        activeControllersRef.current.delete(controller);
       }
     };
 
-    doFetch(0);
+    doFetch(0).catch(() => {}); // Explicitly handle fire-and-forget
   }, [agentId, userId]);
 
-  // Abort any in-flight requests on unmount
+  // Abort ALL in-flight requests on unmount
   useEffect(() => {
     return () => {
-      abortControllerRef.current?.abort();
+      activeControllersRef.current.forEach(c => c.abort());
+      activeControllersRef.current.clear();
     };
   }, []);
 

@@ -62,7 +62,13 @@ async function handleStandardImageGeneration(prompt: string, quality?: string, s
     return NextResponse.json({ error: "No images generated" }, { status: 500 });
   }
 
-  const base64Data = response.generatedImages[0].image.imageBytes;
+  const generatedImage = response.generatedImages[0];
+  if (!generatedImage?.image?.imageBytes) {
+    console.error("[TOOL ENGINE] Image entry returned but no imageBytes (possible content policy block)");
+    return NextResponse.json({ error: "Image generation blocked or returned empty" }, { status: 500 });
+  }
+
+  const base64Data = generatedImage.image.imageBytes;
   const imageUrl = `data:image/png;base64,${base64Data}`;
 
   console.log(`[TOOL ENGINE] Image generated successfully via ${selectedQuality} (${selectedSize})`);
@@ -83,7 +89,8 @@ async function handleReferenceImageGeneration(prompt: string, referenceUrls: str
         return { inlineData: { mimeType, data } };
       }
       // For http(s) URLs, fetch and convert to base64
-      const res = await fetch(url);
+      const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+      if (!res.ok) throw new Error(`Failed to fetch reference image: HTTP ${res.status}`);
       const buffer = await res.arrayBuffer();
       const base64 = Buffer.from(buffer).toString('base64');
       const mimeType = res.headers.get('content-type') || 'image/png';
