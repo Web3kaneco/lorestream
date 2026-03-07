@@ -45,3 +45,9 @@ body {
   color: var(--text-primary, #e2e8f0);
   overflow: hidden;
 }
+
+/* Floating artifact entrance animation */
+@keyframes floatIn {
+  0% { opacity: 0; transform: scale(0.85) translateY(16px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}

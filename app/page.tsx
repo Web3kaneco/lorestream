@@ -48,7 +48,7 @@ export default function LandingPage() {
   const [characterLore, setCharacterLore] = useState<CharacterLore | null>(null);
   const [newAgentId, setNewAgentId] = useState<string | null>(null);
   const [showVault, setShowVault] = useState(false);
-  const [demoModelIdx, setDemoModelIdx] = useState(0);
+  const [demoModelIdx, setDemoModelIdx] = useState(1); // WOW = default (female voice + mouth morphs)
   const [uploadReady, setUploadReady] = useState(false);
   const [imageUploaded, setImageUploaded] = useState(false);
   const [isGenerating3D, setIsGenerating3D] = useState(false);
