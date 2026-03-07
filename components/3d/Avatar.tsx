@@ -476,10 +476,16 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       }
     });
 
-    console.log(`%c[AVATAR] ${allBoneNames.length} bones, ${skinnedCount} SkinnedMesh(es)`, 'color: #d4af37; font-weight: bold');
+    // Detect skeleton convention for diagnostics
+    const hasMixamo = allBoneNames.some(n => n.startsWith('mixamorig'));
+    const hasTripo = allBoneNames.some(n => /^[LR]_/.test(n));
+    const hasBlender = allBoneNames.some(n => n.includes('.'));
+    const convention = hasMixamo ? 'Mixamo' : hasTripo ? 'Tripo' : hasBlender ? 'Blender' : 'Unknown';
+
+    console.log(`%c[AVATAR] ${allBoneNames.length} bones (${convention} skeleton), ${skinnedCount} SkinnedMesh(es)`, 'color: #d4af37; font-weight: bold');
     console.log(`  Head=${headBoneRef.current?.name ?? 'MISS'} Neck=${neckBoneRef.current?.name ?? 'MISS'} Jaw=${jawBoneRef.current?.name ?? 'MISS'}`);
     console.log(`  Arms: L=${armLRef.current?.name ?? 'MISS'} R=${armRRef.current?.name ?? 'MISS'} ForeL=${forearmLRef.current?.name ?? 'MISS'} ForeR=${forearmRRef.current?.name ?? 'MISS'}`);
-    console.log(`  MouthRig=${hasFullMouthRigRef.current ? 'FULL' : 'NONE'}`);
+    console.log(`  MouthRig=${hasFullMouthRigRef.current ? 'FULL' : 'NONE (morph target fallback)'}`);
     console.log(`  All bones: ${allBoneNames.join(', ')}`);
 
     // Mouth animation for models WITHOUT facial bones:
