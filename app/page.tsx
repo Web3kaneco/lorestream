@@ -9,11 +9,7 @@ import { useGeminiLive } from '@/hooks/useGeminiLive';
 import { ARCHITECT_CONFIG } from '@/lib/agents/architect';
 import { DropZone } from '@/components/ui/DropZone';
 import { LoginButton } from '@/components/ui/LoginButton';
-import { ModeSwitcher } from '@/components/ui/ModeSwitcher';
-import { VoiceOrb } from '@/components/ui/VoiceOrb';
-import { HintArrow } from '@/components/ui/HintArrow';
 import { StepIndicator } from '@/components/ui/StepIndicator';
-import { AgentLibrary } from '@/components/AgentLibrary';
 import type { AnimationState } from '@/components/3d/Avatar';
 import dynamic from 'next/dynamic';
 
@@ -34,12 +30,24 @@ interface CharacterLore {
   key_facts: string[];
 }
 
-// Soul-building tips shown in the upload sidebar
-const SOUL_TIPS = [
-  { title: 'Give them a memory', desc: 'Tell The Architect a story from your character\'s past. Memories shape personality.' },
-  { title: 'Define their voice', desc: 'How do they speak? Formal? Playful? Give examples of phrases they\'d use.' },
-  { title: 'Set boundaries', desc: 'What topics matter to them? What do they avoid? Boundaries create depth.' },
-  { title: 'Build the relationship', desc: 'Explain how your character sees YOU. Are you partners? Student and mentor?' },
+// Manifesto principles — surfaced on the landing page
+const PRINCIPLES = [
+  {
+    title: 'Characters, Not Chatbots',
+    desc: 'Every agent has a soul — an archetype, a history, and opinions shaped by your conversations.',
+  },
+  {
+    title: 'Voice Carries Emotion',
+    desc: 'Real-time voice bridges intent with tone, rhythm, and feeling. Speak naturally.',
+  },
+  {
+    title: 'The Screen Delivers',
+    desc: '3D avatars, generated images, and code manifest from conversation in real time.',
+  },
+  {
+    title: 'Memory Makes Identity',
+    desc: 'Your agent remembers everything. Preferences, past work, inside jokes — all stored.',
+  },
 ] as const;
 
 export default function LandingPage() {
@@ -47,13 +55,11 @@ export default function LandingPage() {
   const [pageState, setPageState] = useState<LandingState>('LANDING');
   const [characterLore, setCharacterLore] = useState<CharacterLore | null>(null);
   const [newAgentId, setNewAgentId] = useState<string | null>(null);
-  const [showVault, setShowVault] = useState(false);
-  const [demoModelIdx, setDemoModelIdx] = useState(1); // WOW = default (female voice + mouth morphs)
+  const [demoModelIdx, setDemoModelIdx] = useState(1); // WOW = default
   const [uploadReady, setUploadReady] = useState(false);
   const [imageUploaded, setImageUploaded] = useState(false);
   const [isGenerating3D, setIsGenerating3D] = useState(false);
 
-  // Derive animationState from connection + volume
   const [animationState, setAnimationState] = useState<AnimationState>('idle');
   const animTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const transcriptEndRef = useRef<HTMLDivElement>(null);
@@ -72,7 +78,6 @@ export default function LandingPage() {
       setCharacterLore(lore);
       setUploadReady(true);
 
-      // Pre-create agent doc in Firestore if user is logged in
       const userId = auth.currentUser?.uid;
       if (userId) {
         const agentId = `agent_${Date.now()}`;
@@ -97,7 +102,6 @@ export default function LandingPage() {
     }
   }, []);
 
-  // Architect config with callback + per-model voice
   const architectConfig = useMemo(() => ({
     ...ARCHITECT_CONFIG,
     voiceName: DEMO_MODELS[demoModelIdx].voiceName,
@@ -112,33 +116,20 @@ export default function LandingPage() {
     transcripts
   } = useGeminiLive('architect_demo', auth.currentUser?.uid || 'anonymous', architectConfig);
 
-  // Poll volumeRef at 4Hz to derive animationState (ref can't trigger re-renders)
   useEffect(() => {
     if (animTimerRef.current) clearInterval(animTimerRef.current);
-
-    if (!isConnected) {
-      setAnimationState('idle');
-      return;
-    }
-
+    if (!isConnected) { setAnimationState('idle'); return; }
     animTimerRef.current = setInterval(() => {
       const vol = volumeRef.current?.volume || 0;
       setAnimationState(vol > 0.05 ? 'speaking' : 'idle');
     }, 250);
-
-    return () => {
-      if (animTimerRef.current) clearInterval(animTimerRef.current);
-    };
+    return () => { if (animTimerRef.current) clearInterval(animTimerRef.current); };
   }, [isConnected, volumeRef]);
 
-  // Auto-scroll transcript
   useEffect(() => {
     transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [transcripts]);
 
-  // Auto-restart session after model switch (for voice change)
-  // Gemini Live voice is set during WebSocket setup — can't change mid-session.
-  // So we stop + restart the session when the user switches models.
   useEffect(() => {
     if (pendingVoiceRestartRef.current && !isConnected && pageState === 'INTERVIEW') {
       pendingVoiceRestartRef.current = false;
@@ -156,32 +147,24 @@ export default function LandingPage() {
     setTimeout(() => startSession(), 300);
   };
 
-  // Upload triggers 3D generation but does NOT redirect — user stays to keep building soul
   const handleUploadComplete = async (data: any) => {
     if (!auth.currentUser) return;
-
     const agentId = newAgentId || `agent_${Date.now()}`;
     if (!newAgentId) setNewAgentId(agentId);
-
     setImageUploaded(true);
     setIsGenerating3D(true);
 
-    // If lore wasn't saved yet (user skipped interview), create basic agent doc
     if (!characterLore) {
       try {
         await setDoc(doc(db, `users/${auth.currentUser.uid}/agents/${agentId}`), {
-          archetype: 'Unknown Entity',
-          traits: [],
-          funFact: '',
-          extrusionStatus: 'pending',
-          createdAt: serverTimestamp()
+          archetype: 'Unknown Entity', traits: [], funFact: '',
+          extrusionStatus: 'pending', createdAt: serverTimestamp()
         });
       } catch (err) {
         console.error("[LANDING] Failed to create agent doc:", err);
       }
     }
 
-    // Trigger 3D generation in background
     try {
       const enqueue3DTask = httpsCallable(functions, 'enqueue3DTask');
       if (data.type === 'image') {
@@ -190,10 +173,7 @@ export default function LandingPage() {
     } catch (error) {
       console.error("[LANDING] Failed to trigger 3D generation:", error);
       setIsGenerating3D(false);
-      return;
     }
-
-    // DON'T redirect — let the user keep talking to The Architect
   };
 
   const handleGoToWorkspace = () => {
@@ -203,106 +183,179 @@ export default function LandingPage() {
     router.push(`/workspace?agentId=${agentId}`);
   };
 
-  // Derive current step for StepIndicator
   const currentStep: 1 | 2 | 3 = isGenerating3D ? 3 : imageUploaded ? 2 : characterLore ? 2 : 1;
 
-  // --- LANDING STATE ---
+  // =====================================================================
+  //  LANDING STATE — Hero + Manifesto + Two Paths
+  // =====================================================================
   if (pageState === 'LANDING') {
     return (
-      <main className="relative w-screen h-screen overflow-hidden flex flex-col items-center justify-center"
+      <main className="relative w-screen min-h-screen overflow-y-auto overflow-x-hidden flex flex-col"
             style={{ backgroundColor: '#050505' }}>
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(212,175,55,0.06)_0%,transparent_70%)] animate-pulse" />
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(212,175,55,0.03)_0%,transparent_50%)]" />
 
-        <div className="absolute top-6 right-6 z-50 flex items-center gap-4">
-          <ModeSwitcher />
+        {/* Ambient glow */}
+        <div className="fixed inset-0 pointer-events-none">
+          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(212,175,55,0.05)_0%,transparent_60%)]" />
+        </div>
+
+        {/* Top bar */}
+        <div className="sticky top-0 z-50 flex items-center justify-between px-6 py-4"
+             style={{ backgroundColor: 'rgba(5,5,5,0.8)', backdropFilter: 'blur(12px)' }}>
+          <span className="text-[#d4af37] text-sm font-bold tracking-[0.3em]">LXXI</span>
           <LoginButton />
         </div>
 
-        {showVault ? (
-          <div className="relative z-10 w-full max-w-4xl px-6">
-            <button
-              onClick={() => setShowVault(false)}
-              className="text-sm text-white/40 hover:text-white/70 transition-colors mb-4"
-            >
-              &larr; Back
-            </button>
-            <AgentLibrary
-              userId={auth.currentUser?.uid || ''}
-              onSelectAgent={(agentId) => {
-                router.push(`/workspace?agentId=${agentId}`);
-              }}
-            />
-          </div>
-        ) : (
-          <div className="relative z-10 text-center max-w-2xl px-6">
-            <h1 className="text-7xl md:text-8xl font-bold text-white mb-1 tracking-tight"
-                style={{ fontFamily: 'var(--font-heading)' }}>
-              LXXI
-            </h1>
-            <p className="text-xs tracking-[0.3em] uppercase text-white/30 mb-2">
-              Seventy-One
-            </p>
-            <p className="text-base text-white/40 mb-14 font-light italic">
-              Voice is for Vibe &middot; Screen is for Substance
-            </p>
+        {/* ── HERO ── */}
+        <section className="relative z-10 flex flex-col items-center pt-16 pb-20 px-6 text-center">
+          <h1 className="text-7xl md:text-9xl font-bold text-white mb-2 tracking-tight"
+              style={{ fontFamily: 'var(--font-heading)' }}>
+            LXXI
+          </h1>
+          <p className="text-xs tracking-[0.4em] uppercase text-white/25 mb-4">
+            Seventy-One
+          </p>
+          <p className="text-lg md:text-xl text-white/50 font-light max-w-md leading-relaxed">
+            Voice is for Vibe. Screen is for Substance.
+          </p>
+          <p className="text-sm text-white/25 mt-2 max-w-lg leading-relaxed">
+            Create AI characters with real souls. Speak them into existence, give them memory,
+            and build alongside them as true creative partners.
+          </p>
+        </section>
 
-            <div className="relative inline-block">
-              <HintArrow
-                text="Start here — describe your character with voice"
-                direction="down"
-                dismissKey="hint_forge_arrow"
-                className="absolute -top-14 left-1/2 -translate-x-1/2"
-              />
-              <button
-                onClick={handleBeginInterview}
-                className="group relative px-10 py-4 text-black font-bold text-lg rounded-lg transition-all"
-                style={{
-                  backgroundColor: '#d4af37',
-                  boxShadow: '0 0 30px rgba(212,175,55,0.3)'
-                }}
-              >
-                Enter the Forge
-                <span className="absolute inset-0 rounded-lg bg-[#d4af37]/20 animate-ping opacity-20 group-hover:opacity-0" />
-              </button>
-              <p className="text-[11px] text-white/25 mt-2 font-mono">
-                Create a character through voice conversation
-              </p>
-            </div>
+        {/* ── TWO PATHS: Prime & Spark ── */}
+        <section className="relative z-10 max-w-5xl mx-auto w-full px-6 pb-20">
+          <div className="grid md:grid-cols-2 gap-5">
 
-            <div className="mt-10 flex flex-col items-center gap-3">
-              <button
-                onClick={() => router.push('/manifesto')}
-                className="text-sm text-white/50 hover:text-[#d4af37] transition-colors tracking-[0.15em] uppercase"
-              >
-                Read the Manifesto
-              </button>
-              <button
-                onClick={() => router.push('/workspace')}
-                className="text-sm text-white/25 hover:text-[#d4af37]/60 transition-colors"
-              >
-                Skip to Workspace &rarr;
-                <span className="block text-[10px] text-white/15 mt-0.5">Browse existing characters</span>
-              </button>
-              {auth.currentUser && (
+            {/* PRIME — The Forge */}
+            <div className="group relative rounded-2xl border border-[#d4af37]/20 p-8 transition-all hover:border-[#d4af37]/40"
+                 style={{ backgroundColor: 'rgba(212,175,55,0.03)' }}>
+              <div className="absolute inset-0 rounded-2xl bg-[radial-gradient(ellipse_at_top,rgba(212,175,55,0.06)_0%,transparent_70%)] opacity-0 group-hover:opacity-100 transition-opacity" />
+              <div className="relative z-10">
+                <span className="text-[10px] tracking-[0.3em] uppercase text-[#d4af37]/50 font-mono">Prime</span>
+                <h2 className="text-2xl font-bold text-white mt-1 mb-3">The Forge</h2>
+                <p className="text-sm text-white/40 leading-relaxed mb-6">
+                  Build an AI partner with a soul. Talk to The Architect to shape your character&apos;s
+                  personality, upload an image for their 3D avatar, then enter the workspace where
+                  they help you create images, write code, and think through problems — all through voice.
+                </p>
+
+                <div className="space-y-2.5 mb-8">
+                  <div className="flex items-start gap-3">
+                    <span className="text-[#d4af37] text-sm mt-0.5">1.</span>
+                    <p className="text-xs text-white/35 leading-relaxed"><span className="text-white/60 font-medium">Describe</span> — Speak to The Architect. Tell them who your character is.</p>
+                  </div>
+                  <div className="flex items-start gap-3">
+                    <span className="text-[#d4af37] text-sm mt-0.5">2.</span>
+                    <p className="text-xs text-white/35 leading-relaxed"><span className="text-white/60 font-medium">Upload</span> — Give them a face. Drop an image to generate a 3D avatar.</p>
+                  </div>
+                  <div className="flex items-start gap-3">
+                    <span className="text-[#d4af37] text-sm mt-0.5">3.</span>
+                    <p className="text-xs text-white/35 leading-relaxed"><span className="text-white/60 font-medium">Create</span> — Enter the workspace. Your agent builds alongside you.</p>
+                  </div>
+                </div>
+
                 <button
-                  onClick={() => setShowVault(true)}
-                  className="text-sm text-white/25 hover:text-[#d4af37]/60 transition-colors"
+                  onClick={handleBeginInterview}
+                  className="w-full py-3.5 text-black font-bold text-sm rounded-lg transition-all"
+                  style={{ backgroundColor: '#d4af37', boxShadow: '0 0 25px rgba(212,175,55,0.25)' }}
                 >
-                  Open the Vault &rarr;
-                  <span className="block text-[10px] text-white/15 mt-0.5">View your creations</span>
+                  Enter the Forge
                 </button>
-              )}
+
+                <button
+                  onClick={() => router.push('/workspace')}
+                  className="w-full mt-2 py-2 text-xs text-white/20 hover:text-white/40 transition-colors"
+                >
+                  Skip to Workspace (demo)
+                </button>
+              </div>
+            </div>
+
+            {/* SPARK — Leo's Learning Lab */}
+            <div className="group relative rounded-2xl border border-amber-400/15 p-8 transition-all hover:border-amber-400/30"
+                 style={{ backgroundColor: 'rgba(251,191,36,0.02)' }}>
+              <div className="absolute inset-0 rounded-2xl bg-[radial-gradient(ellipse_at_top,rgba(251,191,36,0.05)_0%,transparent_70%)] opacity-0 group-hover:opacity-100 transition-opacity" />
+              <div className="relative z-10">
+                <span className="text-[10px] tracking-[0.3em] uppercase text-amber-400/50 font-mono">Spark</span>
+                <h2 className="text-2xl font-bold text-white mt-1 mb-3">Leo&apos;s Learning Lab</h2>
+                <p className="text-sm text-white/40 leading-relaxed mb-6">
+                  A friendly AI tutor for kids and learners. Leo uses voice conversation and a
+                  visual chalkboard to teach math, science, Spanish, and anything you&apos;re curious about.
+                  Ask questions naturally and learn at your own pace.
+                </p>
+
+                <div className="space-y-2.5 mb-8">
+                  <div className="flex items-start gap-3">
+                    <span className="text-amber-400 text-lg leading-none">&#x1F9E0;</span>
+                    <p className="text-xs text-white/35 leading-relaxed"><span className="text-white/60 font-medium">Voice-first learning</span> — Talk through problems like you&apos;re with a real tutor.</p>
+                  </div>
+                  <div className="flex items-start gap-3">
+                    <span className="text-amber-400 text-lg leading-none">&#x1F4DD;</span>
+                    <p className="text-xs text-white/35 leading-relaxed"><span className="text-white/60 font-medium">Visual chalkboard</span> — See math problems, hints, and explanations appear live.</p>
+                  </div>
+                  <div className="flex items-start gap-3">
+                    <span className="text-amber-400 text-lg leading-none">&#x1F3AF;</span>
+                    <p className="text-xs text-white/35 leading-relaxed"><span className="text-white/60 font-medium">Any subject</span> — Math, science, language, or just general curiosity.</p>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => router.push('/spark')}
+                  className="w-full py-3.5 font-bold text-sm rounded-lg transition-all text-black"
+                  style={{ backgroundColor: '#fbbf24', boxShadow: '0 0 20px rgba(251,191,36,0.2)' }}
+                >
+                  Start Learning
+                </button>
+              </div>
             </div>
           </div>
-        )}
+        </section>
 
-        <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[#d4af37]/20 to-transparent" />
+        {/* ── MANIFESTO PRINCIPLES ── */}
+        <section className="relative z-10 max-w-4xl mx-auto w-full px-6 pb-20">
+          <div className="text-center mb-10">
+            <p className="text-[10px] tracking-[0.4em] uppercase text-[#d4af37]/40 font-mono mb-2">
+              The Manifesto
+            </p>
+            <h2 className="text-2xl md:text-3xl font-bold text-white/80">
+              What We Believe
+            </h2>
+          </div>
+
+          <div className="grid sm:grid-cols-2 gap-5">
+            {PRINCIPLES.map((p, i) => (
+              <div key={i} className="p-5 rounded-xl border border-white/5 bg-white/[0.02]">
+                <div className="flex items-start gap-3">
+                  <span className="text-[#d4af37]/40 text-xs font-bold mt-1 flex-shrink-0">0{i + 1}</span>
+                  <div>
+                    <h3 className="text-sm font-bold text-white/70 mb-1">{p.title}</h3>
+                    <p className="text-xs text-white/30 leading-relaxed">{p.desc}</p>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="text-center mt-8">
+            <button
+              onClick={() => router.push('/manifesto')}
+              className="text-xs text-white/20 hover:text-[#d4af37]/60 transition-colors tracking-widest uppercase"
+            >
+              Read the Full Manifesto &rarr;
+            </button>
+          </div>
+        </section>
+
+        {/* Bottom line */}
+        <div className="h-px bg-gradient-to-r from-transparent via-[#d4af37]/15 to-transparent" />
       </main>
     );
   }
 
-  // --- INTERVIEW STATE (merged with Upload — user stays here) ---
+  // =====================================================================
+  //  INTERVIEW STATE — Clean, no hint arrows
+  // =====================================================================
   if (pageState === 'INTERVIEW') {
     return (
       <main className="relative w-screen h-screen overflow-hidden flex flex-col"
@@ -331,35 +384,22 @@ export default function LandingPage() {
           </div>
         </div>
 
-        {/* Main content: centered avatar with sidebars */}
+        {/* Main content: avatar center with sidebars */}
         <div className="flex-1 flex items-stretch px-3 pb-3 gap-3 overflow-hidden">
 
-          {/* LEFT SIDEBAR: Transcript + Controls */}
+          {/* LEFT: Transcript + Controls */}
           <div className="w-72 flex flex-col gap-2 flex-shrink-0">
             <div className="text-xs text-[#d4af37]/50 flex items-center gap-2 px-1">
               <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-[#d4af37] animate-pulse' : 'bg-gray-600'}`} />
               THE ARCHITECT {isConnected ? '// LISTENING' : '// STANDBY'}
             </div>
 
-            {/* Voice Orb (shows when no 3D model visible on mobile) */}
-            <div className="md:hidden">
-              <VoiceOrb volumeRef={volumeRef} isActive={isConnected} />
-            </div>
-
             {/* Transcript */}
             <div className="flex-1 overflow-y-auto border border-white/10 rounded-lg bg-black/30 p-3 space-y-2 min-h-0">
               {transcripts.length === 0 && (
-                <div className="space-y-3">
-                  <p className="text-white/30 text-xs leading-relaxed">
-                    The Architect will ask about your character. Speak naturally &mdash; describe who they are, their world, and what makes them unique.
-                  </p>
-                  <HintArrow
-                    text="Your conversation appears here"
-                    direction="down"
-                    dismissKey="hint_transcript"
-                    className="mx-auto"
-                  />
-                </div>
+                <p className="text-white/30 text-xs leading-relaxed">
+                  The Architect will guide you. Speak naturally &mdash; describe who your character is, their world, and what makes them unique.
+                </p>
               )}
               {transcripts.map((msg, idx) => (
                 <div key={idx} className={`text-xs leading-relaxed ${msg.speaker === 'USER' ? 'text-[#d4af37]' : msg.speaker === 'SYSTEM' ? 'text-amber-400/60' : 'text-white/70'}`}>
@@ -397,15 +437,8 @@ export default function LandingPage() {
             )}
           </div>
 
-          {/* CENTER: 3D Avatar — hero, fills available space */}
+          {/* CENTER: 3D Avatar */}
           <div className="flex-1 relative rounded-xl overflow-hidden border border-[#d4af37]/10 bg-black/40">
-            {/* Hint arrow ABOVE avatar */}
-            <HintArrow
-              text="Meet The Architect — your character guide"
-              direction="down"
-              dismissKey="hint_architect_avatar"
-              className="absolute top-3 left-1/2 -translate-x-1/2 z-10"
-            />
             {/* Demo model toggle */}
             <div className="absolute top-3 right-3 z-10 flex gap-1">
               {DEMO_MODELS.map((m, i) => (
@@ -414,7 +447,6 @@ export default function LandingPage() {
                   onClick={() => {
                     if (i === demoModelIdx) return;
                     setDemoModelIdx(i);
-                    // Restart session for voice change — voice is locked at setup time
                     if (isConnected) {
                       pendingVoiceRestartRef.current = true;
                       stopSession();
@@ -433,11 +465,10 @@ export default function LandingPage() {
             <div className="absolute inset-0">
               <Scene modelUrl={DEMO_MODELS[demoModelIdx].url} volumeRef={volumeRef} animationState={animationState} />
             </div>
-            {/* Scanline overlay */}
             <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(transparent_50%,rgba(0,0,0,0.15)_50%)] bg-[length:100%_4px] opacity-10" />
           </div>
 
-          {/* RIGHT SIDEBAR: Upload + Soul Building */}
+          {/* RIGHT: Upload + Soul Building */}
           <div className="w-64 flex flex-col gap-2 flex-shrink-0">
             {/* Upload section */}
             <div className={`rounded-xl p-3 border transition-all duration-500 ${
@@ -451,7 +482,6 @@ export default function LandingPage() {
                 Character Image
               </h3>
 
-              {/* Character summary card (compact) */}
               {characterLore && (
                 <div className="p-2 border border-[#d4af37]/20 rounded-lg bg-[#d4af37]/[0.03] mb-2">
                   <p className="text-xs text-white font-bold mb-1">{characterLore.archetype}</p>
@@ -466,7 +496,6 @@ export default function LandingPage() {
               )}
 
               {isGenerating3D ? (
-                /* 3D generation in progress — show status */
                 <div className="flex flex-col items-center gap-2 py-4">
                   <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-[#d4af37]" />
                   <p className="text-[11px] text-[#d4af37]/60 font-mono">Synthesizing 3D DNA...</p>
@@ -474,7 +503,7 @@ export default function LandingPage() {
                 </div>
               ) : imageUploaded ? (
                 <div className="flex flex-col items-center gap-2 py-3">
-                  <div className="text-[#d4af37] text-xl">✓</div>
+                  <div className="text-[#d4af37] text-xl">&#10003;</div>
                   <p className="text-[10px] text-[#d4af37]/60">Image uploaded</p>
                 </div>
               ) : (
@@ -487,48 +516,52 @@ export default function LandingPage() {
               )}
             </div>
 
-            {/* Soul Building Tips */}
+            {/* Soul Building Guide */}
             <div className="flex-1 overflow-y-auto rounded-xl p-3 border border-white/5 bg-black/20 min-h-0">
               <h3 className="text-[10px] text-[#d4af37]/40 uppercase tracking-widest font-mono mb-3">
                 Build Your Soul
               </h3>
               <p className="text-[10px] text-white/25 mb-3 leading-relaxed">
-                The best AI agents feel like teammates. Here&apos;s how to create one with real depth:
+                The best AI agents feel like teammates. Here&apos;s how to create depth:
               </p>
               <div className="space-y-2.5">
-                {SOUL_TIPS.map((tip, i) => (
-                  <div key={i} className="group">
-                    <div className="flex items-start gap-2">
-                      <span className="text-[#d4af37]/30 text-[10px] font-bold mt-0.5 flex-shrink-0">{i + 1}.</span>
-                      <div>
-                        <p className="text-[11px] text-white/50 font-medium leading-tight">{tip.title}</p>
-                        <p className="text-[9px] text-white/20 leading-relaxed mt-0.5">{tip.desc}</p>
-                      </div>
-                    </div>
+                <div className="flex items-start gap-2">
+                  <span className="text-[#d4af37]/30 text-[10px] font-bold mt-0.5">1.</span>
+                  <div>
+                    <p className="text-[11px] text-white/50 font-medium leading-tight">Give them a memory</p>
+                    <p className="text-[9px] text-white/20 leading-relaxed mt-0.5">Share a story from their past. Memories shape personality.</p>
                   </div>
-                ))}
-              </div>
-
-              {/* Working together section */}
-              <div className="mt-4 pt-3 border-t border-white/5">
-                <h4 className="text-[10px] text-[#d4af37]/30 uppercase tracking-widest font-mono mb-2">
-                  You + AI = Team
-                </h4>
-                <p className="text-[9px] text-white/20 leading-relaxed">
-                  Think of your agent as a creative partner. The more context you give — memories, preferences, communication style — the more they&apos;ll feel like a real collaborator. Memory isn&apos;t just data storage: it&apos;s what makes the relationship grow over time.
-                </p>
+                </div>
+                <div className="flex items-start gap-2">
+                  <span className="text-[#d4af37]/30 text-[10px] font-bold mt-0.5">2.</span>
+                  <div>
+                    <p className="text-[11px] text-white/50 font-medium leading-tight">Define their voice</p>
+                    <p className="text-[9px] text-white/20 leading-relaxed mt-0.5">How do they speak? Formal? Playful? Give examples.</p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-2">
+                  <span className="text-[#d4af37]/30 text-[10px] font-bold mt-0.5">3.</span>
+                  <div>
+                    <p className="text-[11px] text-white/50 font-medium leading-tight">Set boundaries</p>
+                    <p className="text-[9px] text-white/20 leading-relaxed mt-0.5">What topics matter? What do they avoid? Boundaries create depth.</p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-2">
+                  <span className="text-[#d4af37]/30 text-[10px] font-bold mt-0.5">4.</span>
+                  <div>
+                    <p className="text-[11px] text-white/50 font-medium leading-tight">Build the relationship</p>
+                    <p className="text-[9px] text-white/20 leading-relaxed mt-0.5">How does your character see you? Partners? Mentor and student?</p>
+                  </div>
+                </div>
               </div>
             </div>
 
-            {/* Go to workspace button (appears after 3D generation starts) */}
+            {/* Go to workspace button */}
             {isGenerating3D && (
               <button
                 onClick={handleGoToWorkspace}
                 className="w-full px-4 py-2.5 text-black font-bold text-sm rounded-lg transition-all"
-                style={{
-                  backgroundColor: '#d4af37',
-                  boxShadow: '0 0 15px rgba(212,175,55,0.25)'
-                }}
+                style={{ backgroundColor: '#d4af37', boxShadow: '0 0 15px rgba(212,175,55,0.25)' }}
               >
                 Enter Workspace &rarr;
               </button>
@@ -539,7 +572,9 @@ export default function LandingPage() {
     );
   }
 
-  // --- REDIRECT STATE ---
+  // =====================================================================
+  //  REDIRECT STATE
+  // =====================================================================
   return (
     <main className="w-screen h-screen flex items-center justify-center"
           style={{ backgroundColor: '#050505' }}>
