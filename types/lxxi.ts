@@ -44,6 +44,16 @@ export interface MathProblemItem extends BaseVaultItem {
 
 export type VaultItem = ImageVaultItem | DocumentVaultItem | MathProblemItem;
 
+// --- Staged File (Share Panel) ---
+
+export interface StagedFile {
+  id: string;
+  base64: string;        // raw base64, no data: prefix
+  mimeType: string;
+  name: string;
+  thumbnail: string;     // object URL for image preview, empty string for non-images
+}
+
 // --- Brand ---
 
 export const LXXI: LXXIBrand = {
