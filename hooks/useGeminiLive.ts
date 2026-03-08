@@ -195,21 +195,27 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
       analyzerRef.current.minDecibels = -90;
       analyzerRef.current.maxDecibels = -10;
 
-      // Mic + optional video setup
-      const mediaConstraints: MediaStreamConstraints = {
+      // Mic setup (always required) — request audio first, then video separately
+      // This prevents a slow/unavailable camera from blocking the entire session
+      micStreamRef.current = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
-      };
-      if (enableVision) {
-        mediaConstraints.video = true;
-      }
+      });
 
-      micStreamRef.current = await navigator.mediaDevices.getUserMedia(mediaConstraints);
-
+      // Vision setup (optional, non-blocking) — if camera fails, session continues audio-only
       if (enableVision) {
-        if (!videoRef.current) videoRef.current = document.createElement('video');
-        videoRef.current.srcObject = micStreamRef.current;
-        videoRef.current.muted = true;
-        videoRef.current.play().catch(e => console.warn("[VIDEO] Autoplay blocked:", e));
+        try {
+          const videoStream = await Promise.race([
+            navigator.mediaDevices.getUserMedia({ video: true }),
+            new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Camera timeout')), 5000))
+          ]);
+          if (!videoRef.current) videoRef.current = document.createElement('video');
+          videoRef.current.srcObject = videoStream;
+          videoRef.current.muted = true;
+          videoRef.current.play().catch(e => console.warn("[VIDEO] Autoplay blocked:", e));
+          console.log('%c[VISION] Camera ready', 'color: #00ff00');
+        } catch (e) {
+          console.warn("[VISION] Camera unavailable — continuing audio-only:", e);
+        }
       }
 
       // WebSocket connection
