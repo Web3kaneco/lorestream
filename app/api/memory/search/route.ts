@@ -8,8 +8,50 @@ function getPinecone() {
   return pc;
 }
 
+// Circuit breaker — stop spamming API if key is invalid
+let consecutiveFailures = 0;
+const MAX_FAILURES = 3;
+
+// Try embedding with fallback models
+async function getEmbedding(text: string, apiKey: string): Promise<number[]> {
+  const models = [
+    'text-embedding-004',
+    'gemini-embedding-001',
+  ];
+
+  for (const model of models) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:embedContent?key=${apiKey}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: `models/${model}`,
+        outputDimensionality: 768,
+        content: { parts: [{ text }] }
+      })
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      const vector = data.embedding?.values as number[];
+      if (vector && Array.isArray(vector) && vector.length > 0) {
+        consecutiveFailures = 0; // Reset circuit breaker
+        return vector;
+      }
+    }
+    // Try next model
+  }
+
+  throw new Error('All embedding models failed — check API key permissions');
+}
+
 export async function POST(req: Request) {
   try {
+    // Circuit breaker — don't spam API if key is clearly invalid
+    if (consecutiveFailures >= MAX_FAILURES) {
+      return NextResponse.json({ memories: [], note: 'Memory search temporarily disabled — embedding API unavailable' });
+    }
+
     const body = await req.json();
     const { query, userId, agentId } = body;
 
@@ -22,36 +64,21 @@ export async function POST(req: Request) {
     }
 
     const apiKey = process.env.NEXT_PUBLIC_GEMINI_KEY;
-
-    // 1. Embed the query using the same model as the write path (768-dim)
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${apiKey}`;
-
-    const embeddingRes = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: "models/gemini-embedding-001",
-        outputDimensionality: 768,
-        content: { parts: [{ text: query }] }
-      })
-    });
-
-    if (!embeddingRes.ok) {
-      throw new Error(`Gemini Embedding API returned HTTP ${embeddingRes.status}`);
-    }
-    const embeddingData = await embeddingRes.json();
-
-    if (embeddingData.error) {
-      throw new Error(`Google Embedding API Error: ${embeddingData.error.message}`);
+    if (!apiKey) {
+      return NextResponse.json({ memories: [], note: 'No API key configured' });
     }
 
-    const vector = embeddingData.embedding?.values as number[];
-
-    if (!vector || !Array.isArray(vector) || vector.length === 0) {
-      console.error("[MEMORY SEARCH] Invalid embedding response:", JSON.stringify(embeddingData));
-      throw new Error("Invalid or empty embedding values from Google API.");
+    // 1. Embed the query with fallback models
+    let vector: number[];
+    try {
+      vector = await getEmbedding(query, apiKey);
+    } catch (e) {
+      consecutiveFailures++;
+      if (consecutiveFailures >= MAX_FAILURES) {
+        console.warn(`[MEMORY SEARCH] Circuit breaker tripped after ${MAX_FAILURES} failures — disabling until restart`);
+      }
+      throw e;
     }
-
     // 2. Query Pinecone for similar memories, filtered by user+agent
     const index = getPinecone().Index('agent-memory');
     const namespace = index.namespace(`${userId}_${agentId}`);

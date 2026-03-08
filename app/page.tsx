@@ -193,8 +193,8 @@ export default function LandingPage() {
       <main className="relative w-screen min-h-screen overflow-y-auto overflow-x-hidden flex flex-col"
             style={{ backgroundColor: '#050505' }}>
 
-        {/* Ambient glow */}
-        <div className="fixed inset-0 pointer-events-none">
+        {/* Ambient glow — absolute so it doesn't block scroll */}
+        <div className="absolute inset-0 pointer-events-none z-0">
           <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(212,175,55,0.05)_0%,transparent_60%)]" />
         </div>
 
@@ -263,14 +263,13 @@ export default function LandingPage() {
                   >
                     Enter the Forge
                   </button>
-
-                  <button
-                    onClick={() => router.push('/workspace')}
-                    className="w-full mt-2 py-2 text-xs text-white/20 hover:text-white/40 transition-colors"
-                  >
-                    Skip to Workspace (demo)
-                  </button>
                 </div>
+                <button
+                  onClick={() => router.push('/workspace')}
+                  className="w-full mt-2 py-1.5 text-[10px] text-white/20 hover:text-white/40 transition-colors text-center"
+                >
+                  Skip to Workspace (demo)
+                </button>
               </div>
             </div>
 
@@ -306,11 +305,13 @@ export default function LandingPage() {
                   <button
                     onClick={() => router.push('/spark')}
                     className="w-full py-3.5 font-bold text-sm rounded-lg transition-all text-black"
-                    style={{ backgroundColor: '#fbbf24', boxShadow: '0 0 20px rgba(251,191,36,0.2)' }}
+                    style={{ backgroundColor: '#d4af37', boxShadow: '0 0 25px rgba(212,175,55,0.25)' }}
                   >
                     Start Learning
                   </button>
                 </div>
+                {/* Spacer to match Forge card which has a "Skip" link below */}
+                <div className="mt-2 py-1.5 text-[10px] invisible">spacer</div>
               </div>
             </div>
           </div>

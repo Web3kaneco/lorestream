@@ -22,34 +22,38 @@ export async function POST(req: Request) {
     }
 
     const apiKey = process.env.NEXT_PUBLIC_GEMINI_KEY;
-    
-    // 2. Fetch Gemini Embedding
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${apiKey}`;
-    
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: "models/gemini-embedding-001",
-        outputDimensionality: 768, 
-        content: { parts: [{ text: transcript }] }
-      })
-    });
-
-    if (!res.ok) {
-      throw new Error(`Gemini Embedding API returned HTTP ${res.status}`);
+    if (!apiKey) {
+      return NextResponse.json({ error: "No API key configured" }, { status: 500 });
     }
-    const data = await res.json();
 
-    if (data.error) throw new Error(`Google API Error: ${data.error.message}`);
-    
-    // 🛠️ TYPE FIX 1: Explicitly tell TypeScript this is an array of numbers
-    const vector = data.embedding?.values as number[];
-    
-    // 3. Strict Vector Validation: Ensures it exists AND has numbers
-    if (!vector || !Array.isArray(vector) || vector.length === 0) {
-      console.error("🚨 [MEMORY API ERROR] Invalid Google Response:", JSON.stringify(data));
-      throw new Error("Invalid or empty embedding values returned from Google API.");
+    // 2. Fetch Gemini Embedding (try multiple models for compatibility)
+    let vector: number[] | null = null;
+    const models = ['text-embedding-004', 'gemini-embedding-001'];
+
+    for (const model of models) {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:embedContent?key=${apiKey}`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: `models/${model}`,
+          outputDimensionality: 768,
+          content: { parts: [{ text: transcript }] }
+        })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const vals = data.embedding?.values as number[];
+        if (vals && Array.isArray(vals) && vals.length > 0) {
+          vector = vals;
+          break;
+        }
+      }
+    }
+
+    if (!vector) {
+      throw new Error("All embedding models failed — check API key permissions");
     }
 
     // 4. Target your Pinecone Vault with namespace isolation per agent
