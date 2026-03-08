@@ -9,6 +9,7 @@ import { useFrequencyAnalysis } from './useFrequencyAnalysis';
 import { useAudioPlayback } from './useAudioPlayback';
 import { useToolHandlers } from './useToolHandlers';
 import { buildWorkspaceSystemInstruction } from '@/lib/systemInstructions';
+import type { StagedFile } from '@/types/lxxi';
 
 export interface VisemeData {
   volume: number;
@@ -96,18 +97,58 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
       if (config?.systemInstruction) {
         systemInstructionText = config.systemInstruction;
       } else {
-        // Load from Firestore (existing workspace behavior)
-        const memorySnap = await getDoc(doc(db, `users/${userId}/agents/${agentId}/lore/core_memory`));
-        const coreMemory = memorySnap.exists() ? memorySnap.data() : { current_lore_summary: "No prior memories.", key_facts: [] };
-        const memoryString = coreMemory.key_facts?.join('. ') || "";
-
-        // Load agent archetype for personality
+        // Load from Firestore, with demo persona fallback
+        let coreMemory: { current_lore_summary: string; key_facts: string[] } = {
+          current_lore_summary: "You are discovering who you are.",
+          key_facts: []
+        };
         let archetype = "";
+
         try {
-          const agentSnap = await getDoc(doc(db, `users/${userId}/agents/${agentId}`));
-          if (agentSnap.exists()) archetype = agentSnap.data().archetype || "";
+          const memorySnap = await getDoc(doc(db, `users/${userId}/agents/${agentId}/lore/core_memory`));
+          if (memorySnap.exists()) {
+            const data = memorySnap.data();
+            coreMemory = {
+              current_lore_summary: data.current_lore_summary || coreMemory.current_lore_summary,
+              key_facts: data.key_facts || []
+            };
+          } else {
+            // No Firestore doc — try demo persona fallback
+            const { getDemoPersona } = await import('@/lib/agents/demoWow');
+            const demoPersona = getDemoPersona(agentId);
+            if (demoPersona) {
+              coreMemory = {
+                current_lore_summary: demoPersona.personality_summary,
+                key_facts: demoPersona.key_facts
+              };
+              archetype = demoPersona.archetype;
+              console.log(`[SESSION] Using demo persona for ${agentId}: ${demoPersona.archetype}`);
+            }
+          }
         } catch (e) {
-          console.warn("[SESSION] Could not load agent archetype:", e);
+          console.warn("[SESSION] Could not load core memory from Firestore:", e);
+          // Fallback to demo persona on Firestore errors too
+          try {
+            const { getDemoPersona } = await import('@/lib/agents/demoWow');
+            const demoPersona = getDemoPersona(agentId);
+            if (demoPersona) {
+              coreMemory = {
+                current_lore_summary: demoPersona.personality_summary,
+                key_facts: demoPersona.key_facts
+              };
+              archetype = demoPersona.archetype;
+            }
+          } catch (_) {}
+        }
+
+        // Load agent archetype from Firestore (only if not already set by demo fallback)
+        if (!archetype) {
+          try {
+            const agentSnap = await getDoc(doc(db, `users/${userId}/agents/${agentId}`));
+            if (agentSnap.exists()) archetype = agentSnap.data().archetype || "";
+          } catch (e) {
+            console.warn("[SESSION] Could not load agent archetype:", e);
+          }
         }
 
         // Load recent Pinecone conversation history
@@ -129,7 +170,7 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
         }
 
         systemInstructionText = buildWorkspaceSystemInstruction(
-          { current_lore_summary: coreMemory.current_lore_summary || "", key_facts: coreMemory.key_facts || [] },
+          coreMemory,
           recentMemories,
           archetype
         );
@@ -529,19 +570,50 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
     setIsConnected(false);
   }, [enableVision, enableMemory, stopVision, stopAnalysis, stopAllPlayback, saveToMemory]);
 
-  // Send an image to the active Gemini Live session (for workspace uploads)
-  const sendImage = useCallback((base64: string, mimeType: string = 'image/jpeg') => {
+  // Send multimodal context (text + files) to the active Gemini Live session
+  // Uses clientContent format for structured user turns (not realtimeInput which is for streaming)
+  const sendContext = useCallback((text: string, attachments: StagedFile[]): boolean => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || !socketReadyRef.current) {
-      console.warn("[SEND IMAGE] Cannot send — session not active");
+      console.warn("[SEND CONTEXT] Cannot send — session not active");
       return false;
     }
+
+    const parts: any[] = [];
+    if (text.trim()) {
+      parts.push({ text: text.trim() });
+    }
+    for (const att of attachments) {
+      parts.push({
+        inlineData: { mimeType: att.mimeType, data: att.base64 }
+      });
+    }
+    if (parts.length === 0) return false;
+
     const payload = {
-      realtimeInput: {
-        mediaChunks: [{ mimeType, data: base64 }]
+      clientContent: {
+        turns: [{ role: "user", parts }],
+        turnComplete: true
       }
     };
-    return safeSend(payload);
-  }, [safeSend]);
 
-  return { isConnected, vaultItems, isGeneratingVaultItem, startSession, stopSession, volumeRef, transcripts, sendImage };
+    const sent = safeSend(payload);
+    if (sent) {
+      // Mirror to transcript UI
+      const summary = text.trim()
+        ? text.trim() + (attachments.length > 0 ? ` [+${attachments.length} file(s)]` : '')
+        : `[Shared ${attachments.length} file(s)]`;
+      setTranscripts(prev => {
+        const updated = [...prev, { speaker: 'USER', text: summary }];
+        return updated.length > 500 ? updated.slice(-500) : updated;
+      });
+      // Save text to Pinecone memory
+      if (enableMemory && text.trim()) {
+        saveToMemory(text.trim(), 'user');
+      }
+      console.log(`[CONTEXT] Sent: ${text.trim().substring(0, 50)}... + ${attachments.length} file(s)`);
+    }
+    return sent;
+  }, [safeSend, enableMemory, saveToMemory, setTranscripts]);
+
+  return { isConnected, vaultItems, isGeneratingVaultItem, startSession, stopSession, volumeRef, transcripts, sendContext };
 }

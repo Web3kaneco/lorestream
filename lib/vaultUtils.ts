@@ -14,6 +14,10 @@ export async function saveVaultItem(
   agentId: string,
   item: VaultItem
 ): Promise<string> {
+  if (!userId || !agentId) {
+    console.warn('[VAULT] Cannot save — missing userId or agentId');
+    return '';
+  }
   const docRef = await addDoc(vaultCollection(userId, agentId), {
     ...item,
     createdAt: Date.now(),
@@ -30,6 +34,10 @@ export async function loadVaultItems(
   agentId: string,
   maxItems = 50
 ): Promise<VaultItem[]> {
+  if (!userId || !agentId) {
+    console.warn('[VAULT] Cannot load — missing userId or agentId');
+    return [];
+  }
   const q = query(
     vaultCollection(userId, agentId),
     orderBy('createdAt', 'desc'),

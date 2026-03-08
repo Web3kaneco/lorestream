@@ -7,8 +7,9 @@ import { auth, functions } from '@/lib/firebase';
 import { DropZone } from '@/components/ui/DropZone';
 import { ActiveLoadingScreen } from '@/components/ui/ActiveLoadingScreen';
 import { FloatingArtifact } from '@/components/ui/FloatingArtifact';
-import { WorkspaceToolbar } from '@/components/ui/WorkspaceToolbar';
+import { SharePanel } from '@/components/ui/SharePanel';
 import { useGeminiLive } from '@/hooks/useGeminiLive';
+import { getOrCreateAnonymousId } from '@/lib/anonymousId';
 import type { AnimationState } from '@/components/3d/Avatar';
 import dynamic from 'next/dynamic';
 import { LoginButton } from '@/components/ui/LoginButton';
@@ -47,6 +48,16 @@ function WorkspacePage() {
   // Dismissed floating artifacts — visual only, items persist in Firebase
   const [dismissedIndices, setDismissedIndices] = useState<Set<number>>(new Set());
 
+  // Stable user ID: Firebase UID if logged in, persistent anonymous ID otherwise
+  // This ensures Pinecone namespaces and Firestore vault paths always work
+  const [effectiveUserId, setEffectiveUserId] = useState<string>('');
+  useEffect(() => {
+    const unsubscribe = auth.onAuthStateChanged((user) => {
+      setEffectiveUserId(user?.uid || getOrCreateAnonymousId());
+    });
+    return () => unsubscribe();
+  }, []);
+
   // Handle URL params for agent pre-selection
   useEffect(() => {
     if (paramAgentId && !activeAgentId) {
@@ -55,7 +66,7 @@ function WorkspacePage() {
     }
   }, [paramAgentId, activeAgentId]);
 
-  const { isConnected, vaultItems, isGeneratingVaultItem, startSession, stopSession, volumeRef, sendImage } = useGeminiLive(activeAgentId || '', auth.currentUser?.uid || '');
+  const { isConnected, vaultItems, isGeneratingVaultItem, startSession, stopSession, volumeRef, sendContext } = useGeminiLive(activeAgentId || '', effectiveUserId);
 
   // Derive animationState from connection + volume + generation state
   const [animationState, setAnimationState] = useState<AnimationState>('idle');
@@ -120,19 +131,6 @@ function WorkspacePage() {
     const allIndices = new Set(dismissedIndices);
     vaultItems.forEach((_, idx) => allIndices.add(idx));
     setDismissedIndices(allIndices);
-  };
-
-  // Send uploaded file to the active Gemini session so the agent can see it
-  const handleToolbarUpload = (data: { type: string; base64: string }) => {
-    if (isConnected) {
-      // Send image directly to the live conversation
-      const sent = sendImage(data.base64, 'image/jpeg');
-      if (sent) {
-        console.log('[WORKSPACE] Image sent to agent for conversation');
-      }
-    } else {
-      console.warn('[WORKSPACE] Cannot send file — agent not connected. Press AWAKEN first.');
-    }
   };
 
   return (
@@ -204,18 +202,16 @@ function WorkspacePage() {
             ))}
           </div>
 
-          {/* Bottom toolbar */}
-          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30">
-            <WorkspaceToolbar
-              isConnected={isConnected}
-              isGenerating={isGeneratingVaultItem}
-              onStart={startSession}
-              onStop={stopSession}
-              onClear={handleClearWorkspace}
-              onUpload={handleToolbarUpload}
-              itemCount={visibleItems.length}
-            />
-          </div>
+          {/* Share Panel — text input + file staging + send */}
+          <SharePanel
+            isConnected={isConnected}
+            isGenerating={isGeneratingVaultItem}
+            onStart={startSession}
+            onStop={stopSession}
+            onClear={handleClearWorkspace}
+            onSendContext={sendContext}
+            itemCount={visibleItems.length}
+          />
         </>
       )}
     </main>
