@@ -225,13 +225,13 @@ export default function LandingPage() {
 
         {/* ── TWO PATHS: Prime & Spark ── */}
         <section className="relative z-10 max-w-5xl mx-auto w-full px-6 pb-20">
-          <div className="grid md:grid-cols-2 gap-5">
+          <div className="grid md:grid-cols-2 gap-5 items-stretch">
 
             {/* PRIME — The Forge */}
-            <div className="group relative rounded-2xl border border-[#d4af37]/20 p-8 transition-all hover:border-[#d4af37]/40"
+            <div className="group relative rounded-2xl border border-[#d4af37]/20 p-8 transition-all hover:border-[#d4af37]/40 flex flex-col"
                  style={{ backgroundColor: 'rgba(212,175,55,0.03)' }}>
               <div className="absolute inset-0 rounded-2xl bg-[radial-gradient(ellipse_at_top,rgba(212,175,55,0.06)_0%,transparent_70%)] opacity-0 group-hover:opacity-100 transition-opacity" />
-              <div className="relative z-10">
+              <div className="relative z-10 flex flex-col flex-1">
                 <span className="text-[10px] tracking-[0.3em] uppercase text-[#d4af37]/50 font-mono">Prime</span>
                 <h2 className="text-2xl font-bold text-white mt-1 mb-3">The Forge</h2>
                 <p className="text-sm text-white/40 leading-relaxed mb-6">
@@ -255,28 +255,30 @@ export default function LandingPage() {
                   </div>
                 </div>
 
-                <button
-                  onClick={handleBeginInterview}
-                  className="w-full py-3.5 text-black font-bold text-sm rounded-lg transition-all"
-                  style={{ backgroundColor: '#d4af37', boxShadow: '0 0 25px rgba(212,175,55,0.25)' }}
-                >
-                  Enter the Forge
-                </button>
+                <div className="mt-auto pt-4">
+                  <button
+                    onClick={handleBeginInterview}
+                    className="w-full py-3.5 text-black font-bold text-sm rounded-lg transition-all"
+                    style={{ backgroundColor: '#d4af37', boxShadow: '0 0 25px rgba(212,175,55,0.25)' }}
+                  >
+                    Enter the Forge
+                  </button>
 
-                <button
-                  onClick={() => router.push('/workspace')}
-                  className="w-full mt-2 py-2 text-xs text-white/20 hover:text-white/40 transition-colors"
-                >
-                  Skip to Workspace (demo)
-                </button>
+                  <button
+                    onClick={() => router.push('/workspace')}
+                    className="w-full mt-2 py-2 text-xs text-white/20 hover:text-white/40 transition-colors"
+                  >
+                    Skip to Workspace (demo)
+                  </button>
+                </div>
               </div>
             </div>
 
             {/* SPARK — Leo's Learning Lab */}
-            <div className="group relative rounded-2xl border border-amber-400/15 p-8 transition-all hover:border-amber-400/30"
+            <div className="group relative rounded-2xl border border-amber-400/15 p-8 transition-all hover:border-amber-400/30 flex flex-col"
                  style={{ backgroundColor: 'rgba(251,191,36,0.02)' }}>
               <div className="absolute inset-0 rounded-2xl bg-[radial-gradient(ellipse_at_top,rgba(251,191,36,0.05)_0%,transparent_70%)] opacity-0 group-hover:opacity-100 transition-opacity" />
-              <div className="relative z-10">
+              <div className="relative z-10 flex flex-col flex-1">
                 <span className="text-[10px] tracking-[0.3em] uppercase text-amber-400/50 font-mono">Spark</span>
                 <h2 className="text-2xl font-bold text-white mt-1 mb-3">Leo&apos;s Learning Lab</h2>
                 <p className="text-sm text-white/40 leading-relaxed mb-6">
@@ -287,26 +289,28 @@ export default function LandingPage() {
 
                 <div className="space-y-2.5 mb-8">
                   <div className="flex items-start gap-3">
-                    <span className="text-amber-400 text-lg leading-none">&#x1F9E0;</span>
+                    <span className="text-amber-400 text-sm mt-0.5">1.</span>
                     <p className="text-xs text-white/35 leading-relaxed"><span className="text-white/60 font-medium">Voice-first learning</span> — Talk through problems like you&apos;re with a real tutor.</p>
                   </div>
                   <div className="flex items-start gap-3">
-                    <span className="text-amber-400 text-lg leading-none">&#x1F4DD;</span>
+                    <span className="text-amber-400 text-sm mt-0.5">2.</span>
                     <p className="text-xs text-white/35 leading-relaxed"><span className="text-white/60 font-medium">Visual chalkboard</span> — See math problems, hints, and explanations appear live.</p>
                   </div>
                   <div className="flex items-start gap-3">
-                    <span className="text-amber-400 text-lg leading-none">&#x1F3AF;</span>
+                    <span className="text-amber-400 text-sm mt-0.5">3.</span>
                     <p className="text-xs text-white/35 leading-relaxed"><span className="text-white/60 font-medium">Any subject</span> — Math, science, language, or just general curiosity.</p>
                   </div>
                 </div>
 
-                <button
-                  onClick={() => router.push('/spark')}
-                  className="w-full py-3.5 font-bold text-sm rounded-lg transition-all text-black"
-                  style={{ backgroundColor: '#fbbf24', boxShadow: '0 0 20px rgba(251,191,36,0.2)' }}
-                >
-                  Start Learning
-                </button>
+                <div className="mt-auto pt-4">
+                  <button
+                    onClick={() => router.push('/spark')}
+                    className="w-full py-3.5 font-bold text-sm rounded-lg transition-all text-black"
+                    style={{ backgroundColor: '#fbbf24', boxShadow: '0 0 20px rgba(251,191,36,0.2)' }}
+                  >
+                    Start Learning
+                  </button>
+                </div>
               </div>
             </div>
           </div>
