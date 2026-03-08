@@ -481,6 +481,10 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
     } catch (error) {
       console.error("[SESSION START ERROR]", error);
       isConnectingRef.current = false;
+      setIsConnected(false);
+      // Clean up any partial resources
+      micStreamRef.current?.getTracks().forEach(track => track.stop());
+      if (wsRef.current) { try { wsRef.current.close(); } catch(e) {} wsRef.current = null; }
     }
   }, [agentId, userId, isConnected, config, enableVision, enableMemory, voiceName, saveToMemory, startVision, startAnalysis, playAudioBuffer, interruptPlayback, handleToolCall, safeSend]);
 
@@ -525,5 +529,19 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
     setIsConnected(false);
   }, [enableVision, enableMemory, stopVision, stopAnalysis, stopAllPlayback, saveToMemory]);
 
-  return { isConnected, vaultItems, isGeneratingVaultItem, startSession, stopSession, volumeRef, transcripts };
+  // Send an image to the active Gemini Live session (for workspace uploads)
+  const sendImage = useCallback((base64: string, mimeType: string = 'image/jpeg') => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || !socketReadyRef.current) {
+      console.warn("[SEND IMAGE] Cannot send — session not active");
+      return false;
+    }
+    const payload = {
+      realtimeInput: {
+        mediaChunks: [{ mimeType, data: base64 }]
+      }
+    };
+    return safeSend(payload);
+  }, [safeSend]);
+
+  return { isConnected, vaultItems, isGeneratingVaultItem, startSession, stopSession, volumeRef, transcripts, sendImage };
 }

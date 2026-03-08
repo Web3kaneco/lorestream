@@ -55,7 +55,7 @@ function WorkspacePage() {
     }
   }, [paramAgentId, activeAgentId]);
 
-  const { isConnected, vaultItems, isGeneratingVaultItem, startSession, stopSession, volumeRef } = useGeminiLive(activeAgentId || '', auth.currentUser?.uid || '');
+  const { isConnected, vaultItems, isGeneratingVaultItem, startSession, stopSession, volumeRef, sendImage } = useGeminiLive(activeAgentId || '', auth.currentUser?.uid || '');
 
   // Derive animationState from connection + volume + generation state
   const [animationState, setAnimationState] = useState<AnimationState>('idle');
@@ -122,8 +122,17 @@ function WorkspacePage() {
     setDismissedIndices(allIndices);
   };
 
+  // Send uploaded file to the active Gemini session so the agent can see it
   const handleToolbarUpload = (data: { type: string; base64: string }) => {
-    handleAwaken(data);
+    if (isConnected) {
+      // Send image directly to the live conversation
+      const sent = sendImage(data.base64, 'image/jpeg');
+      if (sent) {
+        console.log('[WORKSPACE] Image sent to agent for conversation');
+      }
+    } else {
+      console.warn('[WORKSPACE] Cannot send file — agent not connected. Press AWAKEN first.');
+    }
   };
 
   return (
