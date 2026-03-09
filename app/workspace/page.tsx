@@ -11,6 +11,8 @@ import type { ArtifactPosition } from '@/components/ui/FloatingArtifact';
 import { SharePanel } from '@/components/ui/SharePanel';
 import { useGeminiLive } from '@/hooks/useGeminiLive';
 import { getOrCreateAnonymousId } from '@/lib/anonymousId';
+import { isAdminUser } from '@/lib/adminWhitelist';
+import { DemoLimitBanner } from '@/components/ui/DemoLimitBanner';
 import type { AnimationState } from '@/components/3d/Avatar';
 import dynamic from 'next/dynamic';
 import { LoginButton } from '@/components/ui/LoginButton';
@@ -57,9 +59,11 @@ function WorkspacePage() {
   // Stable user ID: Firebase UID if logged in, persistent anonymous ID otherwise
   // This ensures Pinecone namespaces and Firestore vault paths always work
   const [effectiveUserId, setEffectiveUserId] = useState<string>('');
+  const [isAdmin, setIsAdmin] = useState(false);
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged((user) => {
       setEffectiveUserId(user?.uid || getOrCreateAnonymousId());
+      setIsAdmin(isAdminUser(user?.email));
     });
     return () => unsubscribe();
   }, []);
@@ -72,7 +76,15 @@ function WorkspacePage() {
     }
   }, [paramAgentId, activeAgentId]);
 
-  const { isConnected, vaultItems, isGeneratingVaultItem, startSession, stopSession, volumeRef, sendContext } = useGeminiLive(activeAgentId || '', effectiveUserId);
+  const { isConnected, vaultItems, isGeneratingVaultItem, startSession, stopSession, volumeRef, sendContext, demoLimitReached } = useGeminiLive(activeAgentId || '', effectiveUserId, isAdmin);
+
+  // Demo limit reached — stop session after a short delay to let final response play
+  useEffect(() => {
+    if (demoLimitReached && isConnected) {
+      const timer = setTimeout(() => { stopSession(); }, 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [demoLimitReached, isConnected, stopSession]);
 
   // Derive animationState from connection + volume + generation state
   const [animationState, setAnimationState] = useState<AnimationState>('idle');
@@ -252,6 +264,9 @@ function WorkspacePage() {
               />
             ))}
           </div>
+
+          {/* Demo limit banner */}
+          {demoLimitReached && <DemoLimitBanner />}
 
           {/* Share Panel — text input + file staging + send */}
           <SharePanel

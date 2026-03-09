@@ -53,7 +53,7 @@ export default function SparkPage() {
     stopSession,
     volumeRef,
     transcripts
-  } = useGeminiLive('tutor_demo', 'anonymous', sparkConfig);
+  } = useGeminiLive('tutor_demo', 'anonymous', false, sparkConfig);
 
   // Poll volumeRef at 4Hz to derive animationState
   useEffect(() => {

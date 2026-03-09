@@ -114,7 +114,7 @@ export default function LandingPage() {
     stopSession,
     volumeRef,
     transcripts
-  } = useGeminiLive('architect_demo', auth.currentUser?.uid || 'anonymous', architectConfig);
+  } = useGeminiLive('architect_demo', auth.currentUser?.uid || 'anonymous', false, architectConfig);
 
   useEffect(() => {
     if (animTimerRef.current) clearInterval(animTimerRef.current);
