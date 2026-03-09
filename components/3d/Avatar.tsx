@@ -334,7 +334,8 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
   const forearmFixLRef = useRef<THREE.Quaternion | null>(null);
   const forearmFixRRef = useRef<THREE.Quaternion | null>(null);
   const armFixComputedRef = useRef(false);
-  const fingerFixAppliedRef = useRef(false);
+  // Finger bone data for per-frame natural curl (populated in Effect 1, applied every useFrame)
+  const fingerDataRef = useRef<{bone: THREE.Bone; restQ: THREE.Quaternion; isThumb: boolean; depth: number}[]>([]);
 
   // Diagnostic frame counter
   const diagFrameRef = useRef(0);
@@ -401,7 +402,7 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     forearmFixLRef.current = null;
     forearmFixRRef.current = null;
     armFixComputedRef.current = false;
-    fingerFixAppliedRef.current = false;
+    fingerDataRef.current = [];
     morphMeshRef.current = null;
     hasMorphMouthRef.current = false;
 
@@ -517,6 +518,54 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
           }
         }
       }
+    }
+
+    // ============================================================
+    // FINGER BONE COLLECTION — for per-frame natural curl
+    // Collect all finger bones from hand bones, store rest quaternions
+    // and determine curl parameters by depth in the finger chain.
+    // ============================================================
+    const collectFingerData = (handBone: THREE.Bone | null) => {
+      if (!handBone) return;
+      handBone.traverse((child) => {
+        if (child === handBone) return;
+        if (!(child as THREE.Bone).isBone) return;
+        const n = child.name.toLowerCase();
+        // Skip twist/helper/roll bones — these are IK helpers, not finger joints
+        if (n.includes('twist') || n.includes('helper') || n.includes('roll')) return;
+
+        const isThumb = n.includes('thumb');
+        // Count depth from hand bone: 1=proximal, 2=middle, 3=distal
+        let depth = 0;
+        let p: THREE.Object3D | null = child;
+        while (p && p !== handBone) { depth++; p = p.parent; }
+
+        fingerDataRef.current.push({
+          bone: child as THREE.Bone,
+          restQ: child.quaternion.clone(),
+          isThumb,
+          depth: Math.min(depth, 3)
+        });
+      });
+    };
+
+    // Find hand bones as children of forearm bones
+    let handL: THREE.Bone | null = null;
+    let handR: THREE.Bone | null = null;
+    if (forearmLRef.current) {
+      handL = forearmLRef.current.children.find(
+        c => (c as THREE.Bone).isBone && c.name.toLowerCase().includes('hand')
+      ) as THREE.Bone | null;
+    }
+    if (forearmRRef.current) {
+      handR = forearmRRef.current.children.find(
+        c => (c as THREE.Bone).isBone && c.name.toLowerCase().includes('hand')
+      ) as THREE.Bone | null;
+    }
+    collectFingerData(handL);
+    collectFingerData(handR);
+    if (fingerDataRef.current.length > 0) {
+      console.log(`%c[AVATAR] Finger bones collected: ${fingerDataRef.current.length}`, 'color: #d4af37; font-weight: bold');
     }
   }, [clone]);
 
@@ -652,11 +701,12 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     const width = smoothWidthRef.current;
 
     // =======================================
-    // ARM POSE SYSTEM — models WITHOUT animation clips
+    // ARM POSE SYSTEM — ALL models (animated or not)
     // Computes world-space fixes ONCE to bring arms from T-pose to
     // a natural resting pose, then applies subtle dynamic offsets.
+    // Applied AFTER mixer update, overriding animation arm positions.
     // =======================================
-    if (!hasRealAnimation && !armFixComputedRef.current && armLRef.current) {
+    if (!armFixComputedRef.current && armLRef.current) {
       // Helper: compute fix quaternion to rotate a bone's direction toward a target
       const computeBoneFix = (
         bone: THREE.Bone,
@@ -734,19 +784,19 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
         armRRef.current.updateWorldMatrix(true, true);
       }
 
-      // Forearms: slight forward bend for natural elbow angle
+      // Forearms: mostly downward with gentle elbow bend — "at sides" position
       if (forearmLRef.current) {
         forearmFixLRef.current = computeBoneFix(
           forearmLRef.current, null,
-          new THREE.Vector3(0.15, -0.75, 0.65), // Forward + slightly inward
-          0.40
+          new THREE.Vector3(0.08, -0.92, 0.30), // Mostly down, slight forward bend
+          0.50
         );
       }
       if (forearmRRef.current) {
         forearmFixRRef.current = computeBoneFix(
           forearmRRef.current, null,
-          new THREE.Vector3(-0.15, -0.75, 0.65), // Forward + slightly inward (mirrored)
-          0.40
+          new THREE.Vector3(-0.08, -0.92, 0.30), // Mirrored — mostly down, slight forward
+          0.50
         );
       }
 
@@ -758,8 +808,8 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       console.log('%c[AVATAR] Computed arm + forearm rest poses', 'color: #ffa500; font-weight: bold');
     }
 
-    // Apply arm poses + subtle dynamic offsets (only when no real animation)
-    if (!hasRealAnimation && armFixComputedRef.current) {
+    // Apply arm poses + subtle dynamic offsets (ALL models — overrides animation arms)
+    if (armFixComputedRef.current) {
       // Smooth blend: idle(0) ↔ talking(1)
       const talkTarget = vol > 0.03 ? 1.0 : 0.0;
       armTalkBlendRef.current = THREE.MathUtils.lerp(armTalkBlendRef.current, talkTarget, 0.04);
@@ -806,65 +856,31 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       }
     }
 
-    // =======================================
-    // ARM DAMPING — for models WITH real animation clips
-    // The idle_breathing animation often exaggerates arm movement.
-    // After the mixer updates, blend the arms toward a relaxed pose
-    // to tame flapping while keeping natural-looking motion.
-    // =======================================
-    if (hasRealAnimation && armLRef.current && armLRestQ.current) {
-      // Damping factor: 0 = full animation, 1 = full rest pose
-      // 0.6 removes most of the flap while keeping subtle life
-      const dampFactor = 0.6;
-
-      if (armLRef.current) {
-        armLRef.current.quaternion.slerp(armLRestQ.current, dampFactor);
-      }
-      if (armRRef.current && armRRestQ.current) {
-        armRRef.current.quaternion.slerp(armRRestQ.current, dampFactor);
-      }
-      // Forearms: lighter damping to keep some natural movement
-      if (forearmLRef.current && forearmLRestQ.current) {
-        forearmLRef.current.quaternion.slerp(forearmLRestQ.current, 0.4);
-      }
-      if (forearmRRef.current && forearmRRestQ.current) {
-        forearmRRef.current.quaternion.slerp(forearmRRestQ.current, 0.4);
-      }
-    }
+    // NOTE: Arm damping section removed — the universal arm pose system above
+    // now handles all models (both animated and non-animated). The old damping
+    // was incorrectly slerping toward T-pose rest quaternions.
 
     // =======================================
-    // FINGER CURL — force hand bones to a natural fist-like rest
-    // Finds L_Hand/R_Hand children (finger bones) and rotates them
-    // inward so fingers don't stick out straight.
+    // FINGER CURL — per-frame graduated natural curl
+    // Applies rest quaternion + curl offset every frame, so it works
+    // both for animated models (overrides after mixer) and non-animated.
+    // Graduated: proximal joints curl more, distal less. Thumbs curl inward.
     // =======================================
-    if (!fingerFixAppliedRef.current) {
-      const applyFingerCurl = (handBone: THREE.Bone | null) => {
-        if (!handBone) return;
-        handBone.traverse((child) => {
-          if (child === handBone) return;
-          if ((child as THREE.Bone).isBone) {
-            const n = child.name.toLowerCase();
-            // Only curl finger bones, not twist/helper bones
-            if (n.includes('twist') || n.includes('helper') || n.includes('roll')) return;
-            // Curl fingers inward by rotating around X axis
-            child.rotation.x += 0.35; // ~20 degrees curl
-          }
-        });
-      };
-      // Find hand bones from arm refs
-      if (forearmLRef.current) {
-        const handL = forearmLRef.current.children.find(
-          c => (c as THREE.Bone).isBone && c.name.toLowerCase().includes('hand')
-        ) as THREE.Bone | null;
-        applyFingerCurl(handL);
+    if (fingerDataRef.current.length > 0) {
+      // Depth multipliers: [hand=skip, proximal=full, middle=75%, distal=55%]
+      const depthMult = [0, 1.0, 0.75, 0.55];
+      for (const fd of fingerDataRef.current) {
+        const mult = depthMult[fd.depth] ?? 0.5;
+        if (mult === 0) continue; // skip hand bone if it slipped in
+        if (fd.isThumb) {
+          // Thumb: gentle inward curl (Y) + slight forward (X)
+          _e.set(0.18 * mult, 0.30 * mult, 0);
+        } else {
+          // Regular fingers: forward curl (X) for natural relaxed hand
+          _e.set(0.50 * mult, 0, 0);
+        }
+        fd.bone.quaternion.copy(fd.restQ).multiply(_q.setFromEuler(_e));
       }
-      if (forearmRRef.current) {
-        const handR = forearmRRef.current.children.find(
-          c => (c as THREE.Bone).isBone && c.name.toLowerCase().includes('hand')
-        ) as THREE.Bone | null;
-        applyFingerCurl(handR);
-      }
-      fingerFixAppliedRef.current = true;
     }
 
     // =======================================

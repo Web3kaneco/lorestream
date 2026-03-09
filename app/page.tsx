@@ -201,19 +201,13 @@ export default function LandingPage() {
         {/* Top bar */}
         <div className="sticky top-0 z-50 flex items-center justify-between px-6 py-4"
              style={{ backgroundColor: 'rgba(5,5,5,0.8)', backdropFilter: 'blur(12px)' }}>
-          <span className="text-[#d4af37] text-sm font-bold tracking-[0.3em]">LXXI</span>
+          <img src="/lxxi-logo.png" alt="LXXI" className="h-6 mix-blend-screen" />
           <LoginButton />
         </div>
 
         {/* ── HERO ── */}
         <section className="relative z-10 flex flex-col items-center pt-16 pb-20 px-6 text-center">
-          <h1 className="text-7xl md:text-9xl font-bold text-white mb-2 tracking-tight"
-              style={{ fontFamily: 'var(--font-heading)' }}>
-            LXXI
-          </h1>
-          <p className="text-xs tracking-[0.4em] uppercase text-white/25 mb-4">
-            Seventy-One
-          </p>
+          <img src="/lxxi-logo.png" alt="LXXI" className="h-28 md:h-40 mix-blend-screen mb-4" />
           <p className="text-lg md:text-xl text-white/50 font-light max-w-md leading-relaxed">
             Voice is for Vibe. Screen is for Substance.
           </p>

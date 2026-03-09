@@ -43,7 +43,8 @@
 body {
   background-color: var(--bg-primary, #050505);
   color: var(--text-primary, #e2e8f0);
-  overflow: hidden;
+  /* NOTE: Do NOT add overflow:hidden here — it blocks scrolling on the landing page.
+     Pages that need overflow control (workspace, interview) set it on their own <main>. */
 }
 
 /* Floating artifact entrance animation */
