@@ -1,13 +1,9 @@
 # ──────────────────────────────────────────────────────────────
 # LXXI — Automated Build & Deploy Pipeline
 #
-# CI/CD workflow that runs on every push to main:
-#   1. Install dependencies
-#   2. TypeScript type-check (catches errors before deploy)
-#   3. Build the Next.js production app
-#   4. Deploy to Firebase Hosting via service account
-#
-# PRs get build verification only (no deploy).
+# CI/CD workflow that automates the full deployment lifecycle:
+#   • On pull requests: type-check + build verification
+#   • On push to main:  type-check + build + deploy to Firebase
 #
 # Infrastructure-as-code: This file IS the deployment automation.
 # No manual deploys needed — merge to main and it ships.
@@ -26,7 +22,7 @@ env:
   FIREBASE_PROJECT: lxxi-lorestream
 
 jobs:
-  # ── Step 1: Type-check + Build ─────────────────────────────
+  # ── CI: Verify the build on every push and PR ──────────────
   build:
     name: "CI: Build & Verify"
     runs-on: ubuntu-latest
@@ -58,15 +54,7 @@ jobs:
           NEXT_PUBLIC_FIREBASE_APP_ID: ${{ secrets.NEXT_PUBLIC_FIREBASE_APP_ID }}
           NEXT_PUBLIC_GEMINI_KEY: ${{ secrets.NEXT_PUBLIC_GEMINI_KEY }}
 
-      - name: Upload build output
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@v4
-        with:
-          name: nextjs-build
-          path: .next/
-          retention-days: 1
-
-  # ── Step 2: Deploy to Firebase Hosting (main branch only) ──
+  # ── CD: Deploy to Firebase Hosting (main branch only) ──────
   deploy:
     name: "CD: Deploy to Firebase Hosting"
     needs: build
@@ -86,11 +74,16 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Download build output
-        uses: actions/download-artifact@v4
-        with:
-          name: nextjs-build
-          path: .next/
+      - name: Build for production
+        run: npm run build
+        env:
+          NEXT_PUBLIC_FIREBASE_API_KEY: ${{ secrets.NEXT_PUBLIC_FIREBASE_API_KEY }}
+          NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: lxxi-lorestream.firebaseapp.com
+          NEXT_PUBLIC_FIREBASE_PROJECT_ID: lxxi-lorestream
+          NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: lxxi-lorestream.firebasestorage.app
+          NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: "694967019558"
+          NEXT_PUBLIC_FIREBASE_APP_ID: ${{ secrets.NEXT_PUBLIC_FIREBASE_APP_ID }}
+          NEXT_PUBLIC_GEMINI_KEY: ${{ secrets.NEXT_PUBLIC_GEMINI_KEY }}
 
       - name: Deploy to Firebase Hosting
         uses: FirebaseExtended/action-hosting-deploy@v0
