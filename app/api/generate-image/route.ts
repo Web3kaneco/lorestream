@@ -1,11 +1,18 @@
 import { NextResponse } from 'next/server';
 import { GoogleGenAI } from '@google/genai';
 
+// Lazy-init Gemini client — avoids crash during Next.js build when env vars aren't set.
 // Server-side routes use GEMINI_API_KEY (never exposed to browser).
 // Falls back to NEXT_PUBLIC_GEMINI_KEY for local dev convenience.
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_KEY || '',
-});
+let _ai: GoogleGenAI | null = null;
+function getAI(): GoogleGenAI {
+  if (!_ai) {
+    const key = process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_KEY || '';
+    if (!key) throw new Error('Gemini API key not configured');
+    _ai = new GoogleGenAI({ apiKey: key });
+  }
+  return _ai;
+}
 
 // Image generation quality tiers (Imagen 4)
 const IMAGE_MODELS = {
@@ -50,7 +57,7 @@ async function handleStandardImageGeneration(prompt: string, quality?: string, s
 
   console.log(`[TOOL ENGINE] Generating with ${model} at ${selectedSize}: "${prompt.substring(0, 80)}..."`);
 
-  const response = await ai.models.generateImages({
+  const response = await getAI().models.generateImages({
     model,
     prompt,
     config: {
@@ -101,7 +108,7 @@ async function handleReferenceImageGeneration(prompt: string, referenceUrls: str
     })
   );
 
-  const response = await ai.models.generateContent({
+  const response = await getAI().models.generateContent({
     model: GEMINI_IMAGE_MODEL,
     contents: [{
       role: 'user',
