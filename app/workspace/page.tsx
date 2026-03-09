@@ -1,12 +1,13 @@
 'use client';
 
-import { useState, useEffect, useRef, Suspense } from 'react';
+import { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { httpsCallable } from 'firebase/functions';
 import { auth, functions } from '@/lib/firebase';
 import { DropZone } from '@/components/ui/DropZone';
 import { ActiveLoadingScreen } from '@/components/ui/ActiveLoadingScreen';
-import { FloatingArtifact } from '@/components/ui/FloatingArtifact';
+import { FloatingArtifact, getInitialPosition } from '@/components/ui/FloatingArtifact';
+import type { ArtifactPosition } from '@/components/ui/FloatingArtifact';
 import { SharePanel } from '@/components/ui/SharePanel';
 import { useGeminiLive } from '@/hooks/useGeminiLive';
 import { getOrCreateAnonymousId } from '@/lib/anonymousId';
@@ -47,6 +48,11 @@ function WorkspacePage() {
 
   // Dismissed floating artifacts — visual only, items persist in Firebase
   const [dismissedIndices, setDismissedIndices] = useState<Set<number>>(new Set());
+
+  // Artifact positions — keyed by original vault index
+  // Positions are calculated lazily and updated on drag
+  const [artifactPositions, setArtifactPositions] = useState<Record<number, ArtifactPosition>>({});
+  const positionedIndicesRef = useRef<Set<number>>(new Set());
 
   // Stable user ID: Firebase UID if logged in, persistent anonymous ID otherwise
   // This ensures Pinecone namespaces and Firestore vault paths always work
@@ -131,7 +137,50 @@ function WorkspacePage() {
     const allIndices = new Set(dismissedIndices);
     vaultItems.forEach((_, idx) => allIndices.add(idx));
     setDismissedIndices(allIndices);
+    // Reset positions so cleared items don't leave ghost state
+    setArtifactPositions({});
+    positionedIndicesRef.current = new Set();
   };
+
+  // Compute initial positions for new artifacts (runs when visibleItems changes)
+  useEffect(() => {
+    const newPositions: Record<number, ArtifactPosition> = {};
+    let changed = false;
+
+    // Count how many of each side-type already have positions
+    let rightCount = 0; // images
+    let leftCount = 0;  // documents, etc.
+
+    // First pass: count already-positioned items by side
+    for (const { item, originalIndex } of visibleItems) {
+      if (positionedIndicesRef.current.has(originalIndex)) {
+        if (item.type === 'image') rightCount++;
+        else leftCount++;
+      }
+    }
+
+    // Second pass: assign positions to new items
+    for (const { item, originalIndex } of visibleItems) {
+      if (!positionedIndicesRef.current.has(originalIndex)) {
+        const sameTypeBefore = item.type === 'image' ? rightCount : leftCount;
+        newPositions[originalIndex] = getInitialPosition(item, sameTypeBefore);
+        positionedIndicesRef.current.add(originalIndex);
+        changed = true;
+
+        if (item.type === 'image') rightCount++;
+        else leftCount++;
+      }
+    }
+
+    if (changed) {
+      setArtifactPositions(prev => ({ ...prev, ...newPositions }));
+    }
+  }, [visibleItems]);
+
+  // Handle drag end — update stored position
+  const handleDragEnd = useCallback((originalIndex: number, newPos: ArtifactPosition) => {
+    setArtifactPositions(prev => ({ ...prev, [originalIndex]: newPos }));
+  }, []);
 
   return (
     <main className="relative w-screen h-screen bg-[#050505] overflow-hidden font-mono selection:bg-[#d4af37] selection:text-black">
@@ -188,7 +237,7 @@ function WorkspacePage() {
             <div className="pointer-events-none absolute bottom-0 left-0 right-0 h-32 bg-gradient-to-t from-[#050505] via-[#050505]/70 to-transparent" />
           </div>
 
-          {/* Floating artifacts — max 5 visible */}
+          {/* Floating artifacts — max 5 visible, draggable */}
           <div className="absolute inset-0 z-20 pointer-events-none">
             {visibleItems.map(({ item, originalIndex }, displayIndex) => (
               <FloatingArtifact
@@ -197,7 +246,9 @@ function WorkspacePage() {
                 index={displayIndex}
                 total={visibleItems.length}
                 isNewest={displayIndex === visibleItems.length - 1}
+                position={artifactPositions[originalIndex] || { x: 0, y: 80 }}
                 onDismiss={() => handleDismiss(originalIndex)}
+                onDragEnd={(pos) => handleDragEnd(originalIndex, pos)}
               />
             ))}
           </div>
