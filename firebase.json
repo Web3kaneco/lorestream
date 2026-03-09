@@ -10,5 +10,44 @@
       "firebase-debug.*.log",
       "*.local"
     ]
+  },
+  "hosting": {
+    "public": "out",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ],
+    "headers": [
+      {
+        "source": "**/*.@(glb|gltf)",
+        "headers": [
+          { "key": "Access-Control-Allow-Origin", "value": "*" },
+          { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }
+        ]
+      },
+      {
+        "source": "**/*.@(js|css)",
+        "headers": [
+          { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }
+        ]
+      },
+      {
+        "source": "**/*.@(png|jpg|jpeg|gif|webp|svg|ico)",
+        "headers": [
+          { "key": "Cache-Control", "value": "public, max-age=86400" }
+        ]
+      }
+    ]
+  },
+  "emulators": {
+    "functions": { "port": 5001 },
+    "firestore": { "port": 8080 },
+    "storage": { "port": 9199 },
+    "auth": { "port": 9099 },
+    "hosting": { "port": 5000 },
+    "ui": { "enabled": true }
   }
 }

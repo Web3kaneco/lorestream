@@ -1,3 +1,44 @@
+# Firebase App Hosting Configuration
+# https://firebase.google.com/docs/app-hosting
+#
+# Secrets are managed via Firebase CLI:
+#   firebase apphosting:secrets:set SECRET_NAME
+#
+# After setting secrets, grant access:
+#   firebase apphosting:secrets:grantaccess SECRET_NAME
+
+runConfig:
+  minInstances: 0
+  maxInstances: 10
+  cpu: 1
+  memoryMiB: 512
+  concurrency: 80
+
 env:
+  # --- Client-side (bundled into browser JS) ---
+  # Gemini key for WebSocket Live API (client-side, restrict by HTTP referrer)
   - variable: NEXT_PUBLIC_GEMINI_KEY
     secret: NEXT_PUBLIC_GEMINI_KEY
+
+  # Firebase client config (safe to expose — secured by Firebase Security Rules)
+  - variable: NEXT_PUBLIC_FIREBASE_API_KEY
+    secret: NEXT_PUBLIC_FIREBASE_API_KEY
+  - variable: NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN
+    value: lorestream-3325c.firebaseapp.com
+  - variable: NEXT_PUBLIC_FIREBASE_PROJECT_ID
+    value: lorestream-3325c
+  - variable: NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
+    value: lorestream-3325c.firebasestorage.app
+  - variable: NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID
+    value: "694967019558"
+  - variable: NEXT_PUBLIC_FIREBASE_APP_ID
+    secret: NEXT_PUBLIC_FIREBASE_APP_ID
+
+  # --- Server-side only (never sent to browser) ---
+  # Gemini key for API routes (embeddings, image generation)
+  - variable: GEMINI_API_KEY
+    secret: GEMINI_API_KEY
+
+  # Pinecone for vector memory
+  - variable: PINECONE_API_KEY
+    secret: PINECONE_API_KEY
