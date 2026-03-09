@@ -334,6 +334,7 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
   const forearmFixLRef = useRef<THREE.Quaternion | null>(null);
   const forearmFixRRef = useRef<THREE.Quaternion | null>(null);
   const armFixComputedRef = useRef(false);
+  const fingerFixAppliedRef = useRef(false);
 
   // Diagnostic frame counter
   const diagFrameRef = useRef(0);
@@ -400,6 +401,7 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     forearmFixLRef.current = null;
     forearmFixRRef.current = null;
     armFixComputedRef.current = false;
+    fingerFixAppliedRef.current = false;
     morphMeshRef.current = null;
     hasMorphMouthRef.current = false;
 
@@ -802,6 +804,67 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       } else if (forearmRRef.current && forearmRRestQ.current) {
         forearmRRef.current.quaternion.copy(forearmRRestQ.current);
       }
+    }
+
+    // =======================================
+    // ARM DAMPING — for models WITH real animation clips
+    // The idle_breathing animation often exaggerates arm movement.
+    // After the mixer updates, blend the arms toward a relaxed pose
+    // to tame flapping while keeping natural-looking motion.
+    // =======================================
+    if (hasRealAnimation && armLRef.current && armLRestQ.current) {
+      // Damping factor: 0 = full animation, 1 = full rest pose
+      // 0.6 removes most of the flap while keeping subtle life
+      const dampFactor = 0.6;
+
+      if (armLRef.current) {
+        armLRef.current.quaternion.slerp(armLRestQ.current, dampFactor);
+      }
+      if (armRRef.current && armRRestQ.current) {
+        armRRef.current.quaternion.slerp(armRRestQ.current, dampFactor);
+      }
+      // Forearms: lighter damping to keep some natural movement
+      if (forearmLRef.current && forearmLRestQ.current) {
+        forearmLRef.current.quaternion.slerp(forearmLRestQ.current, 0.4);
+      }
+      if (forearmRRef.current && forearmRRestQ.current) {
+        forearmRRef.current.quaternion.slerp(forearmRRestQ.current, 0.4);
+      }
+    }
+
+    // =======================================
+    // FINGER CURL — force hand bones to a natural fist-like rest
+    // Finds L_Hand/R_Hand children (finger bones) and rotates them
+    // inward so fingers don't stick out straight.
+    // =======================================
+    if (!fingerFixAppliedRef.current) {
+      const applyFingerCurl = (handBone: THREE.Bone | null) => {
+        if (!handBone) return;
+        handBone.traverse((child) => {
+          if (child === handBone) return;
+          if ((child as THREE.Bone).isBone) {
+            const n = child.name.toLowerCase();
+            // Only curl finger bones, not twist/helper bones
+            if (n.includes('twist') || n.includes('helper') || n.includes('roll')) return;
+            // Curl fingers inward by rotating around X axis
+            child.rotation.x += 0.35; // ~20 degrees curl
+          }
+        });
+      };
+      // Find hand bones from arm refs
+      if (forearmLRef.current) {
+        const handL = forearmLRef.current.children.find(
+          c => (c as THREE.Bone).isBone && c.name.toLowerCase().includes('hand')
+        ) as THREE.Bone | null;
+        applyFingerCurl(handL);
+      }
+      if (forearmRRef.current) {
+        const handR = forearmRRef.current.children.find(
+          c => (c as THREE.Bone).isBone && c.name.toLowerCase().includes('hand')
+        ) as THREE.Bone | null;
+        applyFingerCurl(handR);
+      }
+      fingerFixAppliedRef.current = true;
     }
 
     // =======================================

@@ -56,7 +56,7 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
   // Resolve config flags with defaults
   const enableVision = config?.enableVision !== false;
   const enableMemory = config?.enableMemory !== false;
-  const voiceName = config?.voiceName || "Fenrir";
+  const voiceName = config?.voiceName || "Aoede";
 
   // Modular hooks
   const { saveToMemory } = useAgentMemory(agentId, userId);

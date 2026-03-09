@@ -8,6 +8,46 @@ function getPinecone() {
   return pc;
 }
 
+// Retry-aware embedding fetch — retries once after 500ms on failure
+async function getEmbeddingWithRetry(text: string, apiKey: string): Promise<number[]> {
+  const models = ['text-embedding-004', 'gemini-embedding-001'];
+  const maxAttempts = 2;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    for (const model of models) {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:embedContent?key=${apiKey}`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: `models/${model}`,
+          outputDimensionality: 768,
+          content: { parts: [{ text }] }
+        })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const vals = data.embedding?.values as number[];
+        if (vals && Array.isArray(vals) && vals.length > 0) return vals;
+      }
+
+      // If rate limited (429), wait before retry
+      if (res.status === 429 && attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
+        break; // restart model loop on next attempt
+      }
+    }
+
+    // Wait between retry attempts
+    if (attempt < maxAttempts - 1) {
+      await new Promise(r => setTimeout(r, 500));
+    }
+  }
+
+  throw new Error("All embedding models failed — check API key permissions");
+}
+
 export async function POST(req: Request) {
   try {
     const body = await req.json();
@@ -28,37 +68,10 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "No API key configured" }, { status: 500 });
     }
 
-    // 2. Fetch Gemini Embedding (try multiple models for compatibility)
-    let vector: number[] | null = null;
-    const models = ['text-embedding-004', 'gemini-embedding-001'];
+    // 2. Fetch Gemini Embedding with retry
+    const vector = await getEmbeddingWithRetry(transcript, apiKey);
 
-    for (const model of models) {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:embedContent?key=${apiKey}`;
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: `models/${model}`,
-          outputDimensionality: 768,
-          content: { parts: [{ text: transcript }] }
-        })
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        const vals = data.embedding?.values as number[];
-        if (vals && Array.isArray(vals) && vals.length > 0) {
-          vector = vals;
-          break;
-        }
-      }
-    }
-
-    if (!vector) {
-      throw new Error("All embedding models failed — check API key permissions");
-    }
-
-    // 4. Target your Pinecone Vault with namespace isolation per agent
+    // 3. Target your Pinecone Vault with namespace isolation per agent
     const index = getPinecone().Index('agent-memory');
     const safeAgentId = String(agentId || 'unknown_agent');
     const safeUserId = String(userId || 'unknown_user');

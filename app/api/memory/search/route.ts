@@ -10,36 +10,46 @@ function getPinecone() {
 
 // Circuit breaker — stop spamming API if key is invalid
 let consecutiveFailures = 0;
-const MAX_FAILURES = 3;
+const MAX_FAILURES = 5; // Raised from 3 — intermittent rate limits shouldn't trip the breaker
 
-// Try embedding with fallback models
+// Retry-aware embedding fetch — retries once after 500ms on failure
 async function getEmbedding(text: string, apiKey: string): Promise<number[]> {
-  const models = [
-    'text-embedding-004',
-    'gemini-embedding-001',
-  ];
+  const models = ['text-embedding-004', 'gemini-embedding-001'];
+  const maxAttempts = 2;
 
-  for (const model of models) {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:embedContent?key=${apiKey}`;
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: `models/${model}`,
-        outputDimensionality: 768,
-        content: { parts: [{ text }] }
-      })
-    });
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    for (const model of models) {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:embedContent?key=${apiKey}`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: `models/${model}`,
+          outputDimensionality: 768,
+          content: { parts: [{ text }] }
+        })
+      });
 
-    if (res.ok) {
-      const data = await res.json();
-      const vector = data.embedding?.values as number[];
-      if (vector && Array.isArray(vector) && vector.length > 0) {
-        consecutiveFailures = 0; // Reset circuit breaker
-        return vector;
+      if (res.ok) {
+        const data = await res.json();
+        const vector = data.embedding?.values as number[];
+        if (vector && Array.isArray(vector) && vector.length > 0) {
+          consecutiveFailures = 0; // Reset circuit breaker
+          return vector;
+        }
+      }
+
+      // If rate limited (429), wait before retry
+      if (res.status === 429 && attempt < maxAttempts - 1) {
+        await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
+        break; // restart model loop on next attempt
       }
     }
-    // Try next model
+
+    // Wait between retry attempts
+    if (attempt < maxAttempts - 1) {
+      await new Promise(r => setTimeout(r, 500));
+    }
   }
 
   throw new Error('All embedding models failed — check API key permissions');
@@ -70,7 +80,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ memories: [], note: 'No API key configured' });
     }
 
-    // 1. Embed the query with fallback models
+    // 1. Embed the query with retry
     let vector: number[];
     try {
       vector = await getEmbedding(query, apiKey);
@@ -81,6 +91,7 @@ export async function POST(req: Request) {
       }
       throw e;
     }
+
     // 2. Query Pinecone for similar memories, filtered by user+agent
     const index = getPinecone().Index('agent-memory');
     const namespace = index.namespace(`${userId}_${agentId}`);
