@@ -26,11 +26,16 @@ export interface GeminiLiveConfig {
   onToolCallback?: (toolName: string, args: any) => void;
 }
 
-export function useGeminiLive(agentId: string, userId: string, config?: GeminiLiveConfig) {
+export function useGeminiLive(agentId: string, userId: string, isAdmin: boolean = false, config?: GeminiLiveConfig) {
   const [isConnected, setIsConnected] = useState(false);
   const [vaultItems, setVaultItems] = useState<any[]>([]); // VaultItem[] at runtime
   const [isGeneratingVaultItem, setIsGeneratingVaultItem] = useState(false);
   const [transcripts, setTranscripts] = useState<{speaker: string, text: string}[]>([]);
+  const [demoLimitReached, setDemoLimitReached] = useState(false);
+
+  // Demo exchange counter — tracks user speech turns for non-admin users
+  const DEMO_EXCHANGE_LIMIT = 5;
+  const exchangeCountRef = useRef(0);
 
   const wsRef = useRef<WebSocket | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -151,9 +156,9 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
           }
         }
 
-        // Load recent Pinecone conversation history
+        // Load recent Pinecone conversation history (admin only — saves API calls for demo users)
         let recentMemories = "";
-        if (enableMemory) {
+        if (enableMemory && isAdmin) {
           try {
             const memRes = await fetch('/api/memory/search', {
               method: 'POST',
@@ -174,10 +179,26 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
           recentMemories,
           archetype
         );
+
+        // Append demo-mode instructions for non-admin users
+        if (!isAdmin) {
+          systemInstructionText += `\n\n--- DEMO MODE ---
+You are currently in DEMO MODE. You only have ${DEMO_EXCHANGE_LIMIT} voice exchanges with this user.
+Make every exchange count — be captivating, warm, and show your personality.
+
+IMPORTANT: You cannot generate images, create documents, search memories, or use any tools right now.
+If the user asks you to create, draw, generate, or make anything, respond naturally explaining that
+you can't do that right now in demo mode — you're just here to intrigue them and show them what you're about.
+Tease what's possible with full access: "If you had full access, I could paint that for you in seconds..."
+Keep it playful and make them want more.`;
+        }
       }
 
-      // Build tools — either from config override or defaults
-      const toolDeclarations = config?.tools || [{
+      // Build tools — admin users get full tools, demo users get none (voice-only)
+      // When tools aren't declared, Gemini can't call them — cleanest gating possible
+      const toolDeclarations = !isAdmin
+        ? [] // Demo mode: voice-only, no tools
+        : (config?.tools || [{
         functionDeclarations: [
           {
             name: "create_vault_artifact",
@@ -218,7 +239,7 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
             }
           }
         ]
-      }];
+      }]);
 
       // Audio context setup — 24kHz matches Gemini's native audio output rate
       // Mic capture downsamples 24kHz → 16kHz in the audio worklet before sending
@@ -418,7 +439,7 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
                     return updated.length > 500 ? updated.slice(-500) : updated;
                   });
 
-                  if (enableMemory) {
+                  if (enableMemory && isAdmin) {
                     agentTranscriptBufferRef.current += part.text;
                     if (memoryTimeoutRef.current) clearTimeout(memoryTimeoutRef.current);
                     memoryTimeoutRef.current = setTimeout(() => {
@@ -456,7 +477,18 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
               return updated.length > 500 ? updated.slice(-500) : updated;
             });
 
-            if (enableMemory) {
+            // Demo exchange counter — flag limit reached for non-admin users
+            // The actual session stop is handled by the workspace page via demoLimitReached
+            if (!isAdmin) {
+              exchangeCountRef.current++;
+              console.log(`[DEMO] Exchange ${exchangeCountRef.current}/${DEMO_EXCHANGE_LIMIT}`);
+              if (exchangeCountRef.current >= DEMO_EXCHANGE_LIMIT) {
+                console.log('[DEMO] Exchange limit reached — flagging for session end');
+                setDemoLimitReached(true);
+              }
+            }
+
+            if (enableMemory && isAdmin) {
               userTranscriptBufferRef.current += " " + userText;
               if (userMemoryTimeoutRef.current) clearTimeout(userMemoryTimeoutRef.current);
               userMemoryTimeoutRef.current = setTimeout(() => {
@@ -527,7 +559,7 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
       micStreamRef.current?.getTracks().forEach(track => track.stop());
       if (wsRef.current) { try { wsRef.current.close(); } catch(e) {} wsRef.current = null; }
     }
-  }, [agentId, userId, isConnected, config, enableVision, enableMemory, voiceName, saveToMemory, startVision, startAnalysis, playAudioBuffer, interruptPlayback, handleToolCall, safeSend]);
+  }, [agentId, userId, isConnected, isAdmin, config, enableVision, enableMemory, voiceName, saveToMemory, startVision, startAnalysis, playAudioBuffer, interruptPlayback, handleToolCall, safeSend]);
 
   const stopSession = useCallback(() => {
     userStoppedRef.current = true; // Prevent auto-reconnection
@@ -606,8 +638,8 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
         const updated = [...prev, { speaker: 'USER', text: summary }];
         return updated.length > 500 ? updated.slice(-500) : updated;
       });
-      // Save text to Pinecone memory
-      if (enableMemory && text.trim()) {
+      // Save text to Pinecone memory (admin only)
+      if (enableMemory && isAdmin && text.trim()) {
         saveToMemory(text.trim(), 'user');
       }
       console.log(`[CONTEXT] Sent: ${text.trim().substring(0, 50)}... + ${attachments.length} file(s)`);
@@ -615,5 +647,5 @@ export function useGeminiLive(agentId: string, userId: string, config?: GeminiLi
     return sent;
   }, [safeSend, enableMemory, saveToMemory, setTranscripts]);
 
-  return { isConnected, vaultItems, isGeneratingVaultItem, startSession, stopSession, volumeRef, transcripts, sendContext };
+  return { isConnected, vaultItems, isGeneratingVaultItem, startSession, stopSession, volumeRef, transcripts, sendContext, demoLimitReached };
 }
