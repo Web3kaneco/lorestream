@@ -1,8 +1,11 @@
 import { NextResponse } from 'next/server';
 import { GoogleGenAI } from '@google/genai';
 
-// Initialize the Google GenAI SDK
-const ai = new GoogleGenAI({ apiKey: process.env.NEXT_PUBLIC_GEMINI_KEY });
+// Server-side routes use GEMINI_API_KEY (never exposed to browser).
+// Falls back to NEXT_PUBLIC_GEMINI_KEY for local dev convenience.
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_KEY || '',
+});
 
 // Image generation quality tiers (Imagen 4)
 const IMAGE_MODELS = {

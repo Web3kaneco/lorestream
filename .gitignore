@@ -1,12 +1,40 @@
-# environment variables
+# Dependencies
+node_modules/
+functions/node_modules/
+
+# Environment variables — NEVER commit these
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+.env.*
+!.env.example
 functions/.env
-node_modules
-# Next.js Build Output
-.next*
 .env.production
-.env*
+
+# Next.js build output
+.next/
+out/
+
+# Firebase
+.firebase/
+firebase-debug.log
+firebase-debug.*.log
+firestore-debug.log
+ui-debug.log
+
+# Cloud Functions build output
+functions/lib/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# TypeScript
+*.tsbuildinfo
+
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

@@ -21,7 +21,9 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Missing agentId or userId" }, { status: 400 });
     }
 
-    const apiKey = process.env.NEXT_PUBLIC_GEMINI_KEY;
+    // Server-side routes use GEMINI_API_KEY (never exposed to browser).
+    // Falls back to NEXT_PUBLIC_GEMINI_KEY for local dev convenience.
+    const apiKey = process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_KEY;
     if (!apiKey) {
       return NextResponse.json({ error: "No API key configured" }, { status: 500 });
     }
