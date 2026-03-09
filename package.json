@@ -19,7 +19,7 @@
         "@types/react-syntax-highlighter": "^15.5.13",
         "alchemy-sdk": "^3.6.5",
         "firebase": "^10.11.1",
-        "firebase-admin": "^13.6.1",
+        "firebase-admin": "^13.7.0",
         "firebase-functions": "^7.0.5",
         "next": "14.2.3",
         "react": "^18.3.1",

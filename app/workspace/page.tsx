@@ -135,11 +135,10 @@ function WorkspacePage() {
     }
   };
 
-  // Visible floating items — filter dismissed, take last 5
+  // Visible floating items — filter dismissed only (no cap — user controls what stays visible)
   const visibleItems = vaultItems
     .map((item, idx) => ({ item, originalIndex: idx }))
-    .filter(({ originalIndex }) => !dismissedIndices.has(originalIndex))
-    .slice(-5);
+    .filter(({ originalIndex }) => !dismissedIndices.has(originalIndex));
 
   const handleDismiss = (originalIndex: number) => {
     setDismissedIndices(prev => new Set(prev).add(originalIndex));
@@ -200,7 +199,7 @@ function WorkspacePage() {
       {/* Top bar — minimal branding + login */}
       <div className="absolute top-0 left-0 right-0 z-50 flex items-center justify-between px-4 py-3">
         <div className="flex items-center gap-3">
-          <span className="text-[#d4af37] text-sm font-bold tracking-widest">LXXI</span>
+          <img src="/lxxi-logo.png" alt="LXXI" className="h-6 mix-blend-screen" />
           <span className="text-white/20 text-xs">WORKSPACE</span>
           <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-[#d4af37] animate-pulse' : 'bg-gray-600'}`} />
         </div>
