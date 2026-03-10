@@ -1,4 +1,5 @@
 import { useCallback, useRef, useEffect } from 'react';
+import { getAuthHeaders } from '@/lib/getAuthToken';
 
 export function useAgentMemory(agentId: string, userId: string) {
   // Track all active controllers for proper cleanup (fixes race condition with single ref)
@@ -16,10 +17,11 @@ export function useAgentMemory(agentId: string, userId: string) {
 
     const doFetch = async (attempt: number) => {
       try {
+        const hdrs = await getAuthHeaders();
         const res = await fetch('/api/memory', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ agentId, userId, transcript: text, speaker }),
+          headers: hdrs,
+          body: JSON.stringify({ agentId, transcript: text, speaker }),
           signal: controller.signal
         });
 

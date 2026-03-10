@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { Pinecone } from '@pinecone-database/pinecone';
+import { verifyAuthToken } from '@/lib/firebaseAdmin';
 
 // Lazy init to avoid build-time errors when env var isn't available
 let pc: Pinecone | null = null;
@@ -50,20 +51,28 @@ async function getEmbeddingWithRetry(text: string, apiKey: string): Promise<numb
 
 export async function POST(req: Request) {
   try {
+    // ── Auth verification ──
+    const authUser = await verifyAuthToken(req.headers.get('authorization'));
+    if (!authUser) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const body = await req.json();
-    const { agentId, userId, transcript, speaker } = body;
+    const { agentId, transcript, speaker } = body;
+
+    // Use authenticated UID instead of trusting request body
+    const userId = authUser.uid;
 
     // 1. Strict validation
     if (!transcript || typeof transcript !== 'string' || transcript.trim() === '') {
       return NextResponse.json({ error: "Missing or invalid transcript" }, { status: 400 });
     }
-    if (!agentId || !userId) {
-      return NextResponse.json({ error: "Missing agentId or userId" }, { status: 400 });
+    if (!agentId) {
+      return NextResponse.json({ error: "Missing agentId" }, { status: 400 });
     }
 
     // Server-side routes use GEMINI_API_KEY (never exposed to browser).
-    // Falls back to NEXT_PUBLIC_GEMINI_KEY for local dev convenience.
-    const apiKey = process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_KEY;
+    const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
       return NextResponse.json({ error: "No API key configured" }, { status: 500 });
     }
@@ -74,8 +83,7 @@ export async function POST(req: Request) {
     // 3. Target your Pinecone Vault with namespace isolation per agent
     const index = getPinecone().Index('agent-memory');
     const safeAgentId = String(agentId || 'unknown_agent');
-    const safeUserId = String(userId || 'unknown_user');
-    const namespace = index.namespace(`${safeUserId}_${safeAgentId}`);
+    const namespace = index.namespace(`${userId}_${safeAgentId}`);
     const memoryId = `mem_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
 
     const record = {
@@ -83,7 +91,7 @@ export async function POST(req: Request) {
         values: vector,
         metadata: {
             agentId: safeAgentId,
-            userId: safeUserId,
+            userId,
             speaker: String(speaker || 'unknown_speaker'),
             text: String(transcript).substring(0, 1000),
             timestamp: Date.now()
@@ -94,11 +102,10 @@ export async function POST(req: Request) {
         records: [record]
     });
 
-    console.log(`💾 [MEMORY] Vault Saved: "${transcript.substring(0, 30)}..."`);
     return NextResponse.json({ success: true, memoryId });
 
   } catch (error: any) {
-    console.error("🚨 [MEMORY API ERROR]:", error.message || error);
+    console.error("[MEMORY API ERROR]:", error.message || error);
     return NextResponse.json({ error: error.message || "Failed to process memory" }, { status: 500 });
   }
 }

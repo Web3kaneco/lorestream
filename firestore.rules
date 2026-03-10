@@ -1,0 +1,31 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Users: only the owner can read/write their own document ──
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+
+      // ── Agents: owned by parent user ──
+      match /agents/{agentId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // ── Vault items: owned by parent user ──
+      match /agents/{agentId}/vault/{itemId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+    }
+
+    // ── Demo agents (public read for the WOW demo persona) ──
+    match /demoAgents/{agentId} {
+      allow read: if true;
+      allow write: if false; // Admin-only via Firebase Console
+    }
+
+    // ── Default deny everything else ──
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

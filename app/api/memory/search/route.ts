@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { Pinecone } from '@pinecone-database/pinecone';
+import { verifyAuthToken } from '@/lib/firebaseAdmin';
 
 // Lazy init to avoid build-time errors when env var isn't available
 let pc: Pinecone | null = null;
@@ -10,7 +11,7 @@ function getPinecone() {
 
 // Circuit breaker — stop spamming API if key is invalid
 let consecutiveFailures = 0;
-const MAX_FAILURES = 5; // Raised from 3 — intermittent rate limits shouldn't trip the breaker
+const MAX_FAILURES = 5;
 
 // Retry-aware embedding fetch — retries once after 500ms on failure
 async function getEmbedding(text: string, apiKey: string): Promise<number[]> {
@@ -57,25 +58,33 @@ async function getEmbedding(text: string, apiKey: string): Promise<number[]> {
 
 export async function POST(req: Request) {
   try {
+    // ── Auth verification ──
+    const authUser = await verifyAuthToken(req.headers.get('authorization'));
+    if (!authUser) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     // Circuit breaker — don't spam API if key is clearly invalid
     if (consecutiveFailures >= MAX_FAILURES) {
       return NextResponse.json({ memories: [], note: 'Memory search temporarily disabled — embedding API unavailable' });
     }
 
     const body = await req.json();
-    const { query, userId, agentId } = body;
+    const { query, agentId } = body;
+
+    // Use authenticated UID instead of trusting request body
+    const userId = authUser.uid;
 
     if (!query || typeof query !== 'string' || query.trim() === '') {
       return NextResponse.json({ error: "Missing or invalid query" }, { status: 400 });
     }
 
-    if (!userId || !agentId) {
-      return NextResponse.json({ error: "Missing userId or agentId" }, { status: 400 });
+    if (!agentId) {
+      return NextResponse.json({ error: "Missing agentId" }, { status: 400 });
     }
 
     // Server-side routes use GEMINI_API_KEY (never exposed to browser).
-    // Falls back to NEXT_PUBLIC_GEMINI_KEY for local dev convenience.
-    const apiKey = process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_KEY;
+    const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
       return NextResponse.json({ memories: [], note: 'No API key configured' });
     }
@@ -87,7 +96,7 @@ export async function POST(req: Request) {
     } catch (e) {
       consecutiveFailures++;
       if (consecutiveFailures >= MAX_FAILURES) {
-        console.warn(`[MEMORY SEARCH] Circuit breaker tripped after ${MAX_FAILURES} failures — disabling until restart`);
+        console.warn(`[MEMORY SEARCH] Circuit breaker tripped after ${MAX_FAILURES} failures`);
       }
       throw e;
     }
@@ -96,7 +105,6 @@ export async function POST(req: Request) {
     const index = getPinecone().Index('agent-memory');
     const namespace = index.namespace(`${userId}_${agentId}`);
 
-    // Namespace already isolates by user+agent, so no filter needed
     const queryResult = await namespace.query({
       vector,
       topK: 5,
@@ -117,7 +125,6 @@ export async function POST(req: Request) {
       }
     }
 
-    console.log(`[MEMORY SEARCH] Query: "${query.substring(0, 40)}..." -> ${memories.length} memories found`);
     return NextResponse.json({ memories });
 
   } catch (error: any) {
