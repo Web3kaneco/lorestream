@@ -15,6 +15,81 @@ useGLTF.setDecoderPath('/draco/');
 // Reusable temp objects — avoid GC churn in 60fps useFrame loop
 const _q = new THREE.Quaternion();
 const _e = new THREE.Euler();
+const _slerpQ = new THREE.Quaternion();
+
+// =======================================
+// GESTURE POSE LIBRARY — computed from Blender bone data
+// Each pose has quaternions for L/R upperarm + forearm.
+// Three.js Quaternion(x, y, z, w) — Blender outputs (w, x, y, z).
+// =======================================
+interface ArmPose {
+  name: string;
+  upperL: THREE.Quaternion; upperR: THREE.Quaternion;
+  foreL: THREE.Quaternion;  foreR: THREE.Quaternion;
+  /** Minimum hold time in seconds before transitioning */
+  holdMin: number;
+  /** Maximum hold time */
+  holdMax: number;
+  /** Only use during speech? */
+  speechOnly?: boolean;
+}
+
+const ARM_POSES: ArmPose[] = [
+  {
+    // Arms relaxed at sides (current default pose)
+    name: 'relaxed',
+    upperL: new THREE.Quaternion(-0.0189, -0.0141, -0.7562, 0.6540),
+    upperR: new THREE.Quaternion(-0.0164,  0.0128,  0.7080, 0.7059),
+    foreL:  new THREE.Quaternion( 0.0512,  0.0017,  0.0334, 0.9981),
+    foreR:  new THREE.Quaternion( 0.0509, -0.0004, -0.0083, 0.9987),
+    holdMin: 4, holdMax: 8,
+  },
+  {
+    // Left hand on hip, right relaxed
+    name: 'hipL',
+    upperL: new THREE.Quaternion( 0.0518, -0.1473, -0.5854, 0.7956),
+    upperR: new THREE.Quaternion(-0.0164,  0.0128,  0.7080, 0.7059),
+    foreL:  new THREE.Quaternion( 0.5687,  0.0749,  0.1069, 0.8121),
+    foreR:  new THREE.Quaternion( 0.0509, -0.0004, -0.0083, 0.9987),
+    holdMin: 5, holdMax: 10,
+  },
+  {
+    // Right hand on hip, left relaxed
+    name: 'hipR',
+    upperL: new THREE.Quaternion(-0.0189, -0.0141, -0.7562, 0.6540),
+    upperR: new THREE.Quaternion( 0.0518,  0.1473,  0.5854, 0.7956),
+    foreL:  new THREE.Quaternion( 0.0512,  0.0017,  0.0334, 0.9981),
+    foreR:  new THREE.Quaternion( 0.5687, -0.0749, -0.1069, 0.8121),
+    holdMin: 5, holdMax: 10,
+  },
+  {
+    // Both hands on hips (confident/waiting)
+    name: 'hipBoth',
+    upperL: new THREE.Quaternion( 0.0518, -0.1473, -0.5854, 0.7956),
+    upperR: new THREE.Quaternion( 0.0518,  0.1473,  0.5854, 0.7956),
+    foreL:  new THREE.Quaternion( 0.5687,  0.0749,  0.1069, 0.8121),
+    foreR:  new THREE.Quaternion( 0.5687, -0.0749, -0.1069, 0.8121),
+    holdMin: 4, holdMax: 8,
+  },
+  {
+    // Hands together in front (attentive/listening)
+    name: 'frontTogether',
+    upperL: new THREE.Quaternion(-0.0201, -0.1548, -0.6394, 0.7529),
+    upperR: new THREE.Quaternion(-0.0201,  0.1548,  0.6394, 0.7529),
+    foreL:  new THREE.Quaternion( 0.3769,  0.0665,  0.1604, 0.9098),
+    foreR:  new THREE.Quaternion( 0.3769, -0.0665, -0.1604, 0.9098),
+    holdMin: 4, holdMax: 8,
+  },
+  {
+    // Right hand gesturing (explaining), left relaxed — speech only
+    name: 'gestureR',
+    upperL: new THREE.Quaternion(-0.0189, -0.0141, -0.7562, 0.6540),
+    upperR: new THREE.Quaternion( 0.1328,  0.1900,  0.5211, 0.8214),
+    foreL:  new THREE.Quaternion( 0.0512,  0.0017,  0.0334, 0.9981),
+    foreR:  new THREE.Quaternion( 0.4629, -0.0017, -0.0973, 0.8810),
+    holdMin: 2, holdMax: 5, speechOnly: true,
+  },
+];
 
 interface AvatarProps {
   modelUrl: string;
@@ -372,6 +447,13 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
   const clavRRef = useRef<THREE.Bone | null>(null);
   const speechEnergyRef = useRef(0);
 
+  // Gesture state machine — smooth transitions between natural arm poses
+  const gesturePoseRef = useRef(0);           // current pose index in ARM_POSES
+  const gestureTargetRef = useRef(0);         // target pose index
+  const gestureBlendRef = useRef(1);          // 0→1 slerp progress (1=fully at target)
+  const gestureHoldTimerRef = useRef(0);      // time remaining in current pose hold
+  const gestureTransDurRef = useRef(1.5);     // transition duration in seconds
+
   // Arm-down quaternions: bind_pose * Euler(-82°Z for L, +82°Z for R).
   // Verified in Blender: arms hang at sides with natural outward splay, no body clipping.
   const ARM_DOWN_L = useMemo(() => new THREE.Quaternion(-0.0189, -0.0141, -0.7562, 0.6540), []);
@@ -705,33 +787,65 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     const energy = speechEnergyRef.current;
 
     // =======================================
-    // ARM POSE — base down position + gentle forward pendulum
-    // After -82° Z rotation (ARM_DOWN), local Y axis ≈ forward/back.
-    // Positive Y swings arm FORWARD (in front of body). No Z swing (lateral).
+    // ARM GESTURE SYSTEM — cycles through natural poses with smooth slerp
+    // Poses: relaxed, hand on hip, hands together, talking gesture, etc.
     // =======================================
+    const dt = 1 / 60; // approximate frame delta
+
+    // Advance gesture hold timer
+    gestureHoldTimerRef.current -= dt;
+
+    // When hold expires, pick a new target pose
+    if (gestureHoldTimerRef.current <= 0 && gestureBlendRef.current >= 1) {
+      const isSpeaking = energy > 0.15;
+      // Filter available poses based on speech state
+      const available = ARM_POSES
+        .map((p, i) => ({ p, i }))
+        .filter(({ p, i }) => i !== gestureTargetRef.current && (!p.speechOnly || isSpeaking));
+      const pick = available[Math.floor(Math.random() * available.length)];
+      if (pick) {
+        gesturePoseRef.current = gestureTargetRef.current; // current becomes "from"
+        gestureTargetRef.current = pick.i;
+        gestureBlendRef.current = 0; // start transition
+        gestureTransDurRef.current = 1.2 + Math.random() * 0.8; // 1.2–2.0s transition
+      }
+    }
+
+    // Advance blend (0→1 over transitionDuration seconds)
+    if (gestureBlendRef.current < 1) {
+      gestureBlendRef.current = Math.min(1, gestureBlendRef.current + dt / gestureTransDurRef.current);
+      // When transition completes, set the hold timer
+      if (gestureBlendRef.current >= 1) {
+        const target = ARM_POSES[gestureTargetRef.current];
+        gestureHoldTimerRef.current = target.holdMin + Math.random() * (target.holdMax - target.holdMin);
+      }
+    }
+
+    // Smooth ease-in-out curve for natural motion
+    const rawBlend = gestureBlendRef.current;
+    const blend = rawBlend < 0.5
+      ? 2 * rawBlend * rawBlend                           // ease in
+      : 1 - Math.pow(-2 * rawBlend + 2, 2) / 2;          // ease out
+
+    const fromPose = ARM_POSES[gesturePoseRef.current];
+    const toPose = ARM_POSES[gestureTargetRef.current];
+
+    // Apply blended arm poses via slerp
     if (armLRef.current) {
-      armLRef.current.quaternion.copy(ARM_DOWN_L);
-      const fwd = Math.sin(t * 1.1) * (0.008 + energy * 0.012);  // forward pendulum
-      _e.set(0, fwd, 0);
-      armLRef.current.quaternion.multiply(_q.setFromEuler(_e));
+      _slerpQ.copy(fromPose.upperL).slerp(toPose.upperL, blend);
+      armLRef.current.quaternion.copy(_slerpQ);
     }
     if (armRRef.current) {
-      armRRef.current.quaternion.copy(ARM_DOWN_R);
-      const fwd = Math.sin(t * 1.3 + 1.0) * (0.008 + energy * 0.012);
-      _e.set(0, -fwd, 0);  // mirror: negative Y for right arm forward
-      armRRef.current.quaternion.multiply(_q.setFromEuler(_e));
+      _slerpQ.copy(fromPose.upperR).slerp(toPose.upperR, blend);
+      armRRef.current.quaternion.copy(_slerpQ);
     }
     if (forearmLRef.current) {
-      forearmLRef.current.quaternion.copy(FOREARM_REST_L);
-      const bend = Math.sin(t * 1.1) * energy * 0.01;
-      _e.set(bend, 0, 0);
-      forearmLRef.current.quaternion.multiply(_q.setFromEuler(_e));
+      _slerpQ.copy(fromPose.foreL).slerp(toPose.foreL, blend);
+      forearmLRef.current.quaternion.copy(_slerpQ);
     }
     if (forearmRRef.current) {
-      forearmRRef.current.quaternion.copy(FOREARM_REST_R);
-      const bend = Math.sin(t * 1.3 + 1.0) * energy * 0.01;
-      _e.set(bend, 0, 0);
-      forearmRRef.current.quaternion.multiply(_q.setFromEuler(_e));
+      _slerpQ.copy(fromPose.foreR).slerp(toPose.foreR, blend);
+      forearmRRef.current.quaternion.copy(_slerpQ);
     }
 
     // NOTE: Finger curl via bones removed — WOW model has no finger bones.
