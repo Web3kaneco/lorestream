@@ -2,7 +2,7 @@
 
 import { Suspense } from 'react';
 import { Canvas } from '@react-three/fiber';
-import { Environment, OrbitControls } from '@react-three/drei';
+import { OrbitControls } from '@react-three/drei';
 import { Avatar } from './Avatar';
 import type { AnimationState } from './Avatar';
 import type { VisemeData } from '@/hooks/useGeminiLive';
@@ -23,7 +23,10 @@ export default function Scene({ modelUrl, volumeRef, animationState }: SceneProp
     camera={{ position: [0, 1.2, 2.5], fov: 45 }} 
     className="w-full h-full"
   >
-      <Environment preset="city" />
+      {/* Soft studio lighting — no external HDR fetch needed */}
+      <ambientLight intensity={0.6} />
+      <directionalLight position={[5, 5, 5]} intensity={1.0} />
+      <directionalLight position={[-3, 2, -2]} intensity={0.3} />
       <Suspense fallback={null}>
          {/* key={modelUrl} forces full remount per model — this is CRITICAL
              because drei's useAnimations reuses the same AnimationMixer via useState.
