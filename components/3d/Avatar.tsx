@@ -10,7 +10,6 @@ import type { VisemeData } from '@/hooks/useGeminiLive';
 export type AnimationState = 'idle' | 'speaking' | 'thinking' | 'greeting';
 
 // Use local Draco decoder files (copied to public/draco/) instead of fetching from CDN.
-// drei's useGLTF tries to fetch from gstatic.com by default, which can be blocked by CSP.
 useGLTF.setDecoderPath('/draco/');
 
 // Reusable temp objects — avoid GC churn in 60fps useFrame loop
@@ -295,12 +294,9 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
         bound === total ? 'color: #00ff00; font-weight: bold' : 'color: #ffa500; font-weight: bold');
     }
 
-    // Strip arm/forearm/hand/spine/hip tracks from ALL clips so animation can't fight our pose.
-    // This gives us full procedural control over the entire torso + arms every frame.
-    const ARM_BONE_PATTERNS = [
-      'clavicle', 'upperarm', 'upper_arm', 'forearm', 'fore_arm', 'hand', 'l_arm', 'r_arm',
-      'spine', 'chest', 'hips', 'hip', 'pelvis'  // torso bones — procedural control
-    ];
+    // Strip arm/forearm/hand tracks from ALL clips so animation can't fight our pose.
+    // This gives us full control over arm positioning every frame.
+    const ARM_BONE_PATTERNS = ['clavicle', 'upperarm', 'upper_arm', 'forearm', 'fore_arm', 'hand', 'l_arm', 'r_arm'];
     let strippedCount = 0;
     for (const clip of realClips) {
       const before = clip.tracks.length;
@@ -368,16 +364,6 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
   const forearmLRef = useRef<THREE.Bone | null>(null);
   const forearmRRef = useRef<THREE.Bone | null>(null);
 
-  // Body movement bone refs (procedural animation)
-  const spine01Ref = useRef<THREE.Bone | null>(null);
-  const spine02Ref = useRef<THREE.Bone | null>(null);
-  const hipRef = useRef<THREE.Bone | null>(null);
-  const clavLRef = useRef<THREE.Bone | null>(null);
-  const clavRRef = useRef<THREE.Bone | null>(null);
-
-  // Smoothed speech energy for body movement intensity
-  const speechEnergyRef = useRef(0);
-
   // Arm-down quaternions: bind_pose * Euler(-82°Z for L, +82°Z for R).
   // Verified in Blender: arms hang at sides with natural outward splay, no body clipping.
   const ARM_DOWN_L = useMemo(() => new THREE.Quaternion(-0.0189, -0.0141, -0.7562, 0.6540), []);
@@ -438,11 +424,6 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     armRRef.current = null;
     forearmLRef.current = null;
     forearmRRef.current = null;
-    spine01Ref.current = null;
-    spine02Ref.current = null;
-    hipRef.current = null;
-    clavLRef.current = null;
-    clavRRef.current = null;
     morphMeshRef.current = null;
     hasMorphMouthRef.current = false;
 
@@ -496,18 +477,6 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
         if (isLeft && !armLRef.current) armLRef.current = bone;
         if (isRight && !armRRef.current) armRRef.current = bone;
       }
-
-      // Hip / spine / clavicle bones (procedural body animation)
-      if ((lname === 'hips' || lname === 'hip' || lname === 'pelvis') && !hipRef.current)
-        hipRef.current = bone;
-      if ((lname === 'spine' || lname === 'spine01' || lname === 'spine1') && !spine01Ref.current)
-        spine01Ref.current = bone;
-      if ((lname === 'spine02' || lname === 'spine2' || lname === 'spine_02' || lname === 'chest') && !spine02Ref.current)
-        spine02Ref.current = bone;
-      if ((lname.includes('clavicle') || lname.includes('shoulder')) && !lname.includes('arm')) {
-        if (isLeft && !clavLRef.current) clavLRef.current = bone;
-        if (isRight && !clavRRef.current) clavRRef.current = bone;
-      }
     });
 
     hasFullMouthRigRef.current = !!(jawBoneRef.current && lipsLRef.current && lipsRRef.current);
@@ -534,8 +503,6 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     console.log(`%c[AVATAR] ${allBoneNames.length} bones (${convention} skeleton), ${skinnedCount} SkinnedMesh(es)`, 'color: #d4af37; font-weight: bold');
     console.log(`  Head=${headBoneRef.current?.name ?? 'MISS'} Neck=${neckBoneRef.current?.name ?? 'MISS'} Jaw=${jawBoneRef.current?.name ?? 'MISS'}`);
     console.log(`  Arms: L=${armLRef.current?.name ?? 'MISS'} R=${armRRef.current?.name ?? 'MISS'} ForeL=${forearmLRef.current?.name ?? 'MISS'} ForeR=${forearmRRef.current?.name ?? 'MISS'}`);
-    console.log(`  Spine: hip=${hipRef.current?.name ?? 'MISS'} s1=${spine01Ref.current?.name ?? 'MISS'} s2=${spine02Ref.current?.name ?? 'MISS'}`);
-    console.log(`  Clavicles: L=${clavLRef.current?.name ?? 'MISS'} R=${clavRRef.current?.name ?? 'MISS'}`);
     console.log(`  MouthRig=${hasFullMouthRigRef.current ? 'FULL' : 'NONE (morph target fallback)'}`);
     console.log(`  All bones: ${allBoneNames.join(', ')}`);
 
@@ -670,11 +637,10 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     // =======================================
     if (groupRef.current) {
       if (hasRealAnimation) {
-        // Real animation drives body movement — add breathing + subtle lateral drift
+        // Real animation drives body movement — only add tiny vertical breathing
         const breathY = Math.sin(t * 1.8) * 0.003;
-        const lateralX = Math.sin(t * 0.45) * 0.004;  // subtle weight-shift drift
         groupRef.current.position.y = -1 + breathY;
-        groupRef.current.position.x = lateralX;
+        groupRef.current.position.x = 0;
         groupRef.current.rotation.x = 0;
         groupRef.current.rotation.y = 0;
       } else {
@@ -708,106 +674,44 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     const jaw = smoothJawRef.current;
     const width = smoothWidthRef.current;
 
-    // Speech energy: 0=silent, 1=actively speaking. Smooth with asymmetric lerp.
-    const rawEnergy = Math.min(smoothVolRef.current * 3, 1);
-    const energyAlpha = rawEnergy > speechEnergyRef.current ? 0.15 : 0.04; // fast attack, slow decay
-    speechEnergyRef.current += (rawEnergy - speechEnergyRef.current) * energyAlpha;
-    const energy = speechEnergyRef.current;
-
     // =======================================
-    // HIP SWAY — weight shifting side-to-side
-    // Always active (idle amplitude), scales up during speech
-    // =======================================
-    if (hipRef.current) {
-      const hipAmp = 0.015 + energy * 0.02;
-      const swayY = Math.sin(t * 0.4) * hipAmp;         // lateral weight shift
-      const tiltX = Math.sin(t * 0.55) * hipAmp * 0.5;  // micro forward/back
-      _e.set(tiltX, swayY, 0);
-      hipRef.current.quaternion.multiply(_q.setFromEuler(_e));
-    }
-
-    // =======================================
-    // SPINE — counter-rotation + torso lean
-    // Spine01 counters hip for natural feel, spine02 adds upper-body sway
-    // =======================================
-    if (spine01Ref.current) {
-      const counterZ = -Math.sin(t * 0.4) * 0.01;  // counter hip sway
-      const leanX = Math.sin(t * 0.65) * (0.008 + energy * 0.012);
-      _e.set(leanX, 0, counterZ);
-      spine01Ref.current.quaternion.multiply(_q.setFromEuler(_e));
-    }
-    if (spine02Ref.current) {
-      const turnY = Math.sin(t * 0.3) * (0.012 + energy * 0.025);  // slow torso turn
-      const leanZ = Math.sin(t * 0.75) * (0.01 + energy * 0.015);  // lateral lean
-      _e.set(0, turnY, leanZ);
-      spine02Ref.current.quaternion.multiply(_q.setFromEuler(_e));
-    }
-
-    // =======================================
-    // HEAD/NECK — always active, enhanced with speech reactivity
-    // =======================================
-    if (neckBoneRef.current) {
-      const neckY = Math.sin(t * 0.7) * (0.04 + energy * 0.06);   // look around
-      const neckX = Math.sin(t * 1.0) * (0.02 + energy * 0.03);   // nod tendency
-      _e.set(neckX, neckY, 0);
-      neckBoneRef.current.quaternion.multiply(_q.setFromEuler(_e));
-    }
-    if (headBoneRef.current) {
-      const headZ = Math.sin(t * 0.9) * (0.03 + energy * 0.05);   // side tilt
-      const headX = Math.sin(t * 1.4) * (0.015 + energy * 0.025); // micro nod
-      const headY = Math.sin(t * 0.5) * (0.02 + energy * 0.015);  // gaze wander
-      _e.set(headX, headY, headZ);
-      headBoneRef.current.quaternion.multiply(_q.setFromEuler(_e));
-    }
-
-    // =======================================
-    // SHOULDERS — subtle shrug/settle during speech
-    // =======================================
-    if (clavLRef.current) {
-      const shrugZ = Math.sin(t * 0.85) * (0.005 + energy * 0.015);
-      _e.set(0, 0, shrugZ);
-      clavLRef.current.quaternion.multiply(_q.setFromEuler(_e));
-    }
-    if (clavRRef.current) {
-      const shrugZ = Math.sin(t * 0.95) * (0.005 + energy * 0.015);
-      _e.set(0, 0, -shrugZ);  // mirror
-      clavRRef.current.quaternion.multiply(_q.setFromEuler(_e));
-    }
-
-    // =======================================
-    // ARM POSE — base down position + gentle pendulum swing
+    // ARM POSE — Hardcoded quaternion override
     // Animation tracks for arms are STRIPPED, so we have full control.
     // Quaternions computed analytically from WOW.glb skeleton data.
+    // Applied every frame to keep arms hanging at sides.
     // =======================================
-    if (armLRef.current) {
-      armLRef.current.quaternion.copy(ARM_DOWN_L);
-      const swingX = Math.sin(t * 1.1) * (0.015 + energy * 0.03);
-      const swingZ = Math.sin(t * 0.6) * 0.008;
-      _e.set(swingX, 0, swingZ);
-      armLRef.current.quaternion.multiply(_q.setFromEuler(_e));
-    }
-    if (armRRef.current) {
-      armRRef.current.quaternion.copy(ARM_DOWN_R);
-      const swingX = Math.sin(t * 1.3 + 1.0) * (0.015 + energy * 0.03);
-      const swingZ = Math.sin(t * 0.65) * 0.008;
-      _e.set(swingX, 0, -swingZ);  // mirror
-      armRRef.current.quaternion.multiply(_q.setFromEuler(_e));
-    }
-    if (forearmLRef.current) {
-      forearmLRef.current.quaternion.copy(FOREARM_REST_L);
-      const bendX = Math.sin(t * 1.1) * energy * 0.02;
-      _e.set(bendX, 0, 0);
-      forearmLRef.current.quaternion.multiply(_q.setFromEuler(_e));
-    }
-    if (forearmRRef.current) {
-      forearmRRef.current.quaternion.copy(FOREARM_REST_R);
-      const bendX = Math.sin(t * 1.3 + 1.0) * energy * 0.02;
-      _e.set(bendX, 0, 0);
-      forearmRRef.current.quaternion.multiply(_q.setFromEuler(_e));
-    }
+    if (armLRef.current) armLRef.current.quaternion.copy(ARM_DOWN_L);
+    if (armRRef.current) armRRef.current.quaternion.copy(ARM_DOWN_R);
+    if (forearmLRef.current) forearmLRef.current.quaternion.copy(FOREARM_REST_L);
+    if (forearmRRef.current) forearmRRef.current.quaternion.copy(FOREARM_REST_R);
 
     // NOTE: Finger curl via bones removed — WOW model has no finger bones.
     // Fingers are handled by 'relaxedHands' morph target shape key.
+
+    // =======================================
+    // HEAD/NECK IDLE ANIMATION — only for models WITHOUT real animation clips
+    // When a real animation is playing, the mixer already drives head/neck bones.
+    // =======================================
+    if (!hasRealAnimation) {
+      if (neckBoneRef.current) {
+        if (!neckBaseRotRef.current) neckBaseRotRef.current = neckBoneRef.current.rotation.clone();
+        neckBoneRef.current.rotation.y = neckBaseRotRef.current.y + Math.sin(t * 0.7) * 0.15;
+        neckBoneRef.current.rotation.x = neckBaseRotRef.current.x + Math.sin(t * 1.0) * 0.08;
+      }
+      if (headBoneRef.current) {
+        if (!headBaseRotRef.current) headBaseRotRef.current = headBoneRef.current.rotation.clone();
+        headBoneRef.current.rotation.z = headBaseRotRef.current.z + Math.sin(t * 1.3) * 0.12;
+        headBoneRef.current.rotation.x = headBaseRotRef.current.x + Math.sin(t * 0.8) * 0.06;
+      }
+    }
+
+    // Subtle head movement during speech — tiny tilt that adds life
+    if (hasRealAnimation && headBoneRef.current && vol > 0.02) {
+      const headTiltZ = Math.sin(t * 0.9) * jaw * 0.015;   // tiny side tilt
+      const headNodX = Math.sin(t * 1.4) * jaw * 0.008;    // micro nod
+      _e.set(headNodX, 0, headTiltZ);
+      headBoneRef.current.quaternion.multiply(_q.setFromEuler(_e));
+    }
 
     // =======================================
     // DIAGNOSTIC LOGGING (~every 3 sec)
@@ -901,6 +805,12 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
         if (lipsLRef.current && lipsLBaseRotRef.current) lipsLRef.current.rotation.y = THREE.MathUtils.lerp(lipsLRef.current.rotation.y, lipsLBaseRotRef.current.y + bp * 0.005, 0.05);
         if (lipsRRef.current && lipsRBaseRotRef.current) lipsRRef.current.rotation.y = THREE.MathUtils.lerp(lipsRRef.current.rotation.y, lipsRBaseRotRef.current.y - bp * 0.005, 0.05);
       }
+    }
+
+    // Speech head gestures — subtle nods when talking (very gentle)
+    if (headBoneRef.current && vol > 0.05) {
+      headBoneRef.current.rotation.x += jaw * 0.006;
+      headBoneRef.current.rotation.z += Math.sin(t * 6) * jaw * 0.003;
     }
 
     // =======================================
