@@ -318,24 +318,11 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
   const lipsRRef = useRef<THREE.Bone | null>(null);
   const hasFullMouthRigRef = useRef(false);
 
-  // Arm bone refs (for T-pose fix)
+  // Arm bone refs (for per-frame arm steering)
   const armLRef = useRef<THREE.Bone | null>(null);
   const armRRef = useRef<THREE.Bone | null>(null);
   const forearmLRef = useRef<THREE.Bone | null>(null);
   const forearmRRef = useRef<THREE.Bone | null>(null);
-  const armLRestQ = useRef<THREE.Quaternion | null>(null);
-  const armRRestQ = useRef<THREE.Quaternion | null>(null);
-  const forearmLRestQ = useRef<THREE.Quaternion | null>(null);
-  const forearmRRestQ = useRef<THREE.Quaternion | null>(null);
-
-  // World-space computed arm fix quaternions (computed once in useFrame)
-  const armFixLRef = useRef<THREE.Quaternion | null>(null);
-  const armFixRRef = useRef<THREE.Quaternion | null>(null);
-  const forearmFixLRef = useRef<THREE.Quaternion | null>(null);
-  const forearmFixRRef = useRef<THREE.Quaternion | null>(null);
-  const armFixComputedRef = useRef(false);
-  // Finger bone data for per-frame natural curl (populated in Effect 1, applied every useFrame)
-  const fingerDataRef = useRef<{bone: THREE.Bone; restQ: THREE.Quaternion; isThumb: boolean; depth: number}[]>([]);
 
   // Diagnostic frame counter
   const diagFrameRef = useRef(0);
@@ -393,16 +380,6 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     armRRef.current = null;
     forearmLRef.current = null;
     forearmRRef.current = null;
-    armLRestQ.current = null;
-    armRRestQ.current = null;
-    forearmLRestQ.current = null;
-    forearmRRestQ.current = null;
-    armFixLRef.current = null;
-    armFixRRef.current = null;
-    forearmFixLRef.current = null;
-    forearmFixRRef.current = null;
-    armFixComputedRef.current = false;
-    fingerDataRef.current = [];
     morphMeshRef.current = null;
     hasMorphMouthRef.current = false;
 
@@ -457,12 +434,6 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
         if (isRight && !armRRef.current) armRRef.current = bone;
       }
     });
-
-    // Capture arm rest quaternions BEFORE any animation
-    if (armLRef.current) armLRestQ.current = armLRef.current.quaternion.clone();
-    if (armRRef.current) armRRestQ.current = armRRef.current.quaternion.clone();
-    if (forearmLRef.current) forearmLRestQ.current = forearmLRef.current.quaternion.clone();
-    if (forearmRRef.current) forearmRRestQ.current = forearmRRef.current.quaternion.clone();
 
     hasFullMouthRigRef.current = !!(jawBoneRef.current && lipsLRef.current && lipsRRef.current);
 
@@ -524,49 +495,8 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     // FINGER BONE COLLECTION — for per-frame natural curl
     // Collect all finger bones from hand bones, store rest quaternions
     // and determine curl parameters by depth in the finger chain.
-    // ============================================================
-    const collectFingerData = (handBone: THREE.Bone | null) => {
-      if (!handBone) return;
-      handBone.traverse((child) => {
-        if (child === handBone) return;
-        if (!(child as THREE.Bone).isBone) return;
-        const n = child.name.toLowerCase();
-        // Skip twist/helper/roll bones — these are IK helpers, not finger joints
-        if (n.includes('twist') || n.includes('helper') || n.includes('roll')) return;
-
-        const isThumb = n.includes('thumb');
-        // Count depth from hand bone: 1=proximal, 2=middle, 3=distal
-        let depth = 0;
-        let p: THREE.Object3D | null = child;
-        while (p && p !== handBone) { depth++; p = p.parent; }
-
-        fingerDataRef.current.push({
-          bone: child as THREE.Bone,
-          restQ: child.quaternion.clone(),
-          isThumb,
-          depth: Math.min(depth, 3)
-        });
-      });
-    };
-
-    // Find hand bones as children of forearm bones
-    let handL: THREE.Bone | null = null;
-    let handR: THREE.Bone | null = null;
-    if (forearmLRef.current) {
-      handL = forearmLRef.current.children.find(
-        c => (c as THREE.Bone).isBone && c.name.toLowerCase().includes('hand')
-      ) as THREE.Bone | null;
-    }
-    if (forearmRRef.current) {
-      handR = forearmRRef.current.children.find(
-        c => (c as THREE.Bone).isBone && c.name.toLowerCase().includes('hand')
-      ) as THREE.Bone | null;
-    }
-    collectFingerData(handL);
-    collectFingerData(handR);
-    if (fingerDataRef.current.length > 0) {
-      console.log(`%c[AVATAR] Finger bones collected: ${fingerDataRef.current.length}`, 'color: #d4af37; font-weight: bold');
-    }
+    // NOTE: WOW model has no individual finger bones (L_Hand/R_Hand are leaf nodes).
+    // Finger curl is handled by the 'relaxedHands' morph target / shape key instead.
   }, [clone]);
 
   // ============================================================
@@ -701,187 +631,92 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     const width = smoothWidthRef.current;
 
     // =======================================
-    // ARM POSE SYSTEM — ALL models (animated or not)
-    // Computes world-space fixes ONCE to bring arms from T-pose to
-    // a natural resting pose, then applies subtle dynamic offsets.
-    // Applied AFTER mixer update, overriding animation arm positions.
+    // ARM POSE SYSTEM — PER-FRAME world-space correction
+    // Every frame: read current bone direction, compute delta to target,
+    // apply as local quaternion adjustment. Works regardless of whether
+    // an animation clip is driving the bones or not.
     // =======================================
-    if (!armFixComputedRef.current && armLRef.current) {
-      // Helper: compute fix quaternion to rotate a bone's direction toward a target
-      const computeBoneFix = (
+    {
+      // Helper: steer a bone's current world direction toward a target direction
+      const steerBone = (
         bone: THREE.Bone,
-        childBoneHint: THREE.Bone | null,
+        childBone: THREE.Bone | null,
         targetDir: THREE.Vector3,
         strength: number
-      ): THREE.Quaternion => {
+      ) => {
         bone.updateWorldMatrix(true, true);
+        const child = childBone || bone.children.find(
+          c => (c as THREE.Bone).isBone
+        ) as THREE.Bone | undefined;
+        if (!child) return;
 
-        let childBone: THREE.Bone | undefined = childBoneHint || undefined;
-        if (!childBone) {
-          childBone = bone.children.find(c => {
-            if (!(c as THREE.Bone).isBone) return false;
-            const n = c.name.toLowerCase();
-            return !n.includes('twist') && !n.includes('helper') && !n.includes('roll');
-          }) as THREE.Bone | undefined;
-        }
-        if (!childBone) {
-          childBone = bone.children.find(c => (c as THREE.Bone).isBone) as THREE.Bone | undefined;
-        }
-        if (!childBone) return new THREE.Quaternion();
-
+        child.updateWorldMatrix(true, false);
         const bonePos = new THREE.Vector3();
         const childPos = new THREE.Vector3();
         bone.getWorldPosition(bonePos);
-        childBone.getWorldPosition(childPos);
-        const boneDir = childPos.clone().sub(bonePos).normalize();
+        child.getWorldPosition(childPos);
+        const currentDir = childPos.sub(bonePos).normalize();
 
-        console.log(`[AVATAR] Bone fix ${bone.name}: child=${childBone.name} dir=(${boneDir.x.toFixed(3)}, ${boneDir.y.toFixed(3)}, ${boneDir.z.toFixed(3)}) → target=(${targetDir.x.toFixed(3)}, ${targetDir.y.toFixed(3)}, ${targetDir.z.toFixed(3)}) str=${strength}`);
+        // World-space rotation from current → target
+        const worldFix = new THREE.Quaternion().setFromUnitVectors(
+          currentDir, targetDir.clone().normalize()
+        );
+        // Slerp toward identity by (1 - strength) to soften
+        worldFix.slerp(new THREE.Quaternion(), 1.0 - strength);
 
-        const worldFix = new THREE.Quaternion().setFromUnitVectors(boneDir, targetDir.clone().normalize());
-        worldFix.slerp(new THREE.Quaternion(), 1.0 - strength); // strength=0.95 → keep 95%
-
+        // Convert world-space fix to local-space: localFix = parentWorldInv * worldFix * parentWorld * localQ
         const parentWQ = new THREE.Quaternion();
         if (bone.parent) bone.parent.getWorldQuaternion(parentWQ);
         const parentInv = parentWQ.clone().invert();
-        return parentInv.multiply(worldFix).multiply(parentWQ);
+        const localFix = parentInv.clone().multiply(worldFix).multiply(parentWQ);
+
+        // Apply: current local quaternion + local fix
+        bone.quaternion.premultiply(localFix);
       };
 
-      // Detect outward direction from T-pose arm
-      const getArmOutward = (bone: THREE.Bone, childBone: THREE.Bone | null): THREE.Vector3 => {
-        bone.updateWorldMatrix(true, true);
-        const child = childBone || bone.children.find(c => (c as THREE.Bone).isBone) as THREE.Bone | undefined;
-        if (!child) return new THREE.Vector3(1, 0, 0);
-        const bp = new THREE.Vector3(); const cp = new THREE.Vector3();
-        bone.getWorldPosition(bp); child.getWorldPosition(cp);
-        const dir = cp.clone().sub(bp).normalize();
-        return new THREE.Vector3(dir.x, 0, dir.z).normalize();
-      };
-
-      // Upper arms: hang nearly straight down, tiny outward angle
-      const outL = getArmOutward(armLRef.current, forearmLRef.current);
-      armFixLRef.current = computeBoneFix(
-        armLRef.current, forearmLRef.current,
-        new THREE.Vector3(outL.x * 0.06, -0.98, 0.08), // Nearly straight down
-        0.95 // 95% application (was 65%)
-      );
+      // Upper arms: hang down at sides with a tiny outward splay
+      if (armLRef.current) {
+        steerBone(armLRef.current, forearmLRef.current,
+          new THREE.Vector3(0.08, -0.98, 0.06), 0.92);
+      }
       if (armRRef.current) {
-        const outR = getArmOutward(armRRef.current, forearmRRef.current);
-        armFixRRef.current = computeBoneFix(
-          armRRef.current, forearmRRef.current,
-          new THREE.Vector3(outR.x * 0.06, -0.98, 0.08),
-          0.95
-        );
+        steerBone(armRRef.current, forearmRRef.current,
+          new THREE.Vector3(-0.08, -0.98, 0.06), 0.92);
       }
 
-      // Apply upper arm fixes first, then compute forearm fixes
-      // (forearm world direction changes after upper arm is rotated)
-      if (armLRef.current && armLRestQ.current && armFixLRef.current) {
-        armLRef.current.quaternion.copy(armLRestQ.current).premultiply(armFixLRef.current);
-        armLRef.current.updateWorldMatrix(true, true);
-      }
-      if (armRRef.current && armRRestQ.current && armFixRRef.current) {
-        armRRef.current.quaternion.copy(armRRestQ.current).premultiply(armFixRRef.current);
-        armRRef.current.updateWorldMatrix(true, true);
-      }
-
-      // Forearms: mostly downward with gentle elbow bend — "at sides" position
+      // Forearms: mostly down with a gentle forward elbow bend
       if (forearmLRef.current) {
-        forearmFixLRef.current = computeBoneFix(
-          forearmLRef.current, null,
-          new THREE.Vector3(0.08, -0.92, 0.30), // Mostly down, slight forward bend
-          0.50
-        );
+        steerBone(forearmLRef.current, null,
+          new THREE.Vector3(0.05, -0.88, 0.25), 0.45);
       }
       if (forearmRRef.current) {
-        forearmFixRRef.current = computeBoneFix(
-          forearmRRef.current, null,
-          new THREE.Vector3(-0.08, -0.92, 0.30), // Mirrored — mostly down, slight forward
-          0.50
-        );
+        steerBone(forearmRRef.current, null,
+          new THREE.Vector3(-0.05, -0.88, 0.25), 0.45);
       }
 
-      // Restore rest quaternions for upper arms (will be re-applied each frame)
-      if (armLRef.current && armLRestQ.current) armLRef.current.quaternion.copy(armLRestQ.current);
-      if (armRRef.current && armRRestQ.current) armRRef.current.quaternion.copy(armRRestQ.current);
-
-      armFixComputedRef.current = true;
-      console.log('%c[AVATAR] Computed arm + forearm rest poses', 'color: #ffa500; font-weight: bold');
-    }
-
-    // Apply arm poses + subtle dynamic offsets (ALL models — overrides animation arms)
-    if (armFixComputedRef.current) {
-      // Smooth blend: idle(0) ↔ talking(1)
+      // Subtle idle sway + talk gestures on upper arms
       const talkTarget = vol > 0.03 ? 1.0 : 0.0;
       armTalkBlendRef.current = THREE.MathUtils.lerp(armTalkBlendRef.current, talkTarget, 0.04);
       const tb = armTalkBlendRef.current;
 
-      // --- Upper arms: base fix + very subtle offsets ---
-      if (armLRef.current && armLRestQ.current && armFixLRef.current) {
-        armLRef.current.quaternion.copy(armLRestQ.current).premultiply(armFixLRef.current);
-        // Idle: barely perceptible weight shift (no rocking)
-        const idleZ = Math.sin(t * 0.3) * 0.012;
-        const idleX = Math.sin(t * 0.45 + 1.0) * 0.008;
-        // Talk: small emphasis gestures tied to speech energy
-        const talkZ = tb * Math.sin(t * 1.8) * jaw * 0.06;
-        const talkX = tb * jaw * 0.04; // Slight forward lift when speaking
-        _e.set(idleX + talkX, 0, idleZ + talkZ);
+      if (armLRef.current) {
+        const idleZ = Math.sin(t * 0.3) * 0.008;
+        const talkZ = tb * Math.sin(t * 1.8) * jaw * 0.04;
+        const talkX = tb * jaw * 0.025;
+        _e.set(talkX, 0, idleZ + talkZ);
         armLRef.current.quaternion.multiply(_q.setFromEuler(_e));
       }
-      if (armRRef.current && armRRestQ.current && armFixRRef.current) {
-        armRRef.current.quaternion.copy(armRRestQ.current).premultiply(armFixRRef.current);
-        const idleZ = Math.sin(t * 0.35 + 2.0) * 0.010;
-        const idleX = Math.sin(t * 0.4 + 2.5) * 0.007;
-        const talkZ = tb * Math.sin(t * 1.5 + Math.PI) * jaw * 0.04;
-        const talkX = tb * jaw * 0.03;
-        _e.set(idleX + talkX, 0, -(idleZ + talkZ));
+      if (armRRef.current) {
+        const idleZ = Math.sin(t * 0.35 + 2.0) * 0.007;
+        const talkZ = tb * Math.sin(t * 1.5 + Math.PI) * jaw * 0.03;
+        const talkX = tb * jaw * 0.02;
+        _e.set(talkX, 0, -(idleZ + talkZ));
         armRRef.current.quaternion.multiply(_q.setFromEuler(_e));
       }
-
-      // --- Forearms: base elbow bend fix + tiny talk variation ---
-      if (forearmLRef.current && forearmLRestQ.current && forearmFixLRef.current) {
-        forearmLRef.current.quaternion.copy(forearmLRestQ.current).premultiply(forearmFixLRef.current);
-        const talkBend = tb * jaw * 0.03;
-        _e.set(talkBend, 0, 0);
-        forearmLRef.current.quaternion.multiply(_q.setFromEuler(_e));
-      } else if (forearmLRef.current && forearmLRestQ.current) {
-        forearmLRef.current.quaternion.copy(forearmLRestQ.current);
-      }
-      if (forearmRRef.current && forearmRRestQ.current && forearmFixRRef.current) {
-        forearmRRef.current.quaternion.copy(forearmRRestQ.current).premultiply(forearmFixRRef.current);
-        const talkBend = tb * jaw * 0.025;
-        _e.set(talkBend, 0, 0);
-        forearmRRef.current.quaternion.multiply(_q.setFromEuler(_e));
-      } else if (forearmRRef.current && forearmRRestQ.current) {
-        forearmRRef.current.quaternion.copy(forearmRRestQ.current);
-      }
     }
 
-    // NOTE: Arm damping section removed — the universal arm pose system above
-    // now handles all models (both animated and non-animated). The old damping
-    // was incorrectly slerping toward T-pose rest quaternions.
-
-    // =======================================
-    // FINGER CURL — per-frame graduated natural curl
-    // Applies rest quaternion + curl offset every frame, so it works
-    // both for animated models (overrides after mixer) and non-animated.
-    // Graduated: proximal joints curl more, distal less. Thumbs curl inward.
-    // =======================================
-    if (fingerDataRef.current.length > 0) {
-      // Depth multipliers: [hand=skip, proximal=full, middle=75%, distal=55%]
-      const depthMult = [0, 1.0, 0.75, 0.55];
-      for (const fd of fingerDataRef.current) {
-        const mult = depthMult[fd.depth] ?? 0.5;
-        if (mult === 0) continue; // skip hand bone if it slipped in
-        if (fd.isThumb) {
-          // Thumb: gentle inward curl (Y) + slight forward (X)
-          _e.set(0.18 * mult, 0.30 * mult, 0);
-        } else {
-          // Regular fingers: forward curl (X) for natural relaxed hand
-          _e.set(0.50 * mult, 0, 0);
-        }
-        fd.bone.quaternion.copy(fd.restQ).multiply(_q.setFromEuler(_e));
-      }
-    }
+    // NOTE: Finger curl via bones removed — WOW model has no finger bones.
+    // Fingers are handled by 'relaxedHands' morph target shape key.
 
     // =======================================
     // HEAD/NECK IDLE ANIMATION — only for models WITHOUT real animation clips
@@ -998,10 +833,10 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       }
     }
 
-    // Speech head gestures — adds on top of either animation or manual idle override
+    // Speech head gestures — subtle nods when talking (very gentle)
     if (headBoneRef.current && vol > 0.05) {
-      headBoneRef.current.rotation.x += jaw * 0.012;
-      headBoneRef.current.rotation.z += Math.sin(t * 6) * jaw * 0.006;
+      headBoneRef.current.rotation.x += jaw * 0.006;
+      headBoneRef.current.rotation.z += Math.sin(t * 6) * jaw * 0.003;
     }
 
     // =======================================
@@ -1016,9 +851,10 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       const jawIdx = dict['jawOpen'] ?? 0;
       const wideIdx = dict['mouthWide'] ?? 1;
 
-      // Keep relaxedHands morph target locked at 1.0 (finger curl shape key)
+      // relaxedHands morph target: natural finger curl from Blender shape key.
+      // Value was amplified 2x in Blender — keep influence moderate for natural look.
       const relaxedIdx = dict['relaxedHands'];
-      if (relaxedIdx !== undefined) infl[relaxedIdx] = 1.0;
+      if (relaxedIdx !== undefined) infl[relaxedIdx] = 0.45;
 
       // ---- Random eye blinks ----
       const eyesIdx = dict['eyesClosed'];
@@ -1058,20 +894,20 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       }
 
       if (vol > 0.02) {
-        // Speaking: power curve softens the attack (less "forced" snap),
-        // organic sine variation adds natural micro-movements
-        const jawTarget = Math.pow(jaw, 0.75) * 1.5
-          + Math.sin(t * 5.3) * 0.025 + Math.sin(t * 8.7) * 0.012;
-        const wideTarget = Math.pow(width, 0.8) * 0.85
-          + Math.sin(t * 4.1) * 0.015;
-        // Slower lerp (0.25) = smoother motion, less snappy/robotic
-        infl[jawIdx] = THREE.MathUtils.lerp(infl[jawIdx], Math.max(0, jawTarget), 0.25);
-        infl[wideIdx] = THREE.MathUtils.lerp(infl[wideIdx], Math.max(0, wideTarget), 0.22);
+        // Speaking: gentle lip movement — subtle, human-like
+        // Shape keys were amplified in Blender so keep multipliers LOW
+        const jawTarget = Math.pow(jaw, 0.9) * 0.30
+          + Math.sin(t * 5.3) * 0.008 + Math.sin(t * 8.7) * 0.004;
+        const wideTarget = Math.pow(width, 0.85) * 0.20
+          + Math.sin(t * 4.1) * 0.005;
+        // Smooth lerp for natural motion
+        infl[jawIdx] = THREE.MathUtils.lerp(infl[jawIdx], Math.max(0, jawTarget), 0.20);
+        infl[wideIdx] = THREE.MathUtils.lerp(infl[wideIdx], Math.max(0, wideTarget), 0.18);
       } else {
-        // Idle: subtle breathing micro-animation keeps face alive
+        // Idle: barely perceptible mouth movement — just enough to feel alive
         const bp = Math.sin(t * 1.8) * 0.5 + 0.5;
-        infl[jawIdx] = THREE.MathUtils.lerp(infl[jawIdx], bp * 0.05, 0.06);
-        infl[wideIdx] = THREE.MathUtils.lerp(infl[wideIdx], bp * 0.01, 0.04);
+        infl[jawIdx] = THREE.MathUtils.lerp(infl[jawIdx], bp * 0.008, 0.04);
+        infl[wideIdx] = THREE.MathUtils.lerp(infl[wideIdx], bp * 0.003, 0.03);
       }
     }
   });
