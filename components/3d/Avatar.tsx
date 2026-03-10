@@ -310,6 +310,19 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
         'color: #ff6600; font-weight: bold');
     }
 
+    // Strip ALL scale tracks — breathing animation bakes scale on every bone
+    // including Head, which causes cheeks to puff/expand unnaturally.
+    let scaleStripped = 0;
+    for (const clip of realClips) {
+      const before = clip.tracks.length;
+      clip.tracks = clip.tracks.filter(track => !track.name.endsWith('.scale'));
+      scaleStripped += before - clip.tracks.length;
+    }
+    if (scaleStripped > 0) {
+      console.log(`%c[AVATAR] Stripped ${scaleStripped} scale tracks (prevents face puffing)`,
+        'color: #ff6600; font-weight: bold');
+    }
+
     const skipped = animations.length - realClips.length;
     if (skipped > 0) console.log(`%c[AVATAR] Skipped ${skipped} static clips (<${MIN_CLIP_DURATION}s)`, 'color: #ff8800');
 
@@ -852,18 +865,22 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       }
 
       if (vol > 0.02) {
-        // Speaking: natural lip movement — visible but no cavity/blob.
-        // Tested in Blender: jawOpen>0.20 shows mouth cavity, mouthWide>0.10 creates grin blob.
-        const jawTarget = Math.min(0.18, Math.pow(jaw, 0.9) * 0.18
-          + Math.sin(t * 5.3) * 0.004 + Math.sin(t * 8.7) * 0.003);
-        const wideTarget = Math.min(0.08, Math.pow(width, 0.85) * 0.06
-          + Math.sin(t * 4.1) * 0.002);
-        infl[jawIdx] = THREE.MathUtils.lerp(infl[jawIdx], Math.max(0, jawTarget), 0.22);
-        infl[wideIdx] = THREE.MathUtils.lerp(infl[wideIdx], Math.max(0, wideTarget), 0.18);
+        // Speaking: subtle lip parting — top lip/bottom lip with gap visible.
+        // Keep jawOpen very low (max ~0.10) so lips part without exposing cavity.
+        // Rapid open/close cycles from sin waves simulate consonant/vowel patterns.
+        // mouthWide near zero — horizontal stretch makes the lipstick blob worse.
+        const jawBase = Math.pow(jaw, 0.85) * 0.10;
+        const jawFlutter = Math.sin(t * 6.2) * 0.008 + Math.sin(t * 9.4) * 0.005
+          + Math.sin(t * 14.1) * 0.003; // high-freq for consonant feel
+        const jawTarget = Math.min(0.12, jawBase + jawFlutter);
+        const wideTarget = Math.min(0.03, Math.pow(width, 0.8) * 0.025);
+        // Faster lerp for snappy open/close (speech is quick)
+        infl[jawIdx] = THREE.MathUtils.lerp(infl[jawIdx], Math.max(0, jawTarget), 0.30);
+        infl[wideIdx] = THREE.MathUtils.lerp(infl[wideIdx], Math.max(0, wideTarget), 0.25);
       } else {
         // Idle: mouth fully closed — no breathing jaw movement
-        infl[jawIdx] = THREE.MathUtils.lerp(infl[jawIdx], 0, 0.06);
-        infl[wideIdx] = THREE.MathUtils.lerp(infl[wideIdx], 0, 0.06);
+        infl[jawIdx] = THREE.MathUtils.lerp(infl[jawIdx], 0, 0.08);
+        infl[wideIdx] = THREE.MathUtils.lerp(infl[wideIdx], 0, 0.08);
       }
     }
   });

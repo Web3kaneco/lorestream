@@ -1,5 +1,5 @@
 // hooks/useGeminiLive.ts
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 
@@ -598,6 +598,11 @@ Keep it playful and make them want more.`;
     if (wsRef.current) { try { wsRef.current.close(); } catch(e) {} wsRef.current = null; }
     if (workletNodeRef.current) { workletNodeRef.current.disconnect(); workletNodeRef.current = null; }
     micStreamRef.current?.getTracks().forEach(track => track.stop());
+    // Stop camera stream tracks — prevents camera LED staying on after disconnect
+    if (videoRef.current?.srcObject) {
+      (videoRef.current.srcObject as MediaStream).getTracks().forEach(track => track.stop());
+      videoRef.current.srcObject = null;
+    }
     audioContextRef.current?.close();
     setIsConnected(false);
   }, [enableVision, enableMemory, stopVision, stopAnalysis, stopAllPlayback, saveToMemory]);
@@ -646,6 +651,26 @@ Keep it playful and make them want more.`;
     }
     return sent;
   }, [safeSend, enableMemory, saveToMemory, setTranscripts]);
+
+  // Clean up camera/mic/WebSocket on page close or component unmount.
+  // Without this, the camera LED stays on after closing the page.
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      // Stop all media tracks immediately
+      micStreamRef.current?.getTracks().forEach(track => track.stop());
+      if (videoRef.current?.srcObject) {
+        (videoRef.current.srcObject as MediaStream).getTracks().forEach(track => track.stop());
+      }
+      if (wsRef.current) { try { wsRef.current.close(); } catch(e) {} }
+      audioContextRef.current?.close();
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      // Component unmount: full cleanup
+      handleBeforeUnload();
+    };
+  }, []);
 
   return { isConnected, vaultItems, isGeneratingVaultItem, startSession, stopSession, volumeRef, transcripts, sendContext, demoLimitReached };
 }
