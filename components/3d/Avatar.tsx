@@ -291,6 +291,25 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
         bound === total ? 'color: #00ff00; font-weight: bold' : 'color: #ffa500; font-weight: bold');
     }
 
+    // Strip arm/forearm/hand tracks from ALL clips so animation can't fight our pose.
+    // This gives us full control over arm positioning every frame.
+    const ARM_BONE_PATTERNS = ['upperarm', 'upper_arm', 'forearm', 'fore_arm', 'hand', 'l_arm', 'r_arm'];
+    let strippedCount = 0;
+    for (const clip of realClips) {
+      const before = clip.tracks.length;
+      clip.tracks = clip.tracks.filter(track => {
+        const di = track.name.lastIndexOf('.');
+        const bn = (di >= 0 ? track.name.substring(0, di) : track.name).toLowerCase();
+        const isArm = ARM_BONE_PATTERNS.some(p => bn.includes(p));
+        return !isArm;
+      });
+      strippedCount += before - clip.tracks.length;
+    }
+    if (strippedCount > 0) {
+      console.log(`%c[AVATAR] Stripped ${strippedCount} arm tracks from animations (full arm control)`,
+        'color: #ff6600; font-weight: bold');
+    }
+
     const skipped = animations.length - realClips.length;
     if (skipped > 0) console.log(`%c[AVATAR] Skipped ${skipped} static clips (<${MIN_CLIP_DURATION}s)`, 'color: #ff8800');
 
@@ -323,11 +342,20 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
   const lipsRRef = useRef<THREE.Bone | null>(null);
   const hasFullMouthRigRef = useRef(false);
 
-  // Arm bone refs (for per-frame arm steering)
+  // Arm bone refs
   const armLRef = useRef<THREE.Bone | null>(null);
   const armRRef = useRef<THREE.Bone | null>(null);
   const forearmLRef = useRef<THREE.Bone | null>(null);
   const forearmRRef = useRef<THREE.Bone | null>(null);
+
+  // Direct arm pose: calibrated on first frame, applied every frame.
+  // Since we stripped arm tracks from animation, bones stay in rest pose
+  // unless WE set them. We compute the "arms down" quaternion once.
+  const armCalibrated = useRef(false);
+  const armLDownQ = useRef(new THREE.Quaternion());
+  const armRDownQ = useRef(new THREE.Quaternion());
+  const forearmLDownQ = useRef(new THREE.Quaternion());
+  const forearmRDownQ = useRef(new THREE.Quaternion());
 
   // Diagnostic frame counter
   const diagFrameRef = useRef(0);
@@ -351,9 +379,6 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
   // Morph-target mouth (for models without jaw/lip bones)
   const morphMeshRef = useRef<THREE.SkinnedMesh | null>(null);
   const hasMorphMouthRef = useRef(false);
-
-  // Arm gesture blending (smooth idle↔talking transition)
-  const armTalkBlendRef = useRef(0);
 
   // Eye blink state
   const blinkTimerRef = useRef(0);      // countdown to next blink
@@ -636,70 +661,81 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     const width = smoothWidthRef.current;
 
     // =======================================
-    // ARM POSE SYSTEM — PER-FRAME world-space correction
-    // Every frame: read current bone direction, compute delta to target,
-    // apply as local quaternion adjustment. Works regardless of whether
-    // an animation clip is driving the bones or not.
+    // ARM POSE — Direct quaternion override
+    // Animation tracks for arms are STRIPPED, so we have full control.
+    // On first frame: read rest-pose bone directions, compute the
+    // rotation needed to bring arms from T-pose to "hanging at sides".
+    // Every frame: apply that computed quaternion directly.
     // =======================================
     {
-      // Helper: steer a bone's current world direction toward a target direction
-      const steerBone = (
+      const computeArmDown = (
         bone: THREE.Bone,
         childBone: THREE.Bone | null,
-        targetDir: THREE.Vector3,
-        strength: number
-      ) => {
+        targetWorldDir: THREE.Vector3
+      ): THREE.Quaternion => {
         bone.updateWorldMatrix(true, true);
         const child = childBone || bone.children.find(
           c => (c as THREE.Bone).isBone
         ) as THREE.Bone | undefined;
-        if (!child) return;
+        if (!child) return bone.quaternion.clone();
 
         child.updateWorldMatrix(true, false);
         const bonePos = new THREE.Vector3();
         const childPos = new THREE.Vector3();
         bone.getWorldPosition(bonePos);
         child.getWorldPosition(childPos);
-        const currentDir = childPos.sub(bonePos).normalize();
+        const restDir = childPos.sub(bonePos).normalize();
 
-        // World-space rotation from current → target
-        const worldFix = new THREE.Quaternion().setFromUnitVectors(
-          currentDir, targetDir.clone().normalize()
-        );
-        // Slerp toward identity by (1 - strength) to soften
-        worldFix.slerp(new THREE.Quaternion(), 1.0 - strength);
+        // Rotation that takes rest direction → target direction (world space)
+        const alignW = new THREE.Quaternion().setFromUnitVectors(restDir, targetWorldDir);
 
-        // Convert world-space fix to local-space: localFix = parentWorldInv * worldFix * parentWorld * localQ
+        // Current world quaternion of this bone in rest
+        const restWQ = new THREE.Quaternion();
+        bone.getWorldQuaternion(restWQ);
+
+        // Desired world quaternion = alignW * restWQ
+        const desiredWQ = alignW.multiply(restWQ);
+
+        // Convert to local: localQ = parentWorldQ^-1 * desiredWorldQ
         const parentWQ = new THREE.Quaternion();
-        if (bone.parent) bone.parent.getWorldQuaternion(parentWQ);
-        const parentInv = parentWQ.clone().invert();
-        const localFix = parentInv.clone().multiply(worldFix).multiply(parentWQ);
-
-        // Apply: current local quaternion + local fix
-        bone.quaternion.premultiply(localFix);
+        if (bone.parent) {
+          bone.parent.updateWorldMatrix(true, false);
+          bone.parent.getWorldQuaternion(parentWQ);
+        }
+        return parentWQ.invert().multiply(desiredWQ);
       };
 
-      // Upper arms: straight down at sides (Z=0 to avoid forward/back push)
-      if (armLRef.current) {
-        steerBone(armLRef.current, forearmLRef.current,
-          new THREE.Vector3(0.12, -0.99, 0), 0.85);
-      }
-      if (armRRef.current) {
-        steerBone(armRRef.current, forearmRRef.current,
-          new THREE.Vector3(-0.12, -0.99, 0), 0.85);
+      // Calibrate on first frame — compute "arms down" local quaternions
+      if (!armCalibrated.current && armLRef.current && armRRef.current) {
+        // Target: arms hang straight down with slight outward splay
+        const downL = new THREE.Vector3(0.10, -0.99, 0).normalize();
+        const downR = new THREE.Vector3(-0.10, -0.99, 0).normalize();
+        const straightDown = new THREE.Vector3(0, -1, 0);
+
+        armLDownQ.current.copy(computeArmDown(armLRef.current, forearmLRef.current, downL));
+        armRDownQ.current.copy(computeArmDown(armRRef.current, forearmRRef.current, downR));
+
+        if (forearmLRef.current) {
+          // After upper arm is posed, recalculate forearm
+          armLRef.current.quaternion.copy(armLDownQ.current);
+          forearmLDownQ.current.copy(computeArmDown(forearmLRef.current, null, straightDown));
+        }
+        if (forearmRRef.current) {
+          armRRef.current.quaternion.copy(armRDownQ.current);
+          forearmRDownQ.current.copy(computeArmDown(forearmRRef.current, null, straightDown));
+        }
+
+        armCalibrated.current = true;
+        console.log('%c[AVATAR] Arm pose calibrated — arms down', 'color: #00ff88; font-weight: bold');
       }
 
-      // Forearms: straight down, no elbow bend (Z=0)
-      if (forearmLRef.current) {
-        steerBone(forearmLRef.current, null,
-          new THREE.Vector3(0.05, -0.99, 0), 0.40);
+      // Apply the pre-computed "arms down" quaternions every frame
+      if (armCalibrated.current) {
+        if (armLRef.current) armLRef.current.quaternion.copy(armLDownQ.current);
+        if (armRRef.current) armRRef.current.quaternion.copy(armRDownQ.current);
+        if (forearmLRef.current) forearmLRef.current.quaternion.copy(forearmLDownQ.current);
+        if (forearmRRef.current) forearmRRef.current.quaternion.copy(forearmRDownQ.current);
       }
-      if (forearmRRef.current) {
-        steerBone(forearmRRef.current, null,
-          new THREE.Vector3(-0.05, -0.99, 0), 0.40);
-      }
-
-      // Arms stay still — steering alone gives natural pose
     }
 
     // NOTE: Finger curl via bones removed — WOW model has no finger bones.
@@ -722,9 +758,13 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       }
     }
 
-    // NOTE: Speech gesture overlay removed — additive quaternion.multiply()
-    // was accumulating rotations and spinning arms through the body.
-    // Will revisit with a proper animation-blend approach once base pose is solid.
+    // Subtle head movement during speech — tiny tilt that adds life
+    if (hasRealAnimation && headBoneRef.current && vol > 0.02) {
+      const headTiltZ = Math.sin(t * 0.9) * jaw * 0.015;   // tiny side tilt
+      const headNodX = Math.sin(t * 1.4) * jaw * 0.008;    // micro nod
+      _e.set(headNodX, 0, headTiltZ);
+      headBoneRef.current.quaternion.multiply(_q.setFromEuler(_e));
+    }
 
     // =======================================
     // DIAGNOSTIC LOGGING (~every 3 sec)
