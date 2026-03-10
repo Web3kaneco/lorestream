@@ -662,7 +662,7 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       if (hasRealAnimation) {
         // Real animation drives body movement — add breathing + subtle lateral drift
         const breathY = Math.sin(t * 1.8) * 0.003;
-        const lateralX = Math.sin(t * 0.45) * 0.004;  // subtle weight shift
+        const lateralX = Math.sin(t * 0.45) * 0.002;  // very subtle weight shift
         groupRef.current.position.y = -1 + breathY;
         groupRef.current.position.x = lateralX;
         groupRef.current.rotation.x = 0;
@@ -705,33 +705,32 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     const energy = speechEnergyRef.current;
 
     // =======================================
-    // ARM POSE — base down position + gentle pendulum swing
-    // Animation tracks for arms are STRIPPED, so we have full control.
+    // ARM POSE — base down position + gentle forward pendulum
+    // After -82° Z rotation (ARM_DOWN), local Y axis ≈ forward/back.
+    // Positive Y swings arm FORWARD (in front of body). No Z swing (lateral).
     // =======================================
     if (armLRef.current) {
       armLRef.current.quaternion.copy(ARM_DOWN_L);
-      const swingX = Math.sin(t * 1.1) * (0.015 + energy * 0.03);
-      const swingZ = Math.sin(t * 0.6) * 0.008;
-      _e.set(swingX, 0, swingZ);
+      const fwd = Math.sin(t * 1.1) * (0.008 + energy * 0.012);  // forward pendulum
+      _e.set(0, fwd, 0);
       armLRef.current.quaternion.multiply(_q.setFromEuler(_e));
     }
     if (armRRef.current) {
       armRRef.current.quaternion.copy(ARM_DOWN_R);
-      const swingX = Math.sin(t * 1.3 + 1.0) * (0.015 + energy * 0.03);
-      const swingZ = Math.sin(t * 0.65) * 0.008;
-      _e.set(swingX, 0, -swingZ);
+      const fwd = Math.sin(t * 1.3 + 1.0) * (0.008 + energy * 0.012);
+      _e.set(0, -fwd, 0);  // mirror: negative Y for right arm forward
       armRRef.current.quaternion.multiply(_q.setFromEuler(_e));
     }
     if (forearmLRef.current) {
       forearmLRef.current.quaternion.copy(FOREARM_REST_L);
-      const bendX = Math.sin(t * 1.1) * energy * 0.02;
-      _e.set(bendX, 0, 0);
+      const bend = Math.sin(t * 1.1) * energy * 0.01;
+      _e.set(bend, 0, 0);
       forearmLRef.current.quaternion.multiply(_q.setFromEuler(_e));
     }
     if (forearmRRef.current) {
       forearmRRef.current.quaternion.copy(FOREARM_REST_R);
-      const bendX = Math.sin(t * 1.3 + 1.0) * energy * 0.02;
-      _e.set(bendX, 0, 0);
+      const bend = Math.sin(t * 1.3 + 1.0) * energy * 0.01;
+      _e.set(bend, 0, 0);
       forearmRRef.current.quaternion.multiply(_q.setFromEuler(_e));
     }
 
@@ -739,58 +738,59 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     // Fingers are handled by 'relaxedHands' morph target shape key.
 
     // =======================================
-    // HIP SWAY — weight shifting side-to-side (additive on top of mixer)
+    // HIP SWAY — gentle weight shifting (additive on top of mixer)
     // =======================================
     if (hipRef.current) {
-      const swayY = Math.sin(t * 0.4) * (0.015 + energy * 0.02);
-      const tiltX = Math.sin(t * 0.55) * (0.008 + energy * 0.01);
+      const swayY = Math.sin(t * 0.4) * (0.008 + energy * 0.012);
+      const tiltX = Math.sin(t * 0.55) * (0.004 + energy * 0.006);
       _e.set(tiltX, swayY, 0);
       hipRef.current.quaternion.multiply(_q.setFromEuler(_e));
     }
 
     // =======================================
-    // SPINE — counter-rotation + torso lean (additive on top of mixer)
+    // SPINE — gentle counter-rotation + lean (additive on top of mixer)
     // =======================================
     if (spine01Ref.current) {
-      const counterZ = -Math.sin(t * 0.4) * 0.01;
-      const leanX = Math.sin(t * 0.65) * (0.008 + energy * 0.012);
+      const counterZ = -Math.sin(t * 0.4) * 0.005;
+      const leanX = Math.sin(t * 0.65) * (0.004 + energy * 0.008);
       _e.set(leanX, 0, counterZ);
       spine01Ref.current.quaternion.multiply(_q.setFromEuler(_e));
     }
     if (spine02Ref.current) {
-      const turnY = Math.sin(t * 0.3) * (0.012 + energy * 0.025);
-      const leanZ = Math.sin(t * 0.75) * (0.01 + energy * 0.015);
+      const turnY = Math.sin(t * 0.3) * (0.006 + energy * 0.015);
+      const leanZ = Math.sin(t * 0.75) * (0.005 + energy * 0.008);
       _e.set(0, turnY, leanZ);
       spine02Ref.current.quaternion.multiply(_q.setFromEuler(_e));
     }
 
     // =======================================
-    // SHOULDERS — subtle shrug/settle (additive on top of mixer)
+    // SHOULDERS — very subtle micro-shrug (additive on top of mixer)
+    // Clavicle is parent of arm chain — keep tiny to avoid arm cascade
     // =======================================
     if (clavLRef.current) {
-      const shrugZ = Math.sin(t * 0.85) * (0.005 + energy * 0.015);
+      const shrugZ = Math.sin(t * 0.85) * (0.003 + energy * 0.006);
       _e.set(0, 0, shrugZ);
       clavLRef.current.quaternion.multiply(_q.setFromEuler(_e));
     }
     if (clavRRef.current) {
-      const shrugZ = Math.sin(t * 0.95) * (0.005 + energy * 0.015);
+      const shrugZ = Math.sin(t * 0.95) * (0.003 + energy * 0.006);
       _e.set(0, 0, -shrugZ);
       clavRRef.current.quaternion.multiply(_q.setFromEuler(_e));
     }
 
     // =======================================
-    // HEAD/NECK — always active, scales with speech energy (additive)
+    // HEAD/NECK — relaxed, always active, scales with speech (additive)
     // =======================================
     if (neckBoneRef.current) {
-      const neckY = Math.sin(t * 0.7) * (0.03 + energy * 0.05);
-      const neckX = Math.sin(t * 1.0) * (0.015 + energy * 0.025);
+      const neckY = Math.sin(t * 0.7) * (0.02 + energy * 0.035);
+      const neckX = Math.sin(t * 1.0) * (0.01 + energy * 0.018);
       _e.set(neckX, neckY, 0);
       neckBoneRef.current.quaternion.multiply(_q.setFromEuler(_e));
     }
     if (headBoneRef.current) {
-      const headZ = Math.sin(t * 0.9) * (0.025 + energy * 0.04);
-      const headX = Math.sin(t * 1.4) * (0.012 + energy * 0.02);
-      const headY = Math.sin(t * 0.5) * (0.015 + energy * 0.01);
+      const headZ = Math.sin(t * 0.9) * (0.018 + energy * 0.03);
+      const headX = Math.sin(t * 1.4) * (0.008 + energy * 0.015);
+      const headY = Math.sin(t * 0.5) * (0.01 + energy * 0.008);
       _e.set(headX, headY, headZ);
       headBoneRef.current.quaternion.multiply(_q.setFromEuler(_e));
     }
