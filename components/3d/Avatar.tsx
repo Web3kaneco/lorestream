@@ -183,24 +183,29 @@ function createMouthMorphTargets(mesh: THREE.SkinnedMesh): boolean {
       : 0;
     if (frontness < -0.1) continue; // back of head → skip
 
-    const frontFade = Math.max(Math.min((frontness + 0.1) / 0.6, 1), 0);
+    if (frontness < 0.2) continue; // only front-facing vertices
+    const frontFade = Math.max(Math.min((frontness - 0.2) / 0.5, 1), 0);
 
-    // JAW OPEN: pull lower-face vertices downward
-    const mouthUpper = mouthY + headH * 0.10;
-    if (y < mouthUpper) {
-      const downFactor = Math.min((mouthUpper - y) / (mouthUpper - headBbox.min.y), 1);
-      const eased = downFactor * downFactor; // quadratic for natural falloff
-      const disp = eased * frontFade * headH * 0.20; // 20% of head height max
+    // Tight lip band: only vertices within ±6% of head height around mouth
+    const lipBandHalf = headH * 0.06;
+    const lipTop = mouthY + lipBandHalf;
+    const lipBottom = mouthY - lipBandHalf;
+
+    // JAW OPEN: pull lip-band vertices downward (tiny displacement)
+    if (y < lipTop && y > lipBottom - lipBandHalf) {
+      const downFactor = Math.min(Math.max((lipTop - y) / (lipBandHalf * 2), 0), 1);
+      const eased = downFactor * downFactor;
+      const disp = eased * frontFade * headH * 0.06; // 6% of head height max
       jawDelta[i * 3 + 1] = -disp;
       if (disp > 0.0001) jawVerts++;
     }
 
-    // MOUTH WIDE: push mouth-level vertices apart horizontally
+    // MOUTH WIDE: push lip-band vertices apart horizontally
     const yDist = Math.abs(y - mouthY);
-    if (yDist < headH * 0.15) {
-      const yFade = 1 - yDist / (headH * 0.15);
+    if (yDist < lipBandHalf) {
+      const yFade = 1 - yDist / lipBandHalf;
       const lrOff = lrVal - lrCenter;
-      const disp = Math.sign(lrOff) * yFade * frontFade * headH * 0.08;
+      const disp = Math.sign(lrOff) * yFade * frontFade * headH * 0.04;
       wideDelta[i * 3 + lrAxis] = disp;
       if (Math.abs(disp) > 0.0001) wideVerts++;
     }
@@ -674,45 +679,27 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
         bone.quaternion.premultiply(localFix);
       };
 
-      // Upper arms: hang down at sides with a tiny outward splay
+      // Upper arms: straight down at sides (Z=0 to avoid forward/back push)
       if (armLRef.current) {
         steerBone(armLRef.current, forearmLRef.current,
-          new THREE.Vector3(0.08, -0.98, 0.06), 0.92);
+          new THREE.Vector3(0.12, -0.99, 0), 0.85);
       }
       if (armRRef.current) {
         steerBone(armRRef.current, forearmRRef.current,
-          new THREE.Vector3(-0.08, -0.98, 0.06), 0.92);
+          new THREE.Vector3(-0.12, -0.99, 0), 0.85);
       }
 
-      // Forearms: mostly down with a gentle forward elbow bend
+      // Forearms: straight down, no elbow bend (Z=0)
       if (forearmLRef.current) {
         steerBone(forearmLRef.current, null,
-          new THREE.Vector3(0.05, -0.88, 0.25), 0.45);
+          new THREE.Vector3(0.05, -0.99, 0), 0.40);
       }
       if (forearmRRef.current) {
         steerBone(forearmRRef.current, null,
-          new THREE.Vector3(-0.05, -0.88, 0.25), 0.45);
+          new THREE.Vector3(-0.05, -0.99, 0), 0.40);
       }
 
-      // Subtle idle sway + talk gestures on upper arms
-      const talkTarget = vol > 0.03 ? 1.0 : 0.0;
-      armTalkBlendRef.current = THREE.MathUtils.lerp(armTalkBlendRef.current, talkTarget, 0.04);
-      const tb = armTalkBlendRef.current;
-
-      if (armLRef.current) {
-        const idleZ = Math.sin(t * 0.3) * 0.008;
-        const talkZ = tb * Math.sin(t * 1.8) * jaw * 0.04;
-        const talkX = tb * jaw * 0.025;
-        _e.set(talkX, 0, idleZ + talkZ);
-        armLRef.current.quaternion.multiply(_q.setFromEuler(_e));
-      }
-      if (armRRef.current) {
-        const idleZ = Math.sin(t * 0.35 + 2.0) * 0.007;
-        const talkZ = tb * Math.sin(t * 1.5 + Math.PI) * jaw * 0.03;
-        const talkX = tb * jaw * 0.02;
-        _e.set(talkX, 0, -(idleZ + talkZ));
-        armRRef.current.quaternion.multiply(_q.setFromEuler(_e));
-      }
+      // Arms stay still — steering alone gives natural pose
     }
 
     // NOTE: Finger curl via bones removed — WOW model has no finger bones.
@@ -894,20 +881,17 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       }
 
       if (vol > 0.02) {
-        // Speaking: gentle lip movement — subtle, human-like
-        // Shape keys were amplified in Blender so keep multipliers LOW
-        const jawTarget = Math.pow(jaw, 0.9) * 0.30
-          + Math.sin(t * 5.3) * 0.008 + Math.sin(t * 8.7) * 0.004;
-        const wideTarget = Math.pow(width, 0.85) * 0.20
-          + Math.sin(t * 4.1) * 0.005;
-        // Smooth lerp for natural motion
-        infl[jawIdx] = THREE.MathUtils.lerp(infl[jawIdx], Math.max(0, jawTarget), 0.20);
-        infl[wideIdx] = THREE.MathUtils.lerp(infl[wideIdx], Math.max(0, wideTarget), 0.18);
+        // Speaking: very subtle lip movement — lips only, no blob
+        const jawTarget = Math.pow(jaw, 0.9) * 0.12
+          + Math.sin(t * 5.3) * 0.003 + Math.sin(t * 8.7) * 0.002;
+        const wideTarget = Math.pow(width, 0.85) * 0.08
+          + Math.sin(t * 4.1) * 0.002;
+        infl[jawIdx] = THREE.MathUtils.lerp(infl[jawIdx], Math.max(0, jawTarget), 0.18);
+        infl[wideIdx] = THREE.MathUtils.lerp(infl[wideIdx], Math.max(0, wideTarget), 0.15);
       } else {
-        // Idle: barely perceptible mouth movement — just enough to feel alive
-        const bp = Math.sin(t * 1.8) * 0.5 + 0.5;
-        infl[jawIdx] = THREE.MathUtils.lerp(infl[jawIdx], bp * 0.008, 0.04);
-        infl[wideIdx] = THREE.MathUtils.lerp(infl[wideIdx], bp * 0.003, 0.03);
+        // Idle: mouth fully closed — no breathing jaw movement
+        infl[jawIdx] = THREE.MathUtils.lerp(infl[jawIdx], 0, 0.06);
+        infl[wideIdx] = THREE.MathUtils.lerp(infl[wideIdx], 0, 0.06);
       }
     }
   });
