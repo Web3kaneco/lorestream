@@ -9,6 +9,9 @@ import { useGraph } from '@react-three/fiber'
 import { useGLTF, useAnimations } from '@react-three/drei'
 import { GLTF, SkeletonUtils } from 'three-stdlib'
 
+// Use local Draco decoder (same as Avatar.tsx)
+useGLTF.setDecoderPath('/draco/')
+
 type ActionName = 'mixamo.com'
 
 interface GLTFAction extends THREE.AnimationClip {

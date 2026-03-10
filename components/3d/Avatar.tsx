@@ -9,6 +9,10 @@ import type { VisemeData } from '@/hooks/useGeminiLive';
 
 export type AnimationState = 'idle' | 'speaking' | 'thinking' | 'greeting';
 
+// Use local Draco decoder files (copied to public/draco/) instead of fetching from CDN.
+// drei's useGLTF tries to fetch from gstatic.com by default, which can be blocked by CSP.
+useGLTF.setDecoderPath('/draco/');
+
 // Reusable temp objects — avoid GC churn in 60fps useFrame loop
 const _q = new THREE.Quaternion();
 const _e = new THREE.Euler();
