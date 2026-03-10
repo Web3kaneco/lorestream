@@ -48,7 +48,7 @@ const nextConfig = {
               "font-src 'self' https://fonts.gstatic.com",
               "img-src 'self' data: blob: https://firebasestorage.googleapis.com https://lorestream-3325c.firebasestorage.app https://storage.googleapis.com",
               "media-src 'self' blob: data:",
-              "connect-src 'self' blob: https://*.googleapis.com https://*.firebaseio.com https://*.firebaseapp.com wss://*.googleapis.com https://*.pinecone.io https://*.svc.pinecone.io https://cdn.jsdelivr.net https://www.gstatic.com https://raw.githack.com",
+              "connect-src 'self' blob: https://*.googleapis.com https://*.firebaseio.com https://*.firebaseapp.com wss://*.googleapis.com https://*.pinecone.io https://*.svc.pinecone.io https://www.gstatic.com",
               "frame-src 'self' https://*.firebaseapp.com https://accounts.google.com",
               "worker-src 'self' blob:",
               "object-src 'none'",
