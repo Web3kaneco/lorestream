@@ -16,10 +16,6 @@ runConfig:
 
 env:
   # --- Client-side (bundled into browser JS) ---
-  # Gemini key for WebSocket Live API (client-side, restrict by HTTP referrer)
-  - variable: NEXT_PUBLIC_GEMINI_KEY
-    secret: NEXT_PUBLIC_GEMINI_KEY
-
   # Firebase client config (safe to expose — secured by Firebase Security Rules)
   - variable: NEXT_PUBLIC_FIREBASE_API_KEY
     secret: NEXT_PUBLIC_FIREBASE_API_KEY
@@ -35,10 +31,16 @@ env:
     secret: NEXT_PUBLIC_FIREBASE_APP_ID
 
   # --- Server-side only (never sent to browser) ---
-  # Gemini key for API routes (embeddings, image generation)
+  # Gemini key for API routes + WebSocket session endpoint
   - variable: GEMINI_API_KEY
     secret: GEMINI_API_KEY
 
   # Pinecone for vector memory
   - variable: PINECONE_API_KEY
     secret: PINECONE_API_KEY
+
+  # Firebase Admin SDK (for API route auth verification)
+  - variable: FIREBASE_CLIENT_EMAIL
+    secret: FIREBASE_CLIENT_EMAIL
+  - variable: FIREBASE_PRIVATE_KEY
+    secret: FIREBASE_PRIVATE_KEY

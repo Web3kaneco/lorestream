@@ -2,6 +2,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
+import { getAuthHeaders } from '@/lib/getAuthToken';
 
 import { useAgentMemory } from './useAgentMemory';
 import { useVisionPipeline } from './useVisionPipeline';
@@ -160,10 +161,11 @@ export function useGeminiLive(agentId: string, userId: string, isAdmin: boolean 
         let recentMemories = "";
         if (enableMemory && isAdmin) {
           try {
+            const authHdrs = await getAuthHeaders();
             const memRes = await fetch('/api/memory/search', {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ query: "recent conversation summary", userId, agentId })
+              headers: authHdrs,
+              body: JSON.stringify({ query: "recent conversation summary", agentId })
             });
             const memData = await memRes.json();
             if (memData.memories && memData.memories.length > 0) {
@@ -280,8 +282,22 @@ Keep it playful and make them want more.`;
         }
       }
 
-      // WebSocket connection
-      const apiKey = process.env.NEXT_PUBLIC_GEMINI_KEY;
+      // WebSocket connection — fetch key from server (never in JS bundle)
+      let apiKey: string | undefined;
+      try {
+        const sessionRes = await fetch('/api/gemini-session');
+        if (sessionRes.ok) {
+          const sessionData = await sessionRes.json();
+          apiKey = sessionData.key;
+        }
+      } catch (e) {
+        console.error('[SESSION] Failed to fetch Gemini key:', e);
+      }
+      if (!apiKey) {
+        console.error('[SESSION] No Gemini API key available');
+        isConnectingRef.current = false;
+        return;
+      }
       const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${apiKey}`;
 
       const ws = new WebSocket(wsUrl);

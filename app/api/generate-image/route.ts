@@ -1,13 +1,13 @@
 import { NextResponse } from 'next/server';
 import { GoogleGenAI } from '@google/genai';
+import { verifyAuthToken } from '@/lib/firebaseAdmin';
 
 // Lazy-init Gemini client — avoids crash during Next.js build when env vars aren't set.
-// Server-side routes use GEMINI_API_KEY (never exposed to browser).
-// Falls back to NEXT_PUBLIC_GEMINI_KEY for local dev convenience.
+// Server-side routes use GEMINI_API_KEY only (never NEXT_PUBLIC_).
 let _ai: GoogleGenAI | null = null;
 function getAI(): GoogleGenAI {
   if (!_ai) {
-    const key = process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_KEY || '';
+    const key = process.env.GEMINI_API_KEY || '';
     if (!key) throw new Error('Gemini API key not configured');
     _ai = new GoogleGenAI({ apiKey: key });
   }
@@ -16,9 +16,9 @@ function getAI(): GoogleGenAI {
 
 // Image generation quality tiers (Imagen 4)
 const IMAGE_MODELS = {
-  ultra: 'imagen-4.0-ultra-generate-001',   // Highest quality
-  standard: 'imagen-4.0-generate-001',       // Good balance
-  fast: 'imagen-4.0-fast-generate-001'       // Fastest, lower quality
+  ultra: 'imagen-4.0-ultra-generate-001',
+  standard: 'imagen-4.0-generate-001',
+  fast: 'imagen-4.0-fast-generate-001'
 } as const;
 
 // Gemini model for reference-image composition (image-to-image)
@@ -27,8 +27,26 @@ const GEMINI_IMAGE_MODEL = 'gemini-2.0-flash-preview-image-generation';
 type ImageQuality = keyof typeof IMAGE_MODELS;
 type ImageSize = '1K' | '2K';
 
+// ── SSRF Protection: Only allow safe URL schemes and known domains ──
+const ALLOWED_URL_PATTERNS = [
+  /^data:image\//,                                          // data: URLs (base64)
+  /^https:\/\/firebasestorage\.googleapis\.com\//,          // Firebase Storage
+  /^https:\/\/lorestream-3325c\.firebasestorage\.app\//,    // Project storage
+  /^https:\/\/storage\.googleapis\.com\//,                  // GCS
+];
+
+function isSafeUrl(url: string): boolean {
+  return ALLOWED_URL_PATTERNS.some(pattern => pattern.test(url));
+}
+
 export async function POST(req: Request) {
   try {
+    // ── Auth verification ──
+    const authUser = await verifyAuthToken(req.headers.get('authorization'));
+    if (!authUser) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const { prompt, quality, size, referenceImageUrls } = await req.json();
 
     if (!prompt) {
@@ -37,6 +55,15 @@ export async function POST(req: Request) {
 
     // Path A: Reference images present → Gemini generateContent with image output
     if (referenceImageUrls && Array.isArray(referenceImageUrls) && referenceImageUrls.length > 0) {
+      // ── SSRF check: validate all reference URLs ──
+      for (const url of referenceImageUrls) {
+        if (!isSafeUrl(url)) {
+          return NextResponse.json(
+            { error: `Reference URL not allowed: only Firebase Storage and data: URLs are accepted` },
+            { status: 400 }
+          );
+        }
+      }
       return handleReferenceImageGeneration(prompt, referenceImageUrls);
     }
 
@@ -44,7 +71,7 @@ export async function POST(req: Request) {
     return handleStandardImageGeneration(prompt, quality, size);
 
   } catch (error: any) {
-    console.error("[TOOL ENGINE] Critical Failure:", error.message || error);
+    console.error("[IMAGE GEN] Error:", error.message || error);
     return NextResponse.json({ error: "Failed to generate artifact" }, { status: 500 });
   }
 }
@@ -54,8 +81,6 @@ async function handleStandardImageGeneration(prompt: string, quality?: string, s
   const selectedQuality: ImageQuality = quality && quality in IMAGE_MODELS ? quality as ImageQuality : 'ultra';
   const selectedSize: ImageSize = size === '1K' ? '1K' : '2K';
   const model = IMAGE_MODELS[selectedQuality];
-
-  console.log(`[TOOL ENGINE] Generating with ${model} at ${selectedSize}: "${prompt.substring(0, 80)}..."`);
 
   const response = await getAI().models.generateImages({
     model,
@@ -68,27 +93,22 @@ async function handleStandardImageGeneration(prompt: string, quality?: string, s
   });
 
   if (!response.generatedImages || response.generatedImages.length === 0) {
-    console.error("[TOOL ENGINE] No images returned from Imagen API");
     return NextResponse.json({ error: "No images generated" }, { status: 500 });
   }
 
   const generatedImage = response.generatedImages[0];
   if (!generatedImage?.image?.imageBytes) {
-    console.error("[TOOL ENGINE] Image entry returned but no imageBytes (possible content policy block)");
     return NextResponse.json({ error: "Image generation blocked or returned empty" }, { status: 500 });
   }
 
   const base64Data = generatedImage.image.imageBytes;
   const imageUrl = `data:image/png;base64,${base64Data}`;
 
-  console.log(`[TOOL ENGINE] Image generated successfully via ${selectedQuality} (${selectedSize})`);
   return NextResponse.json({ success: true, imageUrl });
 }
 
 // --- Path A: Reference image composition via Gemini ---
 async function handleReferenceImageGeneration(prompt: string, referenceUrls: string[]) {
-  console.log(`[TOOL ENGINE] Generating with ${GEMINI_IMAGE_MODEL} using ${referenceUrls.length} reference(s): "${prompt.substring(0, 80)}..."`);
-
   // Convert each reference URL to an inlineData part (max 3 references)
   const imageParts = await Promise.all(
     referenceUrls.slice(0, 3).map(async (url: string) => {
@@ -98,7 +118,7 @@ async function handleReferenceImageGeneration(prompt: string, referenceUrls: str
         const mimeType = header.match(/data:(.*?);/)?.[1] || 'image/png';
         return { inlineData: { mimeType, data } };
       }
-      // For http(s) URLs, fetch and convert to base64
+      // For allowed https URLs, fetch and convert to base64
       const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
       if (!res.ok) throw new Error(`Failed to fetch reference image: HTTP ${res.status}`);
       const buffer = await res.arrayBuffer();
@@ -127,11 +147,9 @@ async function handleReferenceImageGeneration(prompt: string, referenceUrls: str
   const imagePart = parts.find((p: any) => p.inlineData?.mimeType?.startsWith('image/'));
 
   if (!imagePart || !imagePart.inlineData) {
-    console.error("[TOOL ENGINE] No image returned from Gemini reference generation");
     return NextResponse.json({ error: "No image generated with references" }, { status: 500 });
   }
 
   const imageUrl = `data:${imagePart.inlineData.mimeType};base64,${imagePart.inlineData.data}`;
-  console.log(`[TOOL ENGINE] Reference image generated successfully via ${GEMINI_IMAGE_MODEL}`);
   return NextResponse.json({ success: true, imageUrl });
 }

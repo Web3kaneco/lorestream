@@ -1,4 +1,5 @@
 import { useCallback } from 'react';
+import { getAuthHeaders } from '@/lib/getAuthToken';
 
 interface ToolHandlerDeps {
   safeSend: (payload: any) => boolean;
@@ -41,11 +42,11 @@ export function useToolHandlers({
       });
 
       // Fire-and-forget: generate image in background while agent keeps talking
-      fetch('/api/generate-image', {
+      getAuthHeaders().then(hdrs => fetch('/api/generate-image', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: hdrs,
         body: JSON.stringify({ prompt, referenceImageUrls })
-      })
+      }))
         .then(res => {
           if (!res.ok) throw new Error(`Image API returned HTTP ${res.status}`);
           return res.json();
@@ -168,10 +169,11 @@ export function useToolHandlers({
       });
 
       try {
+        const memHdrs = await getAuthHeaders();
         const res = await fetch('/api/memory/search', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query, userId, agentId })
+          headers: memHdrs,
+          body: JSON.stringify({ query, agentId })
         });
 
         if (!res.ok) throw new Error(`Memory search returned HTTP ${res.status}`);

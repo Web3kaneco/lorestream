@@ -1,0 +1,28 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // ── User uploads: only authenticated user can write to their folder ──
+    match /users/{userId}/{allPaths=**} {
+      // Owner can read and write
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // ── Agent assets (3D models, images): authenticated read ──
+    match /agents/{agentId}/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+    }
+
+    // ── Public assets (avatars, demo content): anyone can read ──
+    match /public/{allPaths=**} {
+      allow read: if true;
+      allow write: if false; // Admin-only via Firebase Console
+    }
+
+    // ── Default deny ──
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
