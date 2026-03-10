@@ -348,11 +348,10 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
   const forearmLRef = useRef<THREE.Bone | null>(null);
   const forearmRRef = useRef<THREE.Bone | null>(null);
 
-  // Hardcoded arm-down quaternions — computed analytically from WOW.glb skeleton.
-  // These produce arms hanging naturally at sides with slight outward splay.
-  // Verified: L arm direction (0.10, -0.99, 0), R arm direction (-0.10, -0.99, 0).
-  const ARM_DOWN_L = useMemo(() => new THREE.Quaternion(0.1453, -0.0377, -0.7618, 0.6301), []);
-  const ARM_DOWN_R = useMemo(() => new THREE.Quaternion(0.0130, 0.0159, 0.7545, 0.6559), []);
+  // Arm-down quaternions: bind_pose * Euler(-82°Z for L, +82°Z for R).
+  // Verified in Blender: arms hang at sides with natural outward splay, no body clipping.
+  const ARM_DOWN_L = useMemo(() => new THREE.Quaternion(-0.0189, -0.0141, -0.7562, 0.6540), []);
+  const ARM_DOWN_R = useMemo(() => new THREE.Quaternion(-0.0164, 0.0128, 0.7080, 0.7059), []);
   const FOREARM_REST_L = useMemo(() => new THREE.Quaternion(0.0512, 0.0017, 0.0334, 0.9981), []);
   const FOREARM_REST_R = useMemo(() => new THREE.Quaternion(0.0509, -0.0004, -0.0083, 0.9987), []);
 
@@ -810,10 +809,10 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       const jawIdx = dict['jawOpen'] ?? 0;
       const wideIdx = dict['mouthWide'] ?? 1;
 
-      // relaxedHands morph target: natural finger curl from Blender shape key.
-      // Value was amplified 2x in Blender — keep influence moderate for natural look.
+      // relaxedHands morph target: subtle natural finger relaxation.
+      // Keep very low to avoid visible finger curl — 0.45 was too aggressive.
       const relaxedIdx = dict['relaxedHands'];
-      if (relaxedIdx !== undefined) infl[relaxedIdx] = 0.45;
+      if (relaxedIdx !== undefined) infl[relaxedIdx] = 0.15;
 
       // ---- Random eye blinks ----
       const eyesIdx = dict['eyesClosed'];
@@ -853,13 +852,14 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       }
 
       if (vol > 0.02) {
-        // Speaking: visible lip movement mapped to voice audio
-        const jawTarget = Math.pow(jaw, 0.9) * 0.40
-          + Math.sin(t * 5.3) * 0.005 + Math.sin(t * 8.7) * 0.003;
-        const wideTarget = Math.pow(width, 0.85) * 0.20
-          + Math.sin(t * 4.1) * 0.003;
-        infl[jawIdx] = THREE.MathUtils.lerp(infl[jawIdx], Math.max(0, jawTarget), 0.18);
-        infl[wideIdx] = THREE.MathUtils.lerp(infl[wideIdx], Math.max(0, wideTarget), 0.15);
+        // Speaking: natural lip movement — visible but no cavity/blob.
+        // Tested in Blender: jawOpen>0.20 shows mouth cavity, mouthWide>0.10 creates grin blob.
+        const jawTarget = Math.min(0.18, Math.pow(jaw, 0.9) * 0.18
+          + Math.sin(t * 5.3) * 0.004 + Math.sin(t * 8.7) * 0.003);
+        const wideTarget = Math.min(0.08, Math.pow(width, 0.85) * 0.06
+          + Math.sin(t * 4.1) * 0.002);
+        infl[jawIdx] = THREE.MathUtils.lerp(infl[jawIdx], Math.max(0, jawTarget), 0.22);
+        infl[wideIdx] = THREE.MathUtils.lerp(infl[wideIdx], Math.max(0, wideTarget), 0.18);
       } else {
         // Idle: mouth fully closed — no breathing jaw movement
         infl[jawIdx] = THREE.MathUtils.lerp(infl[jawIdx], 0, 0.06);
