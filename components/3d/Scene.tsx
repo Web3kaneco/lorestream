@@ -23,7 +23,8 @@ export default function Scene({ modelUrl, volumeRef, animationState }: SceneProp
     camera={{ position: [0, 1.2, 2.5], fov: 45 }}
     className="w-full h-full"
   >
-      <Environment preset="city" />
+      {/* Local HDR file — avoids CDN fetches that CSP blocks */}
+      <Environment files="/hdri/potsdamer_platz_1k.hdr" />
       <Suspense fallback={null}>
          {/* key={modelUrl} forces full remount per model — this is CRITICAL
              because drei's useAnimations reuses the same AnimationMixer via useState.
