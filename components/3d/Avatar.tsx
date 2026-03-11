@@ -662,18 +662,113 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
           }
         }
 
-        // Fix mouth blue/teal blob: DoubleSide renders backfaces, but they
-        // show the teal texture baked into the model's mouth interior.
-        // onBeforeCompile injects a shader hook that forces ALL backfaces to
-        // render as near-black — so the open mouth shows a dark void instead
-        // of teal, while front faces keep their normal skin texture.
+        // ============================================================
+        // MOUTH TEAL FIX — texture-level color neutralization
+        // Tripo3D models bake the reference image colors into the texture,
+        // including teal/cyan mouth interiors that look unnatural in 3D.
+        // Strategy: use jawOpen morph target deltas to find which vertices
+        // are mouth vertices → get their UV coords → compute the mouth's
+        // bounding box on the texture → neutralize teal pixels only in
+        // that region (avoids touching teal hair / clothing elsewhere).
+        // ============================================================
         if (hasMorphMouthRef.current) {
-          const mats = Array.isArray(targetMesh.material) ? targetMesh.material : [targetMesh.material];
-          mats.forEach((m, idx) => {
+          const mesh = targetMesh as THREE.SkinnedMesh;
+          const geo = mesh.geometry;
+          const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+          const morphDict = mesh.morphTargetDictionary ?? {};
+          const jawMorphIdx = morphDict['jawOpen'] ?? 0;
+          const morphPositions = geo.morphAttributes.position;
+          const uvAttr = geo.attributes.uv;
+
+          // Step 1: find UV bounding box of mouth vertices from jawOpen deltas
+          let uMin = 1, uMax = 0, vMin = 1, vMax = 0;
+          let mouthVertCount = 0;
+          if (morphPositions && morphPositions[jawMorphIdx] && uvAttr) {
+            const jawDeltas = morphPositions[jawMorphIdx];
+            for (let i = 0; i < jawDeltas.count; i++) {
+              const mag = Math.abs(jawDeltas.getX(i))
+                        + Math.abs(jawDeltas.getY(i))
+                        + Math.abs(jawDeltas.getZ(i));
+              if (mag > 0.0001) {
+                const u = uvAttr.getX(i);
+                const v = uvAttr.getY(i);
+                uMin = Math.min(uMin, u); uMax = Math.max(uMax, u);
+                vMin = Math.min(vMin, v); vMax = Math.max(vMax, v);
+                mouthVertCount++;
+              }
+            }
+          }
+
+          // Step 2: neutralize teal pixels inside mouth UV region
+          mats.forEach((m) => {
             const mat = m as THREE.MeshStandardMaterial;
             mat.side = THREE.DoubleSide;
-            // Shader hook: override backface color AFTER all normal shading.
-            // gl_FrontFacing is false for backfaces → output near-black.
+            if (mat.map && mat.map.image && mouthVertCount > 0) {
+              const tex = mat.map;
+              const img = tex.image as HTMLImageElement | HTMLCanvasElement;
+              const w = (img as HTMLImageElement).naturalWidth || img.width || 512;
+              const h = (img as HTMLImageElement).naturalHeight || img.height || 512;
+              const canvas = document.createElement('canvas');
+              canvas.width = w;
+              canvas.height = h;
+              const ctx = canvas.getContext('2d');
+              if (ctx) {
+                ctx.drawImage(img, 0, 0, w, h);
+                const imageData = ctx.getImageData(0, 0, w, h);
+                const d = imageData.data;
+
+                // UV → pixel bounds (with generous padding for surrounding mouth geo)
+                const pad = 0.06;
+                const pxLeft   = Math.max(0,     Math.floor((uMin - pad) * w));
+                const pxRight  = Math.min(w - 1, Math.ceil((uMax + pad) * w));
+                // UV v=0 is bottom in GL, but canvas y=0 is top → flip
+                const flipV = tex.flipY;
+                const pxTop    = Math.max(0,     Math.floor((flipV ? (1 - vMax - pad) : (vMin - pad)) * h));
+                const pxBottom = Math.min(h - 1, Math.ceil((flipV ? (1 - vMin + pad) : (vMax + pad)) * h));
+
+                let replaced = 0;
+                for (let py = pxTop; py <= pxBottom; py++) {
+                  for (let px = pxLeft; px <= pxRight; px++) {
+                    const i = (py * w + px) * 4;
+                    const r = d[i] / 255, g = d[i + 1] / 255, b = d[i + 2] / 255;
+                    const cMax = Math.max(r, g, b), cMin = Math.min(r, g, b);
+                    const delta = cMax - cMin;
+                    if (delta < 0.05) continue; // skip greys
+                    const l = (cMax + cMin) / 2;
+                    if (l < 0.05 || l > 0.95) continue; // skip near-black / near-white
+                    let hue = 0;
+                    if (cMax === r) hue = ((g - b) / delta + (g < b ? 6 : 0)) * 60;
+                    else if (cMax === g) hue = ((b - r) / delta + 2) * 60;
+                    else hue = ((r - g) / delta + 4) * 60;
+                    const sat = l > 0.5 ? delta / (2 - cMax - cMin) : delta / (cMax + cMin);
+                    // Target teal/cyan: hue 130-230, saturation > 20%
+                    if (hue >= 130 && hue <= 230 && sat > 0.20) {
+                      d[i] = 15; d[i + 1] = 8; d[i + 2] = 8;
+                      replaced++;
+                    }
+                  }
+                }
+
+                if (replaced > 0) {
+                  ctx.putImageData(imageData, 0, 0);
+                  const newTex = new THREE.CanvasTexture(canvas);
+                  newTex.flipY = tex.flipY;
+                  newTex.colorSpace = tex.colorSpace;
+                  newTex.wrapS = tex.wrapS;
+                  newTex.wrapT = tex.wrapT;
+                  mat.map = newTex;
+                  mat.needsUpdate = true;
+                  console.log(
+                    `%c[AVATAR] Neutralized ${replaced} teal pixels in mouth UV region ` +
+                    `(u:${uMin.toFixed(3)}-${uMax.toFixed(3)} v:${vMin.toFixed(3)}-${vMax.toFixed(3)}, ${mouthVertCount} verts)`,
+                    'color: #ff4444; font-weight: bold'
+                  );
+                } else {
+                  console.log('%c[AVATAR] No teal pixels found in mouth UV region', 'color: #888');
+                }
+              }
+            }
+            // Backface shader override (fallback — catches any remaining backfaces)
             mat.onBeforeCompile = (shader) => {
               shader.fragmentShader = shader.fragmentShader.replace(
                 '#include <dithering_fragment>',
@@ -683,31 +778,9 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
                 }`
               );
             };
-            // Prevent Three.js from reusing a cached shader without our hook
-            (mat as any).customProgramCacheKey = () => `darkBackface_${idx}`;
+            (mat as any).customProgramCacheKey = () => 'darkBackface';
+            mat.needsUpdate = true;
           });
-          console.log('%c[AVATAR] DoubleSide + dark backface shader applied (kills teal mouth)',
-            'color: #ff69b4; font-weight: bold');
-        }
-
-        // Belt-and-suspenders: dark FrontSide sphere inside the head as backup
-        // occluder. The shader hook above handles the teal, but this sphere
-        // catches any edge cases (gaps between vertices, thin geometry).
-        // FrontSide so the camera sees the near face of the sphere through
-        // the mouth gap (BackSide was invisible from the camera's POV).
-        if (hasMorphMouthRef.current && headBoneRef.current && !cavityRef.current) {
-          const cavityGeo = new THREE.SphereGeometry(0.038, 16, 12);
-          const cavityMat = new THREE.MeshBasicMaterial({
-            color: 0x080303,  // very dark red-black (deep mouth void)
-            side: THREE.FrontSide,
-            depthWrite: true,
-          });
-          const cavity = new THREE.Mesh(cavityGeo, cavityMat);
-          cavity.position.set(0.0, -0.050, -0.015);
-          cavity.scale.set(1.3, 0.85, 1.5);
-          headBoneRef.current.add(cavity);
-          cavityRef.current = cavity;
-          console.log('%c[AVATAR] Mouth cavity sphere (FrontSide backup) attached to Head', 'color: #8b0000; font-weight: bold');
         }
       }
     }
