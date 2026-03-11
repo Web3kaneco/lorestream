@@ -33,20 +33,24 @@ interface CharacterLore {
 // Manifesto principles — surfaced on the landing page
 const PRINCIPLES = [
   {
-    title: 'Characters, Not Chatbots',
-    desc: 'Every agent has a soul — an archetype, a history, and opinions shaped by your conversations.',
+    title: 'Characters With Souls',
+    desc: 'Every agent has an archetype, a history, and a voice that belongs to them alone. They are not waiting for commands. They are entities with opinions, memories, and presence.',
   },
   {
     title: 'Voice Carries Emotion',
-    desc: 'Real-time voice bridges intent with tone, rhythm, and feeling. Speak naturally.',
+    desc: 'Real-time voice is the bridge between human intention and true understanding. Tone, rhythm, and feeling carry meaning that text alone cannot.',
   },
   {
     title: 'The Screen Delivers',
-    desc: '3D avatars, generated images, and code manifest from conversation in real time.',
+    desc: '3D avatars that breathe. Generated images that manifest from conversation. A spatial workspace of floating artifacts born from dialogue.',
   },
   {
     title: 'Memory Makes Identity',
-    desc: 'Your agent remembers everything. Preferences, past work, inside jokes — all stored.',
+    desc: 'An agent without memory is a stranger every time you meet. LXXI agents remember conversations, preferences, past work, and the stories you have built together.',
+  },
+  {
+    title: 'The Forge Never Closes',
+    desc: 'Creation is not a one-time event. Your partner evolves through every conversation, gains new memory, and generates new artifacts. Every session adds another layer.',
   },
 ] as const;
 
@@ -208,12 +212,15 @@ export default function LandingPage() {
         {/* ── HERO ── */}
         <section className="relative z-10 flex flex-col items-center pt-16 pb-20 px-6 text-center">
           <img src="/lxxi-logo.png" alt="LXXI" className="h-28 md:h-40 mix-blend-screen mb-4" />
+          <h1 className="text-xs md:text-sm tracking-[0.3em] uppercase text-white/30 font-mono mb-3">
+            Your Memory. Your Partner. Presence in Every Dimension.
+          </h1>
           <p className="text-lg md:text-xl text-white/50 font-light max-w-md leading-relaxed">
             Voice is for Vibe. Screen is for Substance.
           </p>
-          <p className="text-sm text-white/25 mt-2 max-w-lg leading-relaxed">
-            Create AI characters with real souls. Speak them into existence, give them memory,
-            and build alongside them as true creative partners.
+          <p className="text-sm text-white/25 mt-3 max-w-lg leading-relaxed">
+            LXXI closes the gap between solo and entrepreneurial. A partner that never disconnects.
+            Live vision, true memory, and a spatial workspace that sees you, knows you, and builds with you. Forever.
           </p>
         </section>
 
@@ -228,24 +235,30 @@ export default function LandingPage() {
               <div className="relative z-10 flex flex-col flex-1">
                 <span className="text-[10px] tracking-[0.3em] uppercase text-[#d4af37]/50 font-mono">Prime</span>
                 <h2 className="text-2xl font-bold text-white mt-1 mb-3">The Forge</h2>
-                <p className="text-sm text-white/40 leading-relaxed mb-6">
-                  Build an AI partner with a soul. Talk to The Architect to shape your character&apos;s
-                  personality, upload an image for their 3D avatar, then enter the workspace where
-                  they help you create images, write code, and think through problems — all through voice.
+                <p className="text-sm text-white/40 leading-relaxed mb-4">
+                  Build a partner with a soul. Speak to The Architect to shape your agent&apos;s personality,
+                  history, and voice. Upload an image to generate their 3D avatar. Then enter the spatial
+                  workspace where your partner sees your world through your camera, remembers everything
+                  you have built together, and works alongside you in real time.
+                </p>
+                <p className="text-xs text-white/25 leading-relaxed mb-6 italic">
+                  A trial lawyer loads a judge&apos;s complete ruling history and argues their upcoming case out loud.
+                  A clothing designer holds fabric samples to the camera and watches generated designs appear instantly.
+                  A founder thinks out loud and builds with someone who is fully present and never starts from zero.
                 </p>
 
                 <div className="space-y-2.5 mb-8">
                   <div className="flex items-start gap-3">
                     <span className="text-[#d4af37] text-sm mt-0.5">1.</span>
-                    <p className="text-xs text-white/35 leading-relaxed"><span className="text-white/60 font-medium">Describe</span> — Speak to The Architect. Tell them who your character is.</p>
+                    <p className="text-xs text-white/35 leading-relaxed"><span className="text-white/60 font-medium">Describe</span> — Speak to The Architect. Define who your partner is, what they know, and how they think.</p>
                   </div>
                   <div className="flex items-start gap-3">
                     <span className="text-[#d4af37] text-sm mt-0.5">2.</span>
-                    <p className="text-xs text-white/35 leading-relaxed"><span className="text-white/60 font-medium">Upload</span> — Give them a face. Drop an image to generate a 3D avatar.</p>
+                    <p className="text-xs text-white/35 leading-relaxed"><span className="text-white/60 font-medium">Upload</span> — Give them a face. Drop an image to generate a 3D avatar with presence and personality.</p>
                   </div>
                   <div className="flex items-start gap-3">
                     <span className="text-[#d4af37] text-sm mt-0.5">3.</span>
-                    <p className="text-xs text-white/35 leading-relaxed"><span className="text-white/60 font-medium">Create</span> — Enter the workspace. Your agent builds alongside you.</p>
+                    <p className="text-xs text-white/35 leading-relaxed"><span className="text-white/60 font-medium">Create</span> — Enter the workspace. Your partner sees your world, remembers your history, and builds alongside you from day one.</p>
                   </div>
                 </div>
 
@@ -275,23 +288,24 @@ export default function LandingPage() {
                 <span className="text-[10px] tracking-[0.3em] uppercase text-amber-400/50 font-mono">Spark</span>
                 <h2 className="text-2xl font-bold text-white mt-1 mb-3">Leo&apos;s Learning Lab</h2>
                 <p className="text-sm text-white/40 leading-relaxed mb-6">
-                  A friendly AI tutor for kids and learners. Leo uses voice conversation and a
-                  visual chalkboard to teach math, science, Spanish, and anything you&apos;re curious about.
-                  Ask questions naturally and learn at your own pace.
+                  A persistent learning partner for students and curious minds. Leo uses live voice
+                  conversation and a visual chalkboard to teach math, science, Spanish, and anything
+                  you want to explore. He remembers your learning journey, adapts to your pace, and grows
+                  smarter about how you think the longer you work together.
                 </p>
 
                 <div className="space-y-2.5 mb-8">
                   <div className="flex items-start gap-3">
                     <span className="text-amber-400 text-sm mt-0.5">1.</span>
-                    <p className="text-xs text-white/35 leading-relaxed"><span className="text-white/60 font-medium">Voice-first learning</span> — Talk through problems like you&apos;re with a real tutor.</p>
+                    <p className="text-xs text-white/35 leading-relaxed"><span className="text-white/60 font-medium">Voice-first learning</span> — Talk through problems the way you would with a real tutor who knows your history.</p>
                   </div>
                   <div className="flex items-start gap-3">
                     <span className="text-amber-400 text-sm mt-0.5">2.</span>
-                    <p className="text-xs text-white/35 leading-relaxed"><span className="text-white/60 font-medium">Visual chalkboard</span> — See math problems, hints, and explanations appear live.</p>
+                    <p className="text-xs text-white/35 leading-relaxed"><span className="text-white/60 font-medium">Visual chalkboard</span> — Watch math problems, hints, and explanations appear live as you speak.</p>
                   </div>
                   <div className="flex items-start gap-3">
                     <span className="text-amber-400 text-sm mt-0.5">3.</span>
-                    <p className="text-xs text-white/35 leading-relaxed"><span className="text-white/60 font-medium">Any subject</span> — Math, science, language, or just general curiosity.</p>
+                    <p className="text-xs text-white/35 leading-relaxed"><span className="text-white/60 font-medium">Any subject, any pace</span> — Math, science, language, or pure curiosity. Leo remembers where you left off.</p>
                   </div>
                 </div>
 
@@ -324,9 +338,9 @@ export default function LandingPage() {
 
           <div className="grid sm:grid-cols-2 gap-5">
             {PRINCIPLES.map((p, i) => (
-              <div key={i} className="p-5 rounded-xl border border-white/5 bg-white/[0.02]">
+              <div key={i} className={`p-5 rounded-xl border border-white/5 bg-white/[0.02] ${i === 4 ? 'sm:col-span-2' : ''}`}>
                 <div className="flex items-start gap-3">
-                  <span className="text-[#d4af37]/40 text-xs font-bold mt-1 flex-shrink-0">0{i + 1}</span>
+                  <span className="text-[#d4af37]/40 text-xs font-bold mt-1 flex-shrink-0">{i < 4 ? `0${i + 1}` : 'V.'}</span>
                   <div>
                     <h3 className="text-sm font-bold text-white/70 mb-1">{p.title}</h3>
                     <p className="text-xs text-white/30 leading-relaxed">{p.desc}</p>
