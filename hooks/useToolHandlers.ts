@@ -165,6 +165,60 @@ export function useToolHandlers({
       }
     }
 
+    // --- Learning visual tool (Spark tutor mode) ---
+    else if (functionCall.name === "create_learning_visual") {
+      const { prompt, subject, concept } = functionCall.args;
+      console.log(`[TUTOR TOOL] Learning visual: "${concept}" (${subject})`);
+
+      setTranscripts(prev => {
+        const updated = [...prev, { speaker: 'SYSTEM', text: `Creating visual aid: "${concept}"` }];
+        return updated.length > 500 ? updated.slice(-500) : updated;
+      });
+
+      // Immediate response so Leo keeps talking while image generates
+      safeSend({
+        toolResponse: {
+          functionResponses: [{
+            id: functionCall.id,
+            name: "create_learning_visual",
+            response: { result: "Success", action: "Learning visual is being generated. Continue teaching while it appears." }
+          }]
+        }
+      });
+
+      // Fire-and-forget: generate educational image in background
+      getAuthHeaders().then(hdrs => fetch('/api/generate-image', {
+        method: 'POST',
+        headers: hdrs,
+        body: JSON.stringify({ prompt })
+      }))
+        .then(res => {
+          if (!res.ok) throw new Error(`Image API returned HTTP ${res.status}`);
+          return res.json();
+        })
+        .then(async (result) => {
+          if (result.imageUrl) {
+            // Delegate to parent page via callback (Spark page renders the visual)
+            if (onToolCallback) {
+              onToolCallback('create_learning_visual', {
+                url: result.imageUrl,
+                prompt,
+                subject,
+                concept,
+                createdAt: Date.now()
+              });
+            }
+          }
+        })
+        .catch(err => {
+          console.error("Learning visual generation failed:", err);
+          setTranscripts(prev => {
+            const updated = [...prev, { speaker: 'SYSTEM', text: `Visual aid generation failed. Continuing lesson.` }];
+            return updated.length > 500 ? updated.slice(-500) : updated;
+          });
+        });
+    }
+
     // --- Memory search tool ---
     else if (functionCall.name === "search_memory") {
       const { query } = functionCall.args;
