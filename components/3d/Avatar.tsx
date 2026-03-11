@@ -662,125 +662,16 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
           }
         }
 
-        // ============================================================
-        // MOUTH TEAL FIX — texture-level color neutralization
-        // Tripo3D models bake the reference image colors into the texture,
-        // including teal/cyan mouth interiors that look unnatural in 3D.
-        // Strategy: use jawOpen morph target deltas to find which vertices
-        // are mouth vertices → get their UV coords → compute the mouth's
-        // bounding box on the texture → neutralize teal pixels only in
-        // that region (avoids touching teal hair / clothing elsewhere).
-        // ============================================================
+        // DoubleSide prevents seeing HDR environment through mesh backfaces.
+        // The teal lips are the character's design (teal lipstick) — we keep them.
+        // Mouth opening is capped at a very low jawOpen value (~0.05) in the
+        // per-frame morph target section so the interior barely shows.
         if (hasMorphMouthRef.current) {
-          const mesh = targetMesh as THREE.SkinnedMesh;
-          const geo = mesh.geometry;
-          const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-          const morphDict = mesh.morphTargetDictionary ?? {};
-          const jawMorphIdx = morphDict['jawOpen'] ?? 0;
-          const morphPositions = geo.morphAttributes.position;
-          const uvAttr = geo.attributes.uv;
-
-          // Step 1: find UV bounding box of mouth vertices from jawOpen deltas
-          let uMin = 1, uMax = 0, vMin = 1, vMax = 0;
-          let mouthVertCount = 0;
-          if (morphPositions && morphPositions[jawMorphIdx] && uvAttr) {
-            const jawDeltas = morphPositions[jawMorphIdx];
-            for (let i = 0; i < jawDeltas.count; i++) {
-              const mag = Math.abs(jawDeltas.getX(i))
-                        + Math.abs(jawDeltas.getY(i))
-                        + Math.abs(jawDeltas.getZ(i));
-              if (mag > 0.0001) {
-                const u = uvAttr.getX(i);
-                const v = uvAttr.getY(i);
-                uMin = Math.min(uMin, u); uMax = Math.max(uMax, u);
-                vMin = Math.min(vMin, v); vMax = Math.max(vMax, v);
-                mouthVertCount++;
-              }
-            }
-          }
-
-          // Step 2: neutralize teal pixels inside mouth UV region
-          mats.forEach((m) => {
-            const mat = m as THREE.MeshStandardMaterial;
-            mat.side = THREE.DoubleSide;
-            if (mat.map && mat.map.image && mouthVertCount > 0) {
-              const tex = mat.map;
-              const img = tex.image as HTMLImageElement | HTMLCanvasElement;
-              const w = (img as HTMLImageElement).naturalWidth || img.width || 512;
-              const h = (img as HTMLImageElement).naturalHeight || img.height || 512;
-              const canvas = document.createElement('canvas');
-              canvas.width = w;
-              canvas.height = h;
-              const ctx = canvas.getContext('2d');
-              if (ctx) {
-                ctx.drawImage(img, 0, 0, w, h);
-                const imageData = ctx.getImageData(0, 0, w, h);
-                const d = imageData.data;
-
-                // UV → pixel bounds (with generous padding for surrounding mouth geo)
-                const pad = 0.06;
-                const pxLeft   = Math.max(0,     Math.floor((uMin - pad) * w));
-                const pxRight  = Math.min(w - 1, Math.ceil((uMax + pad) * w));
-                // UV v=0 is bottom in GL, but canvas y=0 is top → flip
-                const flipV = tex.flipY;
-                const pxTop    = Math.max(0,     Math.floor((flipV ? (1 - vMax - pad) : (vMin - pad)) * h));
-                const pxBottom = Math.min(h - 1, Math.ceil((flipV ? (1 - vMin + pad) : (vMax + pad)) * h));
-
-                let replaced = 0;
-                for (let py = pxTop; py <= pxBottom; py++) {
-                  for (let px = pxLeft; px <= pxRight; px++) {
-                    const i = (py * w + px) * 4;
-                    const r = d[i] / 255, g = d[i + 1] / 255, b = d[i + 2] / 255;
-                    const cMax = Math.max(r, g, b), cMin = Math.min(r, g, b);
-                    const delta = cMax - cMin;
-                    if (delta < 0.05) continue; // skip greys
-                    const l = (cMax + cMin) / 2;
-                    if (l < 0.05 || l > 0.95) continue; // skip near-black / near-white
-                    let hue = 0;
-                    if (cMax === r) hue = ((g - b) / delta + (g < b ? 6 : 0)) * 60;
-                    else if (cMax === g) hue = ((b - r) / delta + 2) * 60;
-                    else hue = ((r - g) / delta + 4) * 60;
-                    const sat = l > 0.5 ? delta / (2 - cMax - cMin) : delta / (cMax + cMin);
-                    // Target teal/cyan: hue 130-230, saturation > 20%
-                    if (hue >= 130 && hue <= 230 && sat > 0.20) {
-                      d[i] = 15; d[i + 1] = 8; d[i + 2] = 8;
-                      replaced++;
-                    }
-                  }
-                }
-
-                if (replaced > 0) {
-                  ctx.putImageData(imageData, 0, 0);
-                  const newTex = new THREE.CanvasTexture(canvas);
-                  newTex.flipY = tex.flipY;
-                  newTex.colorSpace = tex.colorSpace;
-                  newTex.wrapS = tex.wrapS;
-                  newTex.wrapT = tex.wrapT;
-                  mat.map = newTex;
-                  mat.needsUpdate = true;
-                  console.log(
-                    `%c[AVATAR] Neutralized ${replaced} teal pixels in mouth UV region ` +
-                    `(u:${uMin.toFixed(3)}-${uMax.toFixed(3)} v:${vMin.toFixed(3)}-${vMax.toFixed(3)}, ${mouthVertCount} verts)`,
-                    'color: #ff4444; font-weight: bold'
-                  );
-                } else {
-                  console.log('%c[AVATAR] No teal pixels found in mouth UV region', 'color: #888');
-                }
-              }
-            }
-            // Backface shader override (fallback — catches any remaining backfaces)
-            mat.onBeforeCompile = (shader) => {
-              shader.fragmentShader = shader.fragmentShader.replace(
-                '#include <dithering_fragment>',
-                `#include <dithering_fragment>
-                if ( !gl_FrontFacing ) {
-                  gl_FragColor = vec4( 0.03, 0.015, 0.015, 1.0 );
-                }`
-              );
-            };
-            (mat as any).customProgramCacheKey = () => 'darkBackface';
-            mat.needsUpdate = true;
+          const mats = Array.isArray(targetMesh.material) ? targetMesh.material : [targetMesh.material];
+          mats.forEach(m => {
+            (m as THREE.MeshStandardMaterial).side = THREE.DoubleSide;
           });
+          console.log('%c[AVATAR] DoubleSide applied to mesh material', 'color: #ff69b4; font-weight: bold');
         }
       }
     }
@@ -1249,19 +1140,18 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       }
 
       if (vol > 0.02) {
-        // Speaking: visible lip parting with rapid consonant/vowel cycles.
-        // Dark mouth cavity sits behind lips, so pushing jawOpen high creates
-        // a convincing dark mouth interior visible through the gap.
-        const jawBase = Math.pow(jaw, 0.85) * 0.45;
-        const jawFlutter = Math.sin(t * 6.2) * 0.018 + Math.sin(t * 9.4) * 0.012
-          + Math.sin(t * 14.1) * 0.006; // high-freq for consonant feel
-        const jawTarget = Math.min(0.55, jawBase + jawFlutter);
-        const wideTarget = Math.min(0.10, Math.pow(width, 0.8) * 0.08);
-        // Faster lerp for snappy open/close (speech is quick)
+        // Speaking: subtle lip parting for natural speech animation.
+        // Verified in Blender: jawOpen 0.03 = slight lip part (natural),
+        // 0.10 = clearly open, 0.30 = screaming. Cap at 0.06 for speech.
+        const jawBase = Math.pow(jaw, 0.85) * 0.055;
+        const jawFlutter = Math.sin(t * 6.2) * 0.003 + Math.sin(t * 9.4) * 0.002
+          + Math.sin(t * 14.1) * 0.001; // subtle high-freq for consonant feel
+        const jawTarget = Math.min(0.06, jawBase + jawFlutter);
+        const wideTarget = Math.min(0.015, Math.pow(width, 0.8) * 0.012);
         infl[jawIdx] = THREE.MathUtils.lerp(infl[jawIdx], Math.max(0, jawTarget), 0.30);
         infl[wideIdx] = THREE.MathUtils.lerp(infl[wideIdx], Math.max(0, wideTarget), 0.25);
       } else {
-        // Idle: mouth fully closed — no breathing jaw movement
+        // Idle: mouth fully closed
         infl[jawIdx] = THREE.MathUtils.lerp(infl[jawIdx], 0, 0.08);
         infl[wideIdx] = THREE.MathUtils.lerp(infl[wideIdx], 0, 0.08);
       }
