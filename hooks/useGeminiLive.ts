@@ -65,7 +65,7 @@ export function useGeminiLive(agentId: string, userId: string, isAdmin: boolean 
   const voiceName = config?.voiceName || "Aoede";
 
   // Modular hooks
-  const { saveToMemory } = useAgentMemory(agentId, userId);
+  const { saveToMemory, ingestFile } = useAgentMemory(agentId, userId);
   const { startVision, stopVision } = useVisionPipeline(videoRef, wsRef, socketReadyRef);
   const { volumeRef, startAnalysis, stopAnalysis } = useFrequencyAnalysis();
   const { playAudioBuffer, stopAllPlayback, interruptPlayback } = useAudioPlayback();
@@ -659,9 +659,14 @@ Keep it playful and make them want more.`;
         const updated = [...prev, { speaker: 'USER', text: summary }];
         return updated.length > 500 ? updated.slice(-500) : updated;
       });
-      // Save text to Pinecone memory (admin only)
+      // Save to Pinecone memory (admin only) — includes first image for multimodal embedding
       if (enableMemory && isAdmin && text.trim()) {
-        saveToMemory(text.trim(), 'user');
+        const firstImage = attachments.find(a => a.mimeType.startsWith('image/'));
+        saveToMemory(
+          text.trim(),
+          'user',
+          firstImage ? { base64: firstImage.base64, mimeType: firstImage.mimeType } : undefined
+        );
       }
       console.log(`[CONTEXT] Sent: ${text.trim().substring(0, 50)}... + ${attachments.length} file(s)`);
     }
@@ -688,5 +693,5 @@ Keep it playful and make them want more.`;
     };
   }, []);
 
-  return { isConnected, vaultItems, isGeneratingVaultItem, startSession, stopSession, volumeRef, transcripts, sendContext, demoLimitReached };
+  return { isConnected, vaultItems, isGeneratingVaultItem, startSession, stopSession, volumeRef, transcripts, sendContext, ingestFile, demoLimitReached };
 }

@@ -1,11 +1,12 @@
 import { useCallback } from 'react';
 import { getAuthHeaders } from '@/lib/getAuthToken';
+import type { MemoryImage } from './useAgentMemory';
 
 interface ToolHandlerDeps {
   safeSend: (payload: any) => boolean;
   userId: string;
   agentId: string;
-  saveToMemory: (text: string, speaker: 'user' | 'agent') => void;
+  saveToMemory: (text: string, speaker: 'user' | 'agent', image?: MemoryImage) => void;
   setVaultItems: React.Dispatch<React.SetStateAction<any[]>>;
   setIsGeneratingVaultItem: React.Dispatch<React.SetStateAction<boolean>>;
   setTranscripts: React.Dispatch<React.SetStateAction<{speaker: string, text: string}[]>>;
@@ -77,7 +78,12 @@ export function useToolHandlers({
               console.warn("[VAULT] Firestore save failed:", e);
             }
 
-            saveToMemory(`I created an image. Rationale: ${rationale}. Prompt: ${prompt}.`, 'agent');
+            // Embed image + prompt together (multimodal memory via Gemini Embedding 2)
+            saveToMemory(
+              `I created an image. Rationale: ${rationale}. Prompt: ${prompt}.`,
+              'agent',
+              { url: finalUrl, mimeType: 'image/png' }
+            );
           }
         })
         .catch(err => {

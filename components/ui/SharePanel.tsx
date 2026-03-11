@@ -2,6 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect } from 'react';
 import type { StagedFile } from '@/types/lxxi';
+import { IngestPanel } from './IngestPanel';
 
 interface SharePanelProps {
   isConnected: boolean;
@@ -10,6 +11,7 @@ interface SharePanelProps {
   onStop: () => void;
   onClear: () => void;
   onSendContext: (text: string, attachments: StagedFile[]) => boolean;
+  onIngestFile?: (fileBase64: string, fileMimeType: string, fileName: string, description?: string) => Promise<{ success: boolean; count?: number; error?: string }>;
   itemCount: number;
 }
 
@@ -33,10 +35,12 @@ export function SharePanel({
   onStop,
   onClear,
   onSendContext,
+  onIngestFile,
   itemCount,
 }: SharePanelProps) {
   const [textInput, setTextInput] = useState('');
   const [stagedFiles, setStagedFiles] = useState<StagedFile[]>([]);
+  const [showIngest, setShowIngest] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -127,6 +131,14 @@ export function SharePanel({
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
+      {/* Expandable Ingest Panel — slides up above the main bar */}
+      {showIngest && onIngestFile && (
+        <IngestPanel
+          onIngest={onIngestFile}
+          onClose={() => setShowIngest(false)}
+        />
+      )}
+
       {/* Staged files — thumbnail row */}
       {stagedFiles.length > 0 && (
         <div className="flex gap-2 px-3 pb-2 overflow-x-auto scrollbar-hide">
@@ -213,6 +225,22 @@ export function SharePanel({
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6" />
+            </svg>
+          </button>
+        )}
+
+        {/* Ingest memory button — brain icon, toggles the ingest panel */}
+        {onIngestFile && (
+          <button
+            onClick={() => setShowIngest(prev => !prev)}
+            className={`w-8 h-8 flex items-center justify-center rounded-lg transition-colors flex-shrink-0 ${
+              showIngest ? 'text-[#d4af37]' : 'text-white/30 hover:text-[#d4af37]'
+            }`}
+            title="Ingest memory"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M12 2a7 7 0 017 7c0 2.38-1.19 4.47-3 5.74V17a2 2 0 01-2 2h-4a2 2 0 01-2-2v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 017-7z" />
+              <path d="M9 22h6" />
             </svg>
           </button>
         )}
