@@ -1162,14 +1162,14 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       }
 
       if (vol > 0.02) {
-        // Speaking: visible lip movement for natural speech animation.
+        // Speaking: subtle lip movement for natural speech animation.
         // Verified in Blender: jawOpen 0.03 = slight lip part,
-        // 0.10 = clearly open, 0.30 = screaming. Cap at 0.15 for speech.
-        const jawBase = Math.pow(jaw, 0.85) * 0.13;
-        const jawFlutter = Math.sin(t * 6.2) * 0.006 + Math.sin(t * 9.4) * 0.004
-          + Math.sin(t * 14.1) * 0.002; // high-freq for consonant feel
-        const jawTarget = Math.min(0.15, jawBase + jawFlutter);
-        const wideTarget = Math.min(0.03, Math.pow(width, 0.8) * 0.025);
+        // 0.10 = clearly open, 0.30 = screaming. Cap at 0.09 for speech.
+        const jawBase = Math.pow(jaw, 0.85) * 0.08;
+        const jawFlutter = Math.sin(t * 6.2) * 0.004 + Math.sin(t * 9.4) * 0.003
+          + Math.sin(t * 14.1) * 0.001; // high-freq for consonant feel
+        const jawTarget = Math.min(0.09, jawBase + jawFlutter);
+        const wideTarget = Math.min(0.02, Math.pow(width, 0.8) * 0.016);
         infl[jawIdx] = THREE.MathUtils.lerp(infl[jawIdx], Math.max(0, jawTarget), 0.30);
         infl[wideIdx] = THREE.MathUtils.lerp(infl[wideIdx], Math.max(0, wideTarget), 0.25);
       } else {
