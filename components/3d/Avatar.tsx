@@ -384,11 +384,22 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
         bound === total ? 'color: #00ff00; font-weight: bold' : 'color: #ffa500; font-weight: bold');
     }
 
-    // DISABLED: Arm track stripping caused T-pose / unnatural poses because the
-    // ARM_POSES quaternions were in Blender coordinate space, not glTF Y-up space.
-    // Let the idle_breathing animation drive natural arm positions instead.
-    // The gesture pose system is also disabled below to match.
-    console.log('%c[AVATAR] Arm tracks preserved (animation-driven arms)', 'color: #00cc00; font-weight: bold');
+    // Strip arm tracks from the animation — breathing animation flaps arms unnaturally.
+    // Arms are driven by the static relaxed pose quaternions in the per-frame loop instead.
+    const armBoneNames = ['upperarm', 'forearm', 'clavicle', 'hand'];
+    let armStripped = 0;
+    for (const clip of realClips) {
+      const before = clip.tracks.length;
+      clip.tracks = clip.tracks.filter(track => {
+        const bn = track.name.toLowerCase();
+        return !armBoneNames.some(ab => bn.includes(ab));
+      });
+      armStripped += before - clip.tracks.length;
+    }
+    if (armStripped > 0) {
+      console.log(`%c[AVATAR] Stripped ${armStripped} arm tracks (arms driven by relaxed pose)`,
+        'color: #ff6600; font-weight: bold');
+    }
 
     // Strip ALL scale tracks — breathing animation bakes scale on every bone
     // including Head, which causes cheeks to puff/expand unnaturally.
@@ -928,6 +939,17 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     } // end disabled ARM GESTURE SYSTEM
 
     // =======================================
+    // STATIC ARM POSE — arms relaxed at sides
+    // Animation arm tracks are stripped, so we drive arms from the relaxed
+    // pose quaternions. Simple slerp toward the target each frame.
+    // =======================================
+    const relaxedPose = ARM_POSES[0]; // 'relaxed' — arms at sides
+    if (armLRef.current) armLRef.current.quaternion.slerp(relaxedPose.upperL, 0.15);
+    if (armRRef.current) armRRef.current.quaternion.slerp(relaxedPose.upperR, 0.15);
+    if (forearmLRef.current) forearmLRef.current.quaternion.slerp(relaxedPose.foreL, 0.15);
+    if (forearmRRef.current) forearmRRef.current.quaternion.slerp(relaxedPose.foreR, 0.15);
+
+    // =======================================
     // HIP SWAY — natural weight shifting (additive on top of mixer)
     // Amplified for visible hip movement; multi-frequency for organic feel
     // =======================================
@@ -1140,14 +1162,14 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       }
 
       if (vol > 0.02) {
-        // Speaking: subtle lip parting for natural speech animation.
-        // Verified in Blender: jawOpen 0.03 = slight lip part (natural),
-        // 0.10 = clearly open, 0.30 = screaming. Cap at 0.06 for speech.
-        const jawBase = Math.pow(jaw, 0.85) * 0.055;
-        const jawFlutter = Math.sin(t * 6.2) * 0.003 + Math.sin(t * 9.4) * 0.002
-          + Math.sin(t * 14.1) * 0.001; // subtle high-freq for consonant feel
-        const jawTarget = Math.min(0.06, jawBase + jawFlutter);
-        const wideTarget = Math.min(0.015, Math.pow(width, 0.8) * 0.012);
+        // Speaking: visible lip movement for natural speech animation.
+        // Verified in Blender: jawOpen 0.03 = slight lip part,
+        // 0.10 = clearly open, 0.30 = screaming. Cap at 0.15 for speech.
+        const jawBase = Math.pow(jaw, 0.85) * 0.13;
+        const jawFlutter = Math.sin(t * 6.2) * 0.006 + Math.sin(t * 9.4) * 0.004
+          + Math.sin(t * 14.1) * 0.002; // high-freq for consonant feel
+        const jawTarget = Math.min(0.15, jawBase + jawFlutter);
+        const wideTarget = Math.min(0.03, Math.pow(width, 0.8) * 0.025);
         infl[jawIdx] = THREE.MathUtils.lerp(infl[jawIdx], Math.max(0, jawTarget), 0.30);
         infl[wideIdx] = THREE.MathUtils.lerp(infl[wideIdx], Math.max(0, wideTarget), 0.25);
       } else {
