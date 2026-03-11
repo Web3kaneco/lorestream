@@ -384,24 +384,11 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
         bound === total ? 'color: #00ff00; font-weight: bold' : 'color: #ffa500; font-weight: bold');
     }
 
-    // Strip arm/forearm/hand tracks from ALL clips so animation can't fight our pose.
-    // This gives us full control over arm positioning every frame.
-    const ARM_BONE_PATTERNS = ['clavicle', 'upperarm', 'upper_arm', 'forearm', 'fore_arm', 'hand', 'l_arm', 'r_arm'];
-    let strippedCount = 0;
-    for (const clip of realClips) {
-      const before = clip.tracks.length;
-      clip.tracks = clip.tracks.filter(track => {
-        const di = track.name.lastIndexOf('.');
-        const bn = (di >= 0 ? track.name.substring(0, di) : track.name).toLowerCase();
-        const isArm = ARM_BONE_PATTERNS.some(p => bn.includes(p));
-        return !isArm;
-      });
-      strippedCount += before - clip.tracks.length;
-    }
-    if (strippedCount > 0) {
-      console.log(`%c[AVATAR] Stripped ${strippedCount} arm tracks from animations (full arm control)`,
-        'color: #ff6600; font-weight: bold');
-    }
+    // DISABLED: Arm track stripping caused T-pose / unnatural poses because the
+    // ARM_POSES quaternions were in Blender coordinate space, not glTF Y-up space.
+    // Let the idle_breathing animation drive natural arm positions instead.
+    // The gesture pose system is also disabled below to match.
+    console.log('%c[AVATAR] Arm tracks preserved (animation-driven arms)', 'color: #00cc00; font-weight: bold');
 
     // Strip ALL scale tracks — breathing animation bakes scale on every bone
     // including Head, which causes cheeks to puff/expand unnaturally.
@@ -690,18 +677,17 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
         // shows a dark void instead of teal lip texture backface. Attached to
         // Head bone so it tracks head movement automatically.
         if (hasMorphMouthRef.current && headBoneRef.current && !cavityRef.current) {
-          const cavityGeo = new THREE.SphereGeometry(0.018, 16, 12);
+          const cavityGeo = new THREE.SphereGeometry(0.028, 16, 12);
           const cavityMat = new THREE.MeshBasicMaterial({
-            color: 0x1a0a0a,  // very dark reddish-brown (mouth interior)
+            color: 0x0a0505,  // near-black (deep mouth interior)
             side: THREE.BackSide,
             depthWrite: true,
           });
           const cavity = new THREE.Mesh(cavityGeo, cavityMat);
-          // Position in Head bone local space:
-          // Blender mouth center (0.0002, 0.0241, -0.0579) → glTF bone-local (x, -z, -y)
-          // Fine-tuned: slightly behind lips surface to avoid poking through at rest
-          cavity.position.set(0.0002, -0.055, -0.024);
-          cavity.scale.set(1.0, 0.7, 1.2);  // slightly flattened sphere (mouth-shaped)
+          // Position in Head bone local space — enlarged to fully cover lip backfaces.
+          // Sits behind lips so open mouth shows a convincing dark void.
+          cavity.position.set(0.0002, -0.052, -0.020);
+          cavity.scale.set(1.2, 0.8, 1.4);  // wider + deeper to occlude all teal backfaces
           headBoneRef.current.add(cavity);
           cavityRef.current = cavity;
           console.log('%c[AVATAR] Mouth cavity attached to Head bone', 'color: #8b0000; font-weight: bold');
@@ -856,12 +842,15 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     const energy = speechEnergyRef.current;
 
     // =======================================
-    // ARM GESTURE SYSTEM — cycles through natural poses with smooth slerp
-    // Poses: relaxed, hand on hip, hands together, talking gesture, etc.
+    // ARM GESTURE SYSTEM — DISABLED
+    // Quaternions were in Blender coordinate space, not glTF Y-up space.
+    // Arms are now driven by the idle_breathing animation clips.
+    // The gesture state machine and arm quaternion application below are
+    // skipped so the animation's natural arm positions come through.
     // =======================================
-    const dt = 1 / 60; // approximate frame delta
-
-    // Advance gesture hold timer
+    const dt = 1 / 60; // approximate frame delta (still used by hip/spine)
+    if (false) {
+    // Advance gesture hold timer (DISABLED)
     gestureHoldTimerRef.current -= dt;
 
     // When hold expires, maybe pick a new target pose (or just stay still longer)
@@ -955,6 +944,7 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
 
     // NOTE: Finger curl via bones removed — WOW model has no finger bones.
     // Fingers are handled by 'relaxedHands' morph target shape key.
+    } // end disabled ARM GESTURE SYSTEM
 
     // =======================================
     // HIP SWAY — natural weight shifting (additive on top of mixer)
