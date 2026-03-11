@@ -46,6 +46,7 @@ export function useGeminiLive(agentId: string, userId: string, isAdmin: boolean 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const socketReadyRef = useRef<boolean>(false);
   const isConnectingRef = useRef<boolean>(false);
+  const processedToolIdsRef = useRef<Set<string>>(new Set());
 
   // Reconnection state
   const userStoppedRef = useRef<boolean>(false);
@@ -97,6 +98,7 @@ export function useGeminiLive(agentId: string, userId: string, isAdmin: boolean 
 
     try {
       socketReadyRef.current = false;
+      processedToolIdsRef.current.clear();
 
       // Build system instruction — either from config override or from Firestore
       let systemInstructionText: string;
@@ -426,13 +428,12 @@ Keep it playful and make them want more.`;
           }
 
           // Handle tool calls — Live API sends these as a SEPARATE message type
-          // Track processed IDs to prevent duplicate execution (API can send same call in multiple formats)
-          const processedToolIds = new Set<string>();
+          // Track processed IDs across messages to prevent duplicate execution
           if (data.toolCall?.functionCalls) {
             for (const fc of data.toolCall.functionCalls) {
               const callId = fc.id || `${fc.name}_${Date.now()}`;
-              if (processedToolIds.has(callId)) continue;
-              processedToolIds.add(callId);
+              if (processedToolIdsRef.current.has(callId)) continue;
+              processedToolIdsRef.current.add(callId);
               console.log("[TOOL CALL RECEIVED via toolCall]", fc.name, "id:", fc.id);
               handleToolCall(fc).catch(err => console.error("[TOOL HANDLER ERROR]", err));
             }
@@ -477,8 +478,8 @@ Keep it playful and make them want more.`;
               // 3. Tool calls (delegated) — deduplicate against toolCall.functionCalls above
               if (part.functionCall) {
                 const callId = part.functionCall.id || `${part.functionCall.name}_${Date.now()}`;
-                if (!processedToolIds.has(callId)) {
-                  processedToolIds.add(callId);
+                if (!processedToolIdsRef.current.has(callId)) {
+                  processedToolIdsRef.current.add(callId);
                   console.log("[TOOL CALL RECEIVED]", part.functionCall.name, "id:", part.functionCall.id);
                   handleToolCall(part.functionCall).catch(err => console.error("[TOOL HANDLER ERROR]", err));
                 }

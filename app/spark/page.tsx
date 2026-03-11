@@ -57,10 +57,18 @@ export default function SparkPage() {
     }
   }, []);
 
+  const SUBJECT_CONTEXT: Record<Subject, string> = useMemo(() => ({
+    general: '',
+    math: '\n\nSUBJECT FOCUS: The student selected MATH. Start with a math-related greeting and jump into a math problem right away. Use the chalkboard and visual aids for counting and equations.',
+    spanish: '\n\nSUBJECT FOCUS: The student selected SPANISH. Greet them in Spanish first, then translate. Start teaching vocabulary immediately with visual flashcards. Speak Spanish as much as possible.',
+    science: '\n\nSUBJECT FOCUS: The student selected SCIENCE. Start with a fun science fact and offer to explore topics like space, animals, weather, or how things work. Use visual aids for diagrams.'
+  }), []);
+
   const sparkConfig = useMemo(() => ({
     ...TUTOR_CONFIG,
+    systemInstruction: (TUTOR_CONFIG.systemInstruction || '') + SUBJECT_CONTEXT[subject],
     onToolCallback: handleSparkToolCallback
-  }), [handleSparkToolCallback]);
+  }), [handleSparkToolCallback, subject, SUBJECT_CONTEXT]);
 
   const {
     isConnected,
