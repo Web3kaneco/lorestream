@@ -13,11 +13,21 @@ interface ToolHandlerDeps {
   onToolCallback?: (toolName: string, args: any) => void;
 }
 
+const MAX_TRANSCRIPTS = 500;
+
 export function useToolHandlers({
   safeSend, userId, agentId, saveToMemory,
   setVaultItems, setIsGeneratingVaultItem, setTranscripts,
   onToolCallback
 }: ToolHandlerDeps) {
+
+  // Shared helper — appends a transcript entry with bounded history
+  const appendTranscript = useCallback((speaker: string, text: string) => {
+    setTranscripts(prev => {
+      const updated = [...prev, { speaker, text }];
+      return updated.length > MAX_TRANSCRIPTS ? updated.slice(-MAX_TRANSCRIPTS) : updated;
+    });
+  }, [setTranscripts]);
 
   const handleToolCall = useCallback(async (functionCall: { name: string; args: any; id?: string }) => {
     // --- Image generation tool (with optional reference images) ---
@@ -26,10 +36,7 @@ export function useToolHandlers({
       console.log(`[AGENT TOOL TRIGGERED] Creating: ${prompt}${referenceImageUrls?.length ? ` (with ${referenceImageUrls.length} references)` : ''}`);
 
       setIsGeneratingVaultItem(true);
-      setTranscripts(prev => {
-        const updated = [...prev, { speaker: 'SYSTEM', text: `Generating image: "${prompt}"${referenceImageUrls?.length ? ` (using ${referenceImageUrls.length} reference images)` : ''}` }];
-        return updated.length > 500 ? updated.slice(-500) : updated;
-      });
+      appendTranscript('SYSTEM', `Generating image: "${prompt}"${referenceImageUrls?.length ? ` (using ${referenceImageUrls.length} reference images)` : ''}`);
 
       // Send tool response IMMEDIATELY so the model can keep talking
       safeSend({
@@ -88,10 +95,7 @@ export function useToolHandlers({
         })
         .catch(err => {
           console.error("Image generation failed:", err);
-          setTranscripts(prev => {
-            const updated = [...prev, { speaker: 'SYSTEM', text: `Image generation failed: ${err.message || 'Unknown error'}. Try again.` }];
-            return updated.length > 500 ? updated.slice(-500) : updated;
-          });
+          appendTranscript('SYSTEM', `Image generation failed: ${err.message || 'Unknown error'}. Try again.`);
         })
         .finally(() => setIsGeneratingVaultItem(false));
     }
@@ -100,11 +104,7 @@ export function useToolHandlers({
     else if (functionCall.name === "createDocumentArtifact") {
       const { title, content, language, description } = functionCall.args;
       console.log(`[AGENT TOOL] Creating document: "${title}" (${language})`);
-
-      setTranscripts(prev => {
-        const updated = [...prev, { speaker: 'SYSTEM', text: `Creating document: "${title}"` }];
-        return updated.length > 500 ? updated.slice(-500) : updated;
-      });
+      appendTranscript('SYSTEM', `Creating document: "${title}"`);
 
       // Immediate response so model keeps talking
       safeSend({
@@ -169,11 +169,7 @@ export function useToolHandlers({
     else if (functionCall.name === "create_learning_visual") {
       const { prompt, subject, concept } = functionCall.args;
       console.log(`[TUTOR TOOL] Learning visual: "${concept}" (${subject})`);
-
-      setTranscripts(prev => {
-        const updated = [...prev, { speaker: 'SYSTEM', text: `Creating visual aid: "${concept}"` }];
-        return updated.length > 500 ? updated.slice(-500) : updated;
-      });
+      appendTranscript('SYSTEM', `Creating visual aid: "${concept}"`);
 
       // Immediate response so Leo keeps talking while image generates
       safeSend({
@@ -212,10 +208,7 @@ export function useToolHandlers({
         })
         .catch(err => {
           console.error("Learning visual generation failed:", err);
-          setTranscripts(prev => {
-            const updated = [...prev, { speaker: 'SYSTEM', text: `Visual aid generation failed. Continuing lesson.` }];
-            return updated.length > 500 ? updated.slice(-500) : updated;
-          });
+          appendTranscript('SYSTEM', 'Visual aid generation failed. Continuing lesson.');
         });
     }
 
@@ -223,10 +216,7 @@ export function useToolHandlers({
     else if (functionCall.name === "search_memory") {
       const { query } = functionCall.args;
       console.log(`[AGENT SEARCHING MEMORY] Query: "${query}"`);
-      setTranscripts(prev => {
-        const updated = [...prev, { speaker: 'SYSTEM', text: `Searching Pinecone Memory Vault for: "${query}"...` }];
-        return updated.length > 500 ? updated.slice(-500) : updated;
-      });
+      appendTranscript('SYSTEM', `Searching Pinecone Memory Vault for: "${query}"...`);
 
       try {
         const memHdrs = await getAuthHeaders();
@@ -269,11 +259,7 @@ export function useToolHandlers({
     // --- Save new agent lore (Architect interview) ---
     else if (functionCall.name === "save_new_agent_lore") {
       console.log("[ARCHITECT] Saving character lore:", functionCall.args);
-
-      setTranscripts(prev => {
-        const updated = [...prev, { speaker: 'SYSTEM', text: 'Character lore captured and saved.' }];
-        return updated.length > 500 ? updated.slice(-500) : updated;
-      });
+      appendTranscript('SYSTEM', 'Character lore captured and saved.');
 
       // Delegate the actual Firestore write to the page via callback
       if (onToolCallback) {
@@ -294,7 +280,7 @@ export function useToolHandlers({
         }
       });
     }
-  }, [safeSend, userId, agentId, saveToMemory, setVaultItems, setIsGeneratingVaultItem, setTranscripts, onToolCallback]);
+  }, [safeSend, userId, agentId, saveToMemory, setVaultItems, setIsGeneratingVaultItem, appendTranscript, onToolCallback]);
 
   return { handleToolCall };
 }

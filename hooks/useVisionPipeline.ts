@@ -1,5 +1,5 @@
 // hooks/useVisionPipeline.ts
-import { useRef, useCallback, RefObject } from 'react';
+import { useRef, useCallback, useEffect, RefObject } from 'react';
 
 const BASE_INTERVAL = 2000;
 const MAX_INTERVAL = 16000;
@@ -88,6 +88,9 @@ export function useVisionPipeline(
     failCountRef.current = 0;
     currentIntervalRef.current = BASE_INTERVAL;
   }, []);
+
+  // Auto-cleanup on unmount — prevents leaked setTimeout chain
+  useEffect(() => () => stopVision(), [stopVision]);
 
   return { startVision, stopVision };
 }
