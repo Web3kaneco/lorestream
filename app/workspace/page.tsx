@@ -76,7 +76,7 @@ function WorkspacePage() {
     }
   }, [paramAgentId, activeAgentId]);
 
-  const { isConnected, vaultItems, isGeneratingVaultItem, startSession, stopSession, volumeRef, sendContext, demoLimitReached } = useGeminiLive(activeAgentId || '', effectiveUserId, isAdmin);
+  const { isConnected, vaultItems, isGeneratingVaultItem, startSession, stopSession, volumeRef, sendContext, ingestFile, demoLimitReached } = useGeminiLive(activeAgentId || '', effectiveUserId, isAdmin);
 
   // Demo limit reached — stop session after a short delay to let final response play
   useEffect(() => {
@@ -275,6 +275,7 @@ function WorkspacePage() {
             onStop={stopSession}
             onClear={handleClearWorkspace}
             onSendContext={sendContext}
+            onIngestFile={isAdmin ? ingestFile : undefined}
             itemCount={visibleItems.length}
           />
         </>
