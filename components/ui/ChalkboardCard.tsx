@@ -51,7 +51,7 @@ export function ChalkboardCard({ problem, hint, difficulty }: ChalkboardCardProp
             border: `1px solid ${config.color}`,
           }}
         >
-          {showHint ? 'Hide Hint' : 'Need a Hint? 💡'}
+          {showHint ? 'Hide Hint' : 'Need a Hint?'}
         </button>
         {showHint && (
           <p className="mt-3 text-sm italic" style={{ color: '#a8d5ba' }}>

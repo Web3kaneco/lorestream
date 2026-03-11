@@ -196,11 +196,12 @@ Keep it playful and make them want more.`;
         }
       }
 
-      // Build tools — admin users get full tools, demo users get none (voice-only)
-      // When tools aren't declared, Gemini can't call them — cleanest gating possible
-      const toolDeclarations = !isAdmin
-        ? [] // Demo mode: voice-only, no tools
-        : (config?.tools || [{
+      // Build tools:
+      // 1. If config provides explicit tools (e.g. Spark tutor), ALWAYS use them regardless of admin status
+      // 2. For default workspace mode: admin users get full tools, demo users get none (voice-only)
+      const toolDeclarations = config?.tools
+        ? config.tools // Config-provided tools always active (Spark chalkboard, etc.)
+        : (!isAdmin ? [] : [{
         functionDeclarations: [
           {
             name: "create_vault_artifact",

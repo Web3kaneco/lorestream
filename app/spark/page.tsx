@@ -21,12 +21,21 @@ const SUBJECT_LABELS: Record<Subject, string> = {
   science: 'Science'
 };
 
+interface LearningVisual {
+  url: string;
+  prompt: string;
+  subject: string;
+  concept: string;
+  createdAt: number;
+}
+
 export default function SparkPage() {
   const router = useRouter();
   const { setMode } = useTheme();
   const [subject, setSubject] = useState<Subject>('general');
   const [hasStarted, setHasStarted] = useState(false);
   const [chalkboardItems, setChalkboardItems] = useState<{ problem: string; hint: string; difficulty: 'easy' | 'medium' | 'hard' }[]>([]);
+  const [learningVisuals, setLearningVisuals] = useState<LearningVisual[]>([]);
   const [animationState, setAnimationState] = useState<AnimationState>('idle');
   const animTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -35,10 +44,16 @@ export default function SparkPage() {
     setMode('spark');
   }, [setMode]);
 
-  // Wrap TUTOR_CONFIG with chalkboard callback
+  // Wrap TUTOR_CONFIG with tool callbacks
   const handleSparkToolCallback = useCallback((toolName: string, args: any) => {
     if (toolName === 'displayChalkboard') {
       setChalkboardItems(prev => [...prev, args]);
+    } else if (toolName === 'create_learning_visual') {
+      setLearningVisuals(prev => {
+        const updated = [...prev, args as LearningVisual];
+        // Keep last 10 visuals to avoid memory bloat
+        return updated.length > 10 ? updated.slice(-10) : updated;
+      });
     }
   }, []);
 
@@ -90,6 +105,9 @@ export default function SparkPage() {
     router.push('/');
   };
 
+  // Latest learning visual for display
+  const latestVisual = learningVisuals.length > 0 ? learningVisuals[learningVisuals.length - 1] : null;
+
   // Pre-session landing
   if (!hasStarted) {
     return (
@@ -105,7 +123,12 @@ export default function SparkPage() {
 
         {/* Hero */}
         <div className="relative z-10 text-center max-w-lg px-6">
-          <div className="text-6xl mb-4">🦁</div>
+          {/* Leo icon — SVG star instead of emoji */}
+          <div className="w-16 h-16 mx-auto mb-4 rounded-2xl flex items-center justify-center" style={{ backgroundColor: 'var(--accent)' }}>
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#000" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+            </svg>
+          </div>
           <h1 className="text-4xl md:text-5xl font-bold mb-2" style={{ color: 'var(--text-primary)' }}>
             Leo&apos;s Learning Lab
           </h1>
@@ -144,7 +167,7 @@ export default function SparkPage() {
               boxShadow: '0 4px 20px var(--panel-shadow)'
             }}
           >
-            Start Learning! 🚀
+            Start Learning
           </button>
         </div>
       </main>
@@ -162,8 +185,13 @@ export default function SparkPage() {
           <button onClick={handleBack} className="text-sm hover:opacity-70 transition-opacity" style={{ color: 'var(--text-muted)' }}>
             &larr;
           </button>
+          <div className="w-6 h-6 rounded-md flex items-center justify-center" style={{ backgroundColor: 'var(--accent)' }}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#000" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+            </svg>
+          </div>
           <h1 className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>
-            🦁 Leo&apos;s Learning Lab
+            Leo&apos;s Learning Lab
           </h1>
           <div className={`w-2 h-2 rounded-full ${isConnected ? 'animate-pulse' : ''}`}
                style={{ backgroundColor: isConnected ? 'var(--accent)' : 'var(--text-muted)' }} />
@@ -223,12 +251,43 @@ export default function SparkPage() {
             </div>
           )}
 
+          {/* Learning visual display — latest generated image */}
+          {latestVisual && (
+            <div className="px-6 pt-4">
+              <div className="rounded-2xl overflow-hidden shadow-lg border" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-panel)' }}>
+                <div className="flex items-center justify-between px-4 py-2" style={{ backgroundColor: 'var(--bg-secondary)' }}>
+                  <span className="text-xs font-bold tracking-wide" style={{ color: 'var(--accent)' }}>
+                    {latestVisual.subject.toUpperCase()}
+                  </span>
+                  <span className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>
+                    Visual Aid
+                  </span>
+                </div>
+                <div className="p-4 flex flex-col items-center gap-3">
+                  <img
+                    src={latestVisual.url}
+                    alt={latestVisual.concept}
+                    className="max-h-48 rounded-lg object-contain"
+                  />
+                  <p className="text-sm font-medium text-center" style={{ color: 'var(--text-secondary)' }}>
+                    {latestVisual.concept}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Whiteboard panel */}
           <div className="flex-1 overflow-y-auto p-6">
             <div className="max-w-lg mx-auto space-y-4">
-              {transcripts.length === 0 && chalkboardItems.length === 0 && (
+              {transcripts.length === 0 && chalkboardItems.length === 0 && learningVisuals.length === 0 && (
                 <div className="text-center py-12">
-                  <div className="text-4xl mb-4">📚</div>
+                  <div className="w-12 h-12 mx-auto mb-4 rounded-xl flex items-center justify-center" style={{ backgroundColor: 'var(--bg-panel)', border: '1px solid var(--border)' }}>
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ color: 'var(--accent)' }}>
+                      <path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z" />
+                      <path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z" />
+                    </svg>
+                  </div>
                   <p className="text-lg font-medium" style={{ color: 'var(--text-primary)' }}>
                     Leo is getting ready...
                   </p>
@@ -266,7 +325,7 @@ export default function SparkPage() {
                       boxShadow: msg.speaker !== 'SYSTEM' ? '0 1px 3px var(--panel-shadow)' : 'none'
                     }}
                   >
-                    {msg.speaker === 'AGENT' && <span className="font-bold mr-1">🦁</span>}
+                    {msg.speaker === 'AGENT' && <span className="font-bold mr-1" style={{ color: 'var(--accent)' }}>LEO</span>}
                     {msg.text}
                   </div>
                 </div>
