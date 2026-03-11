@@ -662,35 +662,52 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
           }
         }
 
-        // Fix mouth blue blob: set material to DoubleSide so the inside of
-        // the mesh shows skin texture instead of transparent HDR environment.
+        // Fix mouth blue/teal blob: DoubleSide renders backfaces, but they
+        // show the teal texture baked into the model's mouth interior.
+        // onBeforeCompile injects a shader hook that forces ALL backfaces to
+        // render as near-black — so the open mouth shows a dark void instead
+        // of teal, while front faces keep their normal skin texture.
         if (hasMorphMouthRef.current) {
           const mats = Array.isArray(targetMesh.material) ? targetMesh.material : [targetMesh.material];
-          mats.forEach(m => {
-            (m as THREE.MeshStandardMaterial).side = THREE.DoubleSide;
+          mats.forEach((m, idx) => {
+            const mat = m as THREE.MeshStandardMaterial;
+            mat.side = THREE.DoubleSide;
+            // Shader hook: override backface color AFTER all normal shading.
+            // gl_FrontFacing is false for backfaces → output near-black.
+            mat.onBeforeCompile = (shader) => {
+              shader.fragmentShader = shader.fragmentShader.replace(
+                '#include <dithering_fragment>',
+                `#include <dithering_fragment>
+                if ( !gl_FrontFacing ) {
+                  gl_FragColor = vec4( 0.03, 0.015, 0.015, 1.0 );
+                }`
+              );
+            };
+            // Prevent Three.js from reusing a cached shader without our hook
+            (mat as any).customProgramCacheKey = () => `darkBackface_${idx}`;
           });
-          console.log('%c[AVATAR] Set material to DoubleSide (prevents HDR showing through mouth)',
+          console.log('%c[AVATAR] DoubleSide + dark backface shader applied (kills teal mouth)',
             'color: #ff69b4; font-weight: bold');
         }
 
-        // Create dark mouth cavity sphere — sits behind the lips so open mouth
-        // shows a dark void instead of teal lip texture backface. Attached to
-        // Head bone so it tracks head movement automatically.
+        // Belt-and-suspenders: dark FrontSide sphere inside the head as backup
+        // occluder. The shader hook above handles the teal, but this sphere
+        // catches any edge cases (gaps between vertices, thin geometry).
+        // FrontSide so the camera sees the near face of the sphere through
+        // the mouth gap (BackSide was invisible from the camera's POV).
         if (hasMorphMouthRef.current && headBoneRef.current && !cavityRef.current) {
-          const cavityGeo = new THREE.SphereGeometry(0.028, 16, 12);
+          const cavityGeo = new THREE.SphereGeometry(0.038, 16, 12);
           const cavityMat = new THREE.MeshBasicMaterial({
-            color: 0x0a0505,  // near-black (deep mouth interior)
-            side: THREE.BackSide,
+            color: 0x080303,  // very dark red-black (deep mouth void)
+            side: THREE.FrontSide,
             depthWrite: true,
           });
           const cavity = new THREE.Mesh(cavityGeo, cavityMat);
-          // Position in Head bone local space — enlarged to fully cover lip backfaces.
-          // Sits behind lips so open mouth shows a convincing dark void.
-          cavity.position.set(0.0002, -0.052, -0.020);
-          cavity.scale.set(1.2, 0.8, 1.4);  // wider + deeper to occlude all teal backfaces
+          cavity.position.set(0.0, -0.050, -0.015);
+          cavity.scale.set(1.3, 0.85, 1.5);
           headBoneRef.current.add(cavity);
           cavityRef.current = cavity;
-          console.log('%c[AVATAR] Mouth cavity attached to Head bone', 'color: #8b0000; font-weight: bold');
+          console.log('%c[AVATAR] Mouth cavity sphere (FrontSide backup) attached to Head', 'color: #8b0000; font-weight: bold');
         }
       }
     }
