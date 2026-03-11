@@ -26,6 +26,8 @@ interface ArmPose {
   name: string;
   upperL: THREE.Quaternion; upperR: THREE.Quaternion;
   foreL: THREE.Quaternion;  foreR: THREE.Quaternion;
+  /** Optional clavicle quaternions (for poses that need shoulder adjustment) */
+  clavL?: THREE.Quaternion; clavR?: THREE.Quaternion;
   /** Minimum hold time in seconds before transitioning */
   holdMin: number;
   /** Maximum hold time */
@@ -70,6 +72,18 @@ const ARM_POSES: ArmPose[] = [
     foreL:  new THREE.Quaternion( 0.5687,  0.0749,  0.1069, 0.8121),
     foreR:  new THREE.Quaternion( 0.5687, -0.0749, -0.1069, 0.8121),
     holdMin: 6, holdMax: 12,
+  },
+  {
+    // Arms folded in front of chest (confident/waiting) — Blender verified
+    // Clavicles bring shoulders forward, upper arms angled down, forearms crossing inward
+    name: 'armsFolded',
+    clavL: new THREE.Quaternion(0.0694, -0.1043, 0.0073, 0.9921),
+    clavR: new THREE.Quaternion(0.0694,  0.1043, -0.0073, 0.9921),
+    upperL: new THREE.Quaternion(0.0619, -0.2057, -0.3126, 0.9253),
+    upperR: new THREE.Quaternion(0.0619,  0.2057,  0.3126, 0.9253),
+    foreL:  new THREE.Quaternion(0.3334, -0.5882, -0.5679, 0.4695),
+    foreR:  new THREE.Quaternion(0.3334,  0.5882,  0.5679, 0.4695),
+    holdMin: 8, holdMax: 16,
   },
   {
     // Hands together in front (attentive/listening)
@@ -467,6 +481,9 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
   const clavRRef = useRef<THREE.Bone | null>(null);
   const speechEnergyRef = useRef(0);
 
+  // Mouth cavity: dark sphere behind lips so open mouth shows a dark void
+  const cavityRef = useRef<THREE.Mesh | null>(null);
+
   // Gesture state machine — smooth transitions between natural arm poses
   const gesturePoseRef = useRef(0);           // current pose index in ARM_POSES
   const gestureTargetRef = useRef(0);         // target pose index
@@ -660,7 +677,6 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
 
         // Fix mouth blue blob: set material to DoubleSide so the inside of
         // the mesh shows skin texture instead of transparent HDR environment.
-        // This is more robust than a cavity mesh because it follows head movement.
         if (hasMorphMouthRef.current) {
           const mats = Array.isArray(targetMesh.material) ? targetMesh.material : [targetMesh.material];
           mats.forEach(m => {
@@ -668,6 +684,27 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
           });
           console.log('%c[AVATAR] Set material to DoubleSide (prevents HDR showing through mouth)',
             'color: #ff69b4; font-weight: bold');
+        }
+
+        // Create dark mouth cavity sphere — sits behind the lips so open mouth
+        // shows a dark void instead of teal lip texture backface. Attached to
+        // Head bone so it tracks head movement automatically.
+        if (hasMorphMouthRef.current && headBoneRef.current && !cavityRef.current) {
+          const cavityGeo = new THREE.SphereGeometry(0.018, 16, 12);
+          const cavityMat = new THREE.MeshBasicMaterial({
+            color: 0x1a0a0a,  // very dark reddish-brown (mouth interior)
+            side: THREE.BackSide,
+            depthWrite: true,
+          });
+          const cavity = new THREE.Mesh(cavityGeo, cavityMat);
+          // Position in Head bone local space:
+          // Blender mouth center (0.0002, 0.0241, -0.0579) → glTF bone-local (x, -z, -y)
+          // Fine-tuned: slightly behind lips surface to avoid poking through at rest
+          cavity.position.set(0.0002, -0.055, -0.024);
+          cavity.scale.set(1.0, 0.7, 1.2);  // slightly flattened sphere (mouth-shaped)
+          headBoneRef.current.add(cavity);
+          cavityRef.current = cavity;
+          console.log('%c[AVATAR] Mouth cavity attached to Head bone', 'color: #8b0000; font-weight: bold');
         }
       }
     }
@@ -774,9 +811,9 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     // =======================================
     if (groupRef.current) {
       if (hasRealAnimation) {
-        // Real animation drives body movement — add breathing + minimal lateral drift
+        // Real animation drives body movement — add breathing + visible lateral drift
         const breathY = Math.sin(t * 1.8) * 0.003;
-        const lateralX = Math.sin(t * 0.35) * 0.001;  // barely perceptible weight shift
+        const lateralX = Math.sin(t * 0.35) * 0.004;  // visible weight shift
         groupRef.current.position.y = -1 + breathY;
         groupRef.current.position.x = lateralX;
         groupRef.current.rotation.x = 0;
@@ -900,33 +937,51 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       forearmRRef.current.quaternion.copy(_slerpQ);
     }
 
+    // Clavicle (shoulder) pose: only set when the current/target pose has clavicle data.
+    // Identity quaternion used as fallback for poses without clavicle override.
+    const identityQ = _q.set(0, 0, 0, 1);
+    if (clavLRef.current) {
+      const fromCL = fromPose.clavL ?? identityQ;
+      const toCL = toPose.clavL ?? identityQ;
+      _slerpQ.copy(fromCL).slerp(toCL, blend);
+      clavLRef.current.quaternion.copy(_slerpQ);
+    }
+    if (clavRRef.current) {
+      const fromCR = fromPose.clavR ?? identityQ;
+      const toCR = toPose.clavR ?? identityQ;
+      _slerpQ.copy(fromCR).slerp(toCR, blend);
+      clavRRef.current.quaternion.copy(_slerpQ);
+    }
+
     // NOTE: Finger curl via bones removed — WOW model has no finger bones.
     // Fingers are handled by 'relaxedHands' morph target shape key.
 
     // =======================================
-    // HIP SWAY — very subtle weight shifting (additive on top of mixer)
-    // Kept minimal to prevent torso shift that makes arms look behind body
+    // HIP SWAY — natural weight shifting (additive on top of mixer)
+    // Amplified for visible hip movement; multi-frequency for organic feel
     // =======================================
     if (hipRef.current) {
-      const swayY = Math.sin(t * 0.3) * (0.003 + energy * 0.004);
-      const tiltX = Math.sin(t * 0.4) * (0.002 + energy * 0.002);
-      _e.set(tiltX, swayY, 0);
+      const swayY = Math.sin(t * 0.3) * (0.012 + energy * 0.015)
+                   + Math.sin(t * 0.7) * 0.004; // secondary frequency
+      const tiltX = Math.sin(t * 0.4) * (0.008 + energy * 0.008);
+      const hipTwist = Math.sin(t * 0.2) * (0.006 + energy * 0.008);
+      _e.set(tiltX, swayY, hipTwist);
       hipRef.current.quaternion.multiply(_q.setFromEuler(_e));
     }
 
     // =======================================
-    // SPINE — very gentle counter-rotation (additive on top of mixer)
-    // Minimal amplitudes to avoid shifting torso relative to arms
+    // SPINE — counter-rotation to complement hip sway (additive on top of mixer)
+    // Slightly amplified for visible torso movement during speech
     // =======================================
     if (spine01Ref.current) {
-      const counterZ = -Math.sin(t * 0.3) * 0.002;
-      const leanX = Math.sin(t * 0.5) * (0.002 + energy * 0.003);
+      const counterZ = -Math.sin(t * 0.3) * 0.005;
+      const leanX = Math.sin(t * 0.5) * (0.005 + energy * 0.008);
       _e.set(leanX, 0, counterZ);
       spine01Ref.current.quaternion.multiply(_q.setFromEuler(_e));
     }
     if (spine02Ref.current) {
-      const turnY = Math.sin(t * 0.25) * (0.003 + energy * 0.005);
-      const leanZ = Math.sin(t * 0.55) * (0.002 + energy * 0.003);
+      const turnY = Math.sin(t * 0.25) * (0.006 + energy * 0.012);
+      const leanZ = Math.sin(t * 0.55) * (0.004 + energy * 0.008);
       _e.set(0, turnY, leanZ);
       spine02Ref.current.quaternion.multiply(_q.setFromEuler(_e));
     }
@@ -1062,12 +1117,17 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       const wideIdx = dict['mouthWide'] ?? 1;
 
       // relaxedHands morph target: dynamic finger curl based on current arm pose.
-      // Hip poses → more curl (fist-like, 0.65), others → slight relaxation (0.15).
+      // NEGATIVE influence = fingers curl INWARD (toward palm). The shape key delta
+      // points upward in bind space (dZ=+0.058), but when arms are rotated down the
+      // positive direction maps to fingers curving backward (away from palm).
+      // Negating the influence reverses the delta → natural inward curl.
+      // Hip poses → tighter curl (-0.65), others → light curl (-0.15).
       const relaxedIdx = dict['relaxedHands'];
       if (relaxedIdx !== undefined) {
         const currentPose = ARM_POSES[gestureTargetRef.current];
         const isHipPose = currentPose?.name === 'hipL' || currentPose?.name === 'hipR' || currentPose?.name === 'hipBoth';
-        const targetRelaxed = isHipPose ? 0.65 : 0.15;
+        const isFolded = currentPose?.name === 'armsFolded';
+        const targetRelaxed = isHipPose ? -0.65 : isFolded ? -0.45 : -0.15;
         infl[relaxedIdx] = THREE.MathUtils.lerp(infl[relaxedIdx], targetRelaxed, 0.06);
       }
 
@@ -1110,13 +1170,13 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
 
       if (vol > 0.02) {
         // Speaking: visible lip parting with rapid consonant/vowel cycles.
-        // DoubleSide material prevents blue HDR from showing through, so we can
-        // push jawOpen higher for more visible mouth movement.
-        const jawBase = Math.pow(jaw, 0.85) * 0.18;
-        const jawFlutter = Math.sin(t * 6.2) * 0.012 + Math.sin(t * 9.4) * 0.008
-          + Math.sin(t * 14.1) * 0.004; // high-freq for consonant feel
-        const jawTarget = Math.min(0.22, jawBase + jawFlutter);
-        const wideTarget = Math.min(0.05, Math.pow(width, 0.8) * 0.04);
+        // Dark mouth cavity sits behind lips, so pushing jawOpen high creates
+        // a convincing dark mouth interior visible through the gap.
+        const jawBase = Math.pow(jaw, 0.85) * 0.45;
+        const jawFlutter = Math.sin(t * 6.2) * 0.018 + Math.sin(t * 9.4) * 0.012
+          + Math.sin(t * 14.1) * 0.006; // high-freq for consonant feel
+        const jawTarget = Math.min(0.55, jawBase + jawFlutter);
+        const wideTarget = Math.min(0.10, Math.pow(width, 0.8) * 0.08);
         // Faster lerp for snappy open/close (speech is quick)
         infl[jawIdx] = THREE.MathUtils.lerp(infl[jawIdx], Math.max(0, jawTarget), 0.30);
         infl[wideIdx] = THREE.MathUtils.lerp(infl[wideIdx], Math.max(0, wideTarget), 0.25);
