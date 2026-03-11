@@ -72,15 +72,6 @@ const ARM_POSES: ArmPose[] = [
     holdMin: 6, holdMax: 12,
   },
   {
-    // Arms crossed over chest (confident/waiting) — computed from Blender
-    name: 'armsCrossed',
-    upperL: new THREE.Quaternion(-0.0765, -0.3767, -0.2616, 0.8853),
-    upperR: new THREE.Quaternion(-0.0765,  0.3767,  0.2616, 0.8853),
-    foreL:  new THREE.Quaternion(-0.1962,  0.2802, -0.7698, 0.5390),
-    foreR:  new THREE.Quaternion(-0.1962, -0.2802,  0.7698, 0.5390),
-    holdMin: 8, holdMax: 16,
-  },
-  {
     // Hands together in front (attentive/listening)
     name: 'frontTogether',
     upperL: new THREE.Quaternion(-0.0201, -0.1548, -0.6394, 0.7529),
@@ -326,68 +317,6 @@ function createMouthMorphTargets(mesh: THREE.SkinnedMesh): boolean {
   return true;
 }
 
-/**
- * Create a small dark mesh behind the lips to act as mouth cavity.
- * Prevents the HDR environment (blue sky) from showing through when
- * jawOpen morph target opens the mouth.
- */
-function createMouthCavity(mesh: THREE.SkinnedMesh): THREE.Mesh | null {
-  const geo = mesh.geometry;
-  const posAttr = geo.getAttribute('position');
-  const morphPositions = geo.morphAttributes.position;
-  if (!posAttr || !morphPositions || morphPositions.length === 0) return null;
-
-  // jawOpen is the first morph target — find mouth vertices by non-zero delta
-  const jawAttr = morphPositions[0] as THREE.Float32BufferAttribute;
-  const mouthPos = new THREE.Vector3();
-  let mouthCount = 0;
-  for (let i = 0; i < jawAttr.count; i++) {
-    const dy = jawAttr.getY(i);
-    if (Math.abs(dy) > 0.0001) {
-      mouthPos.x += posAttr.getX(i);
-      mouthPos.y += posAttr.getY(i);
-      mouthPos.z += posAttr.getZ(i);
-      mouthCount++;
-    }
-  }
-  if (mouthCount < 5) return null;
-  mouthPos.divideScalar(mouthCount);
-
-  // Compute head height for proportional sizing
-  geo.computeBoundingBox();
-  const totalH = geo.boundingBox!.max.y - geo.boundingBox!.min.y;
-  const headH = totalH * 0.14;
-
-  // Face-forward offset: push cavity slightly BEHIND face surface
-  // Detect face axis from head vertex asymmetry (same as createMouthMorphTargets)
-  const headMinY = geo.boundingBox!.max.y - headH;
-  let sumX = 0, sumZ = 0, headCount = 0;
-  for (let i = 0; i < posAttr.count; i++) {
-    if (posAttr.getY(i) >= headMinY) {
-      sumX += posAttr.getX(i);
-      sumZ += posAttr.getZ(i);
-      headCount++;
-    }
-  }
-  const hcX = headCount > 0 ? sumX / headCount : 0;
-  const hcZ = headCount > 0 ? sumZ / headCount : 0;
-  // Mouth is already slightly in front of head center — offset it BEHIND for cavity
-  const offsetX = (mouthPos.x - hcX) * -0.3; // push 30% back from face surface
-  const offsetZ = (mouthPos.z - hcZ) * -0.3;
-
-  const radius = headH * 0.25;
-  const cavityGeo = new THREE.SphereGeometry(radius, 8, 6);
-  const cavityMat = new THREE.MeshBasicMaterial({ color: 0x100505 }); // very dark reddish
-  const cavity = new THREE.Mesh(cavityGeo, cavityMat);
-  cavity.position.set(mouthPos.x + offsetX, mouthPos.y, mouthPos.z + offsetZ);
-  cavity.scale.set(1.5, 0.5, 1.0); // wider horizontally, flatter vertically
-
-  console.log(
-    `%c[AVATAR] Mouth cavity at (${cavity.position.x.toFixed(3)}, ${cavity.position.y.toFixed(3)}, ${cavity.position.z.toFixed(3)}) r=${radius.toFixed(4)}`,
-    'color: #ff69b4; font-weight: bold'
-  );
-  return cavity;
-}
 
 export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarProps) {
   const groupRef = useRef<THREE.Group>(null!);
@@ -470,6 +399,25 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     }
     if (scaleStripped > 0) {
       console.log(`%c[AVATAR] Stripped ${scaleStripped} scale tracks (prevents face puffing)`,
+        'color: #ff6600; font-weight: bold');
+    }
+
+    // Strip Head POSITION tracks — breathing animation moves Head bone position
+    // slightly, which shifts the face forward/back creating a "cheek breathing" effect.
+    // Rotation tracks are kept (handled by additive procedural motion).
+    let headPosStripped = 0;
+    for (const clip of realClips) {
+      const before = clip.tracks.length;
+      clip.tracks = clip.tracks.filter(track => {
+        const di = track.name.lastIndexOf('.');
+        const bn = (di >= 0 ? track.name.substring(0, di) : track.name).toLowerCase();
+        const prop = di >= 0 ? track.name.substring(di) : '';
+        return !(bn.includes('head') && prop === '.position');
+      });
+      headPosStripped += before - clip.tracks.length;
+    }
+    if (headPosStripped > 0) {
+      console.log(`%c[AVATAR] Stripped ${headPosStripped} Head position tracks (prevents cheek breathing)`,
         'color: #ff6600; font-weight: bold');
     }
 
@@ -710,12 +658,16 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
           }
         }
 
-        // Add dark mouth cavity to prevent HDR showing through open mouth
+        // Fix mouth blue blob: set material to DoubleSide so the inside of
+        // the mesh shows skin texture instead of transparent HDR environment.
+        // This is more robust than a cavity mesh because it follows head movement.
         if (hasMorphMouthRef.current) {
-          const cavity = createMouthCavity(targetMesh);
-          if (cavity && targetMesh.parent) {
-            targetMesh.parent.add(cavity);
-          }
+          const mats = Array.isArray(targetMesh.material) ? targetMesh.material : [targetMesh.material];
+          mats.forEach(m => {
+            (m as THREE.MeshStandardMaterial).side = THREE.DoubleSide;
+          });
+          console.log('%c[AVATAR] Set material to DoubleSide (prevents HDR showing through mouth)',
+            'color: #ff69b4; font-weight: bold');
         }
       }
     }
@@ -882,17 +834,31 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
         const current = ARM_POSES[gestureTargetRef.current];
         gestureHoldTimerRef.current = current.holdMin + Math.random() * (current.holdMax - current.holdMin);
       } else {
+        const currentPoseName = ARM_POSES[gestureTargetRef.current]?.name;
         const isSpeaking = energy > 0.15;
-        // Filter available poses based on speech state
-        const available = ARM_POSES
-          .map((p, i) => ({ p, i }))
-          .filter(({ p, i }) => i !== gestureTargetRef.current && (!p.speechOnly || isSpeaking));
-        const pick = available[Math.floor(Math.random() * available.length)];
-        if (pick) {
-          gesturePoseRef.current = gestureTargetRef.current; // current becomes "from"
-          gestureTargetRef.current = pick.i;
-          gestureBlendRef.current = 0; // start transition
-          gestureTransDurRef.current = 2.0 + Math.random() * 1.5; // 2.0–3.5s slow transition
+
+        // When leaving gestureR (pointing), always route through relaxed first.
+        // Direct gestureR→hipPose looks jarring — bring arms down first, then go to new pose.
+        if (currentPoseName === 'gestureR') {
+          const relaxedIdx = ARM_POSES.findIndex(p => p.name === 'relaxed');
+          if (relaxedIdx >= 0) {
+            gesturePoseRef.current = gestureTargetRef.current;
+            gestureTargetRef.current = relaxedIdx;
+            gestureBlendRef.current = 0;
+            gestureTransDurRef.current = 1.5 + Math.random() * 1.0; // 1.5–2.5s (faster return)
+          }
+        } else {
+          // Filter available poses based on speech state
+          const available = ARM_POSES
+            .map((p, i) => ({ p, i }))
+            .filter(({ p, i }) => i !== gestureTargetRef.current && (!p.speechOnly || isSpeaking));
+          const pick = available[Math.floor(Math.random() * available.length)];
+          if (pick) {
+            gesturePoseRef.current = gestureTargetRef.current; // current becomes "from"
+            gestureTargetRef.current = pick.i;
+            gestureBlendRef.current = 0; // start transition
+            gestureTransDurRef.current = 2.0 + Math.random() * 1.5; // 2.0–3.5s slow transition
+          }
         }
       }
     }
@@ -1095,10 +1061,15 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       const jawIdx = dict['jawOpen'] ?? 0;
       const wideIdx = dict['mouthWide'] ?? 1;
 
-      // relaxedHands morph target: subtle natural finger relaxation.
-      // Keep very low to avoid visible finger curl — 0.45 was too aggressive.
+      // relaxedHands morph target: dynamic finger curl based on current arm pose.
+      // Hip poses → more curl (fist-like, 0.65), others → slight relaxation (0.15).
       const relaxedIdx = dict['relaxedHands'];
-      if (relaxedIdx !== undefined) infl[relaxedIdx] = 0.15;
+      if (relaxedIdx !== undefined) {
+        const currentPose = ARM_POSES[gestureTargetRef.current];
+        const isHipPose = currentPose?.name === 'hipL' || currentPose?.name === 'hipR' || currentPose?.name === 'hipBoth';
+        const targetRelaxed = isHipPose ? 0.65 : 0.15;
+        infl[relaxedIdx] = THREE.MathUtils.lerp(infl[relaxedIdx], targetRelaxed, 0.06);
+      }
 
       // ---- Random eye blinks ----
       const eyesIdx = dict['eyesClosed'];
@@ -1138,15 +1109,14 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       }
 
       if (vol > 0.02) {
-        // Speaking: subtle lip parting — top lip/bottom lip with gap visible.
-        // Keep jawOpen very low (max ~0.10) so lips part without exposing cavity.
-        // Rapid open/close cycles from sin waves simulate consonant/vowel patterns.
-        // mouthWide near zero — horizontal stretch makes the lipstick blob worse.
-        const jawBase = Math.pow(jaw, 0.85) * 0.10;
-        const jawFlutter = Math.sin(t * 6.2) * 0.008 + Math.sin(t * 9.4) * 0.005
-          + Math.sin(t * 14.1) * 0.003; // high-freq for consonant feel
-        const jawTarget = Math.min(0.12, jawBase + jawFlutter);
-        const wideTarget = Math.min(0.03, Math.pow(width, 0.8) * 0.025);
+        // Speaking: visible lip parting with rapid consonant/vowel cycles.
+        // DoubleSide material prevents blue HDR from showing through, so we can
+        // push jawOpen higher for more visible mouth movement.
+        const jawBase = Math.pow(jaw, 0.85) * 0.18;
+        const jawFlutter = Math.sin(t * 6.2) * 0.012 + Math.sin(t * 9.4) * 0.008
+          + Math.sin(t * 14.1) * 0.004; // high-freq for consonant feel
+        const jawTarget = Math.min(0.22, jawBase + jawFlutter);
+        const wideTarget = Math.min(0.05, Math.pow(width, 0.8) * 0.04);
         // Faster lerp for snappy open/close (speech is quick)
         infl[jawIdx] = THREE.MathUtils.lerp(infl[jawIdx], Math.max(0, jawTarget), 0.30);
         infl[wideIdx] = THREE.MathUtils.lerp(infl[wideIdx], Math.max(0, wideTarget), 0.25);
