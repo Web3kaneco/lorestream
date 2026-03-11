@@ -36,13 +36,13 @@ interface ArmPose {
 
 const ARM_POSES: ArmPose[] = [
   {
-    // Arms relaxed at sides (current default pose)
+    // Arms relaxed at sides (default resting pose)
     name: 'relaxed',
     upperL: new THREE.Quaternion(-0.0189, -0.0141, -0.7562, 0.6540),
     upperR: new THREE.Quaternion(-0.0164,  0.0128,  0.7080, 0.7059),
     foreL:  new THREE.Quaternion( 0.0512,  0.0017,  0.0334, 0.9981),
     foreR:  new THREE.Quaternion( 0.0509, -0.0004, -0.0083, 0.9987),
-    holdMin: 4, holdMax: 8,
+    holdMin: 8, holdMax: 16,
   },
   {
     // Left hand on hip, right relaxed
@@ -51,7 +51,7 @@ const ARM_POSES: ArmPose[] = [
     upperR: new THREE.Quaternion(-0.0164,  0.0128,  0.7080, 0.7059),
     foreL:  new THREE.Quaternion( 0.5687,  0.0749,  0.1069, 0.8121),
     foreR:  new THREE.Quaternion( 0.0509, -0.0004, -0.0083, 0.9987),
-    holdMin: 5, holdMax: 10,
+    holdMin: 8, holdMax: 14,
   },
   {
     // Right hand on hip, left relaxed
@@ -60,7 +60,7 @@ const ARM_POSES: ArmPose[] = [
     upperR: new THREE.Quaternion( 0.0518,  0.1473,  0.5854, 0.7956),
     foreL:  new THREE.Quaternion( 0.0512,  0.0017,  0.0334, 0.9981),
     foreR:  new THREE.Quaternion( 0.5687, -0.0749, -0.1069, 0.8121),
-    holdMin: 5, holdMax: 10,
+    holdMin: 8, holdMax: 14,
   },
   {
     // Both hands on hips (confident/waiting)
@@ -69,7 +69,16 @@ const ARM_POSES: ArmPose[] = [
     upperR: new THREE.Quaternion( 0.0518,  0.1473,  0.5854, 0.7956),
     foreL:  new THREE.Quaternion( 0.5687,  0.0749,  0.1069, 0.8121),
     foreR:  new THREE.Quaternion( 0.5687, -0.0749, -0.1069, 0.8121),
-    holdMin: 4, holdMax: 8,
+    holdMin: 6, holdMax: 12,
+  },
+  {
+    // Arms crossed over chest (confident/waiting) — computed from Blender
+    name: 'armsCrossed',
+    upperL: new THREE.Quaternion(-0.0765, -0.3767, -0.2616, 0.8853),
+    upperR: new THREE.Quaternion(-0.0765,  0.3767,  0.2616, 0.8853),
+    foreL:  new THREE.Quaternion(-0.1962,  0.2802, -0.7698, 0.5390),
+    foreR:  new THREE.Quaternion(-0.1962, -0.2802,  0.7698, 0.5390),
+    holdMin: 8, holdMax: 16,
   },
   {
     // Hands together in front (attentive/listening)
@@ -78,7 +87,7 @@ const ARM_POSES: ArmPose[] = [
     upperR: new THREE.Quaternion(-0.0201,  0.1548,  0.6394, 0.7529),
     foreL:  new THREE.Quaternion( 0.3769,  0.0665,  0.1604, 0.9098),
     foreR:  new THREE.Quaternion( 0.3769, -0.0665, -0.1604, 0.9098),
-    holdMin: 4, holdMax: 8,
+    holdMin: 6, holdMax: 12,
   },
   {
     // Right hand gesturing (explaining), left relaxed — speech only
@@ -87,7 +96,7 @@ const ARM_POSES: ArmPose[] = [
     upperR: new THREE.Quaternion( 0.1328,  0.1900,  0.5211, 0.8214),
     foreL:  new THREE.Quaternion( 0.0512,  0.0017,  0.0334, 0.9981),
     foreR:  new THREE.Quaternion( 0.4629, -0.0017, -0.0973, 0.8810),
-    holdMin: 2, holdMax: 5, speechOnly: true,
+    holdMin: 3, holdMax: 6, speechOnly: true,
   },
 ];
 
@@ -315,6 +324,69 @@ function createMouthMorphTargets(mesh: THREE.SkinnedMesh): boolean {
     'color: #ff69b4; font-weight: bold'
   );
   return true;
+}
+
+/**
+ * Create a small dark mesh behind the lips to act as mouth cavity.
+ * Prevents the HDR environment (blue sky) from showing through when
+ * jawOpen morph target opens the mouth.
+ */
+function createMouthCavity(mesh: THREE.SkinnedMesh): THREE.Mesh | null {
+  const geo = mesh.geometry;
+  const posAttr = geo.getAttribute('position');
+  const morphPositions = geo.morphAttributes.position;
+  if (!posAttr || !morphPositions || morphPositions.length === 0) return null;
+
+  // jawOpen is the first morph target — find mouth vertices by non-zero delta
+  const jawAttr = morphPositions[0] as THREE.Float32BufferAttribute;
+  const mouthPos = new THREE.Vector3();
+  let mouthCount = 0;
+  for (let i = 0; i < jawAttr.count; i++) {
+    const dy = jawAttr.getY(i);
+    if (Math.abs(dy) > 0.0001) {
+      mouthPos.x += posAttr.getX(i);
+      mouthPos.y += posAttr.getY(i);
+      mouthPos.z += posAttr.getZ(i);
+      mouthCount++;
+    }
+  }
+  if (mouthCount < 5) return null;
+  mouthPos.divideScalar(mouthCount);
+
+  // Compute head height for proportional sizing
+  geo.computeBoundingBox();
+  const totalH = geo.boundingBox!.max.y - geo.boundingBox!.min.y;
+  const headH = totalH * 0.14;
+
+  // Face-forward offset: push cavity slightly BEHIND face surface
+  // Detect face axis from head vertex asymmetry (same as createMouthMorphTargets)
+  const headMinY = geo.boundingBox!.max.y - headH;
+  let sumX = 0, sumZ = 0, headCount = 0;
+  for (let i = 0; i < posAttr.count; i++) {
+    if (posAttr.getY(i) >= headMinY) {
+      sumX += posAttr.getX(i);
+      sumZ += posAttr.getZ(i);
+      headCount++;
+    }
+  }
+  const hcX = headCount > 0 ? sumX / headCount : 0;
+  const hcZ = headCount > 0 ? sumZ / headCount : 0;
+  // Mouth is already slightly in front of head center — offset it BEHIND for cavity
+  const offsetX = (mouthPos.x - hcX) * -0.3; // push 30% back from face surface
+  const offsetZ = (mouthPos.z - hcZ) * -0.3;
+
+  const radius = headH * 0.25;
+  const cavityGeo = new THREE.SphereGeometry(radius, 8, 6);
+  const cavityMat = new THREE.MeshBasicMaterial({ color: 0x100505 }); // very dark reddish
+  const cavity = new THREE.Mesh(cavityGeo, cavityMat);
+  cavity.position.set(mouthPos.x + offsetX, mouthPos.y, mouthPos.z + offsetZ);
+  cavity.scale.set(1.5, 0.5, 1.0); // wider horizontally, flatter vertically
+
+  console.log(
+    `%c[AVATAR] Mouth cavity at (${cavity.position.x.toFixed(3)}, ${cavity.position.y.toFixed(3)}, ${cavity.position.z.toFixed(3)}) r=${radius.toFixed(4)}`,
+    'color: #ff69b4; font-weight: bold'
+  );
+  return cavity;
 }
 
 export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarProps) {
@@ -637,6 +709,14 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
             console.log('%c[AVATAR] Using programmatic morph targets (fallback)', 'color: #ffa500; font-weight: bold');
           }
         }
+
+        // Add dark mouth cavity to prevent HDR showing through open mouth
+        if (hasMorphMouthRef.current) {
+          const cavity = createMouthCavity(targetMesh);
+          if (cavity && targetMesh.parent) {
+            targetMesh.parent.add(cavity);
+          }
+        }
       }
     }
 
@@ -742,9 +822,9 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     // =======================================
     if (groupRef.current) {
       if (hasRealAnimation) {
-        // Real animation drives body movement — add breathing + subtle lateral drift
+        // Real animation drives body movement — add breathing + minimal lateral drift
         const breathY = Math.sin(t * 1.8) * 0.003;
-        const lateralX = Math.sin(t * 0.45) * 0.002;  // very subtle weight shift
+        const lateralX = Math.sin(t * 0.35) * 0.001;  // barely perceptible weight shift
         groupRef.current.position.y = -1 + breathY;
         groupRef.current.position.x = lateralX;
         groupRef.current.rotation.x = 0;
@@ -795,19 +875,25 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     // Advance gesture hold timer
     gestureHoldTimerRef.current -= dt;
 
-    // When hold expires, pick a new target pose
+    // When hold expires, maybe pick a new target pose (or just stay still longer)
     if (gestureHoldTimerRef.current <= 0 && gestureBlendRef.current >= 1) {
-      const isSpeaking = energy > 0.15;
-      // Filter available poses based on speech state
-      const available = ARM_POSES
-        .map((p, i) => ({ p, i }))
-        .filter(({ p, i }) => i !== gestureTargetRef.current && (!p.speechOnly || isSpeaking));
-      const pick = available[Math.floor(Math.random() * available.length)];
-      if (pick) {
-        gesturePoseRef.current = gestureTargetRef.current; // current becomes "from"
-        gestureTargetRef.current = pick.i;
-        gestureBlendRef.current = 0; // start transition
-        gestureTransDurRef.current = 1.2 + Math.random() * 0.8; // 1.2–2.0s transition
+      // 40% chance to just re-hold same pose → more resting / less constant motion
+      if (Math.random() < 0.4) {
+        const current = ARM_POSES[gestureTargetRef.current];
+        gestureHoldTimerRef.current = current.holdMin + Math.random() * (current.holdMax - current.holdMin);
+      } else {
+        const isSpeaking = energy > 0.15;
+        // Filter available poses based on speech state
+        const available = ARM_POSES
+          .map((p, i) => ({ p, i }))
+          .filter(({ p, i }) => i !== gestureTargetRef.current && (!p.speechOnly || isSpeaking));
+        const pick = available[Math.floor(Math.random() * available.length)];
+        if (pick) {
+          gesturePoseRef.current = gestureTargetRef.current; // current becomes "from"
+          gestureTargetRef.current = pick.i;
+          gestureBlendRef.current = 0; // start transition
+          gestureTransDurRef.current = 2.0 + Math.random() * 1.5; // 2.0–3.5s slow transition
+        }
       }
     }
 
@@ -852,59 +938,51 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     // Fingers are handled by 'relaxedHands' morph target shape key.
 
     // =======================================
-    // HIP SWAY — gentle weight shifting (additive on top of mixer)
+    // HIP SWAY — very subtle weight shifting (additive on top of mixer)
+    // Kept minimal to prevent torso shift that makes arms look behind body
     // =======================================
     if (hipRef.current) {
-      const swayY = Math.sin(t * 0.4) * (0.008 + energy * 0.012);
-      const tiltX = Math.sin(t * 0.55) * (0.004 + energy * 0.006);
+      const swayY = Math.sin(t * 0.3) * (0.003 + energy * 0.004);
+      const tiltX = Math.sin(t * 0.4) * (0.002 + energy * 0.002);
       _e.set(tiltX, swayY, 0);
       hipRef.current.quaternion.multiply(_q.setFromEuler(_e));
     }
 
     // =======================================
-    // SPINE — gentle counter-rotation + lean (additive on top of mixer)
+    // SPINE — very gentle counter-rotation (additive on top of mixer)
+    // Minimal amplitudes to avoid shifting torso relative to arms
     // =======================================
     if (spine01Ref.current) {
-      const counterZ = -Math.sin(t * 0.4) * 0.005;
-      const leanX = Math.sin(t * 0.65) * (0.004 + energy * 0.008);
+      const counterZ = -Math.sin(t * 0.3) * 0.002;
+      const leanX = Math.sin(t * 0.5) * (0.002 + energy * 0.003);
       _e.set(leanX, 0, counterZ);
       spine01Ref.current.quaternion.multiply(_q.setFromEuler(_e));
     }
     if (spine02Ref.current) {
-      const turnY = Math.sin(t * 0.3) * (0.006 + energy * 0.015);
-      const leanZ = Math.sin(t * 0.75) * (0.005 + energy * 0.008);
+      const turnY = Math.sin(t * 0.25) * (0.003 + energy * 0.005);
+      const leanZ = Math.sin(t * 0.55) * (0.002 + energy * 0.003);
       _e.set(0, turnY, leanZ);
       spine02Ref.current.quaternion.multiply(_q.setFromEuler(_e));
     }
 
-    // =======================================
-    // SHOULDERS — very subtle micro-shrug (additive on top of mixer)
-    // Clavicle is parent of arm chain — keep tiny to avoid arm cascade
-    // =======================================
-    if (clavLRef.current) {
-      const shrugZ = Math.sin(t * 0.85) * (0.003 + energy * 0.006);
-      _e.set(0, 0, shrugZ);
-      clavLRef.current.quaternion.multiply(_q.setFromEuler(_e));
-    }
-    if (clavRRef.current) {
-      const shrugZ = Math.sin(t * 0.95) * (0.003 + energy * 0.006);
-      _e.set(0, 0, -shrugZ);
-      clavRRef.current.quaternion.multiply(_q.setFromEuler(_e));
-    }
+    // SHOULDERS — disabled. Clavicle rotation cascades to entire arm chain,
+    // causing disproportionate visual movement. Arms get their motion from
+    // the gesture pose system instead.
 
     // =======================================
-    // HEAD/NECK — relaxed, always active, scales with speech (additive)
+    // HEAD/NECK — subtle, always active, scales with speech (additive)
+    // Reduced amplitudes for more natural, less constant motion
     // =======================================
     if (neckBoneRef.current) {
-      const neckY = Math.sin(t * 0.7) * (0.02 + energy * 0.035);
-      const neckX = Math.sin(t * 1.0) * (0.01 + energy * 0.018);
+      const neckY = Math.sin(t * 0.5) * (0.012 + energy * 0.02);
+      const neckX = Math.sin(t * 0.7) * (0.006 + energy * 0.01);
       _e.set(neckX, neckY, 0);
       neckBoneRef.current.quaternion.multiply(_q.setFromEuler(_e));
     }
     if (headBoneRef.current) {
-      const headZ = Math.sin(t * 0.9) * (0.018 + energy * 0.03);
-      const headX = Math.sin(t * 1.4) * (0.008 + energy * 0.015);
-      const headY = Math.sin(t * 0.5) * (0.01 + energy * 0.008);
+      const headZ = Math.sin(t * 0.6) * (0.010 + energy * 0.018);
+      const headX = Math.sin(t * 1.0) * (0.005 + energy * 0.008);
+      const headY = Math.sin(t * 0.35) * (0.006 + energy * 0.005);
       _e.set(headX, headY, headZ);
       headBoneRef.current.quaternion.multiply(_q.setFromEuler(_e));
     }
