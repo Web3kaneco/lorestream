@@ -45,23 +45,21 @@ export default function SparkPage() {
   }, [setMode]);
 
   // Wrap TUTOR_CONFIG with tool callbacks
+  // New chalkboard calls REPLACE the old one (board clears for next problem)
   const handleSparkToolCallback = useCallback((toolName: string, args: any) => {
     if (toolName === 'displayChalkboard') {
-      setChalkboardItems(prev => [...prev, args]);
+      setChalkboardItems([args]);          // Replace — always show only the current problem
+      setLearningVisuals([]);              // Clear old visual when new problem starts
     } else if (toolName === 'create_learning_visual') {
-      setLearningVisuals(prev => {
-        const updated = [...prev, args as LearningVisual];
-        // Keep last 10 visuals to avoid memory bloat
-        return updated.length > 10 ? updated.slice(-10) : updated;
-      });
+      setLearningVisuals([args as LearningVisual]); // Replace — show only current visual
     }
   }, []);
 
   const SUBJECT_CONTEXT: Record<Subject, string> = useMemo(() => ({
     general: '',
-    math: '\n\nSUBJECT FOCUS: The student selected MATH. Start with a math-related greeting and jump into a math problem right away. Use the chalkboard and visual aids for counting and equations.',
-    spanish: '\n\nSUBJECT FOCUS: The student selected SPANISH. Greet them in Spanish first, then translate. Start teaching vocabulary immediately with visual flashcards. Speak Spanish as much as possible.',
-    science: '\n\nSUBJECT FOCUS: The student selected SCIENCE. Start with a fun science fact and offer to explore topics like space, animals, weather, or how things work. Use visual aids for diagrams.'
+    math: '\n\nSUBJECT FOCUS: MATH. Say a quick hi, then jump straight into an easy math problem. Call displayChalkboard AND create_learning_visual together. Say "What do you think?" then STOP and WAIT for the child to answer. Do NOT keep talking. When they answer correctly, count it out loud for them (one apple, two apples...), celebrate, then immediately give a new problem.',
+    spanish: '\n\nSUBJECT FOCUS: SPANISH. Greet in Spanish, translate, then start teaching vocabulary with visual flashcards. Say the word, show the image, ask the child to repeat it, then STOP and WAIT for them.',
+    science: '\n\nSUBJECT FOCUS: SCIENCE. Share a fun fact, then ask "Want to know why?" and STOP. Wait for the child. Use visual aids for diagrams.'
   }), []);
 
   const sparkConfig = useMemo(() => ({
