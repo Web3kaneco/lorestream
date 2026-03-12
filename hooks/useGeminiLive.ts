@@ -316,7 +316,7 @@ Keep it playful and make them want more.`;
         console.log(`%c[WS] Connected! Sending setup with voice="${voiceName}"`, 'color: #00ff00; font-weight: bold');
         const setupMessage = {
           setup: {
-            model: "models/gemini-2.5-flash-native-audio-preview-12-2025",
+            model: "models/gemini-2.5-flash-native-audio-preview-09-2025",
             generationConfig: {
               responseModalities: ["AUDIO"],
               speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } }
