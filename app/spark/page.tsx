@@ -33,24 +33,16 @@ export default function SparkPage() {
   const router = useRouter();
   const { setMode } = useTheme();
   const [subject, setSubject] = useState<Subject>('general');
-  const [hasStarted, setHasStarted] = useState(true);
+  const [hasStarted, setHasStarted] = useState(false);
   const [chalkboardItems, setChalkboardItems] = useState<{ problem: string; hint: string; difficulty: 'easy' | 'medium' | 'hard' }[]>([]);
   const [learningVisuals, setLearningVisuals] = useState<LearningVisual[]>([]);
   const [animationState, setAnimationState] = useState<AnimationState>('idle');
   const animTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Set spark theme and auto-start session on mount
+  // Set spark theme on mount
   useEffect(() => {
     setMode('spark');
   }, [setMode]);
-
-  // Auto-start session (no splash screen)
-  useEffect(() => {
-    if (hasStarted && !isConnected) {
-      startSession();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   // Wrap TUTOR_CONFIG with tool callbacks
   const handleSparkToolCallback = useCallback((toolName: string, args: any) => {
@@ -137,20 +129,11 @@ export default function SparkPage() {
           </button>
         </div>
 
-        {/* Hero */}
+        {/* Quick-start hero — single tap to begin (user gesture required for audio) */}
         <div className="relative z-10 text-center max-w-lg px-6">
-          {/* Leo icon — SVG star instead of emoji */}
-          <div className="w-16 h-16 mx-auto mb-4 rounded-2xl flex items-center justify-center" style={{ backgroundColor: 'var(--accent)' }}>
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#000" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-            </svg>
-          </div>
-          <h1 className="text-4xl md:text-5xl font-bold mb-2" style={{ color: 'var(--text-primary)' }}>
+          <h1 className="text-4xl md:text-5xl font-bold mb-3" style={{ color: 'var(--text-primary)' }}>
             Leo&apos;s Learning Lab
           </h1>
-          <p className="text-lg mb-10" style={{ color: 'var(--text-muted)' }}>
-            Your friendly AI tutor is ready to help you learn!
-          </p>
 
           {/* Subject pills */}
           <div className="flex flex-wrap justify-center gap-3 mb-8">

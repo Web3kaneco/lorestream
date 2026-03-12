@@ -527,6 +527,16 @@ Keep it playful and make them want more.`;
       const source = audioCtx.createMediaStreamSource(micStreamRef.current);
 
       try {
+        // Ensure AudioContext is running — browsers block without user gesture.
+        // Retry resume() up to 3 times with short delays (handles auto-start race).
+        for (let attempt = 0; attempt < 3 && audioCtx.state !== 'running'; attempt++) {
+          try { await audioCtx.resume(); } catch (_) {}
+          if (audioCtx.state !== 'running') await new Promise(r => setTimeout(r, 200));
+        }
+        if (audioCtx.state !== 'running') {
+          console.warn(`[AUDIO WORKLET] AudioContext state is '${audioCtx.state}' — mic capture may fail`);
+        }
+
         await audioCtx.audioWorklet.addModule('/audio-processor.js');
         const workletNode = new AudioWorkletNode(audioCtx, 'pcm-processor', {
             channelCount: 1,
