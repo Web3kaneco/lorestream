@@ -328,7 +328,7 @@ export default function SparkPage() {
               modelUrl="/leo.glb"
               volumeRef={volumeRef}
               animationState={animationState}
-              facingRotationY={Math.PI}
+              facingRotationY={Math.PI / 2}
             />
           </div>
           {/* Mobile voice orb fallback */}
