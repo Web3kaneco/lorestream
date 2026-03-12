@@ -940,14 +940,18 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
 
     // =======================================
     // STATIC ARM POSE — arms relaxed at sides
-    // Animation arm tracks are stripped, so we drive arms from the relaxed
-    // pose quaternions. Simple slerp toward the target each frame.
+    // Animation arm tracks are stripped, but parent chain (spine/hip) still
+    // propagates to arms. Force-copy the relaxed quaternions each frame to
+    // completely eliminate any residual flapping from the breathing animation.
     // =======================================
     const relaxedPose = ARM_POSES[0]; // 'relaxed' — arms at sides
-    if (armLRef.current) armLRef.current.quaternion.slerp(relaxedPose.upperL, 0.15);
-    if (armRRef.current) armRRef.current.quaternion.slerp(relaxedPose.upperR, 0.15);
-    if (forearmLRef.current) forearmLRef.current.quaternion.slerp(relaxedPose.foreL, 0.15);
-    if (forearmRRef.current) forearmRRef.current.quaternion.slerp(relaxedPose.foreR, 0.15);
+    if (armLRef.current) armLRef.current.quaternion.copy(relaxedPose.upperL);
+    if (armRRef.current) armRRef.current.quaternion.copy(relaxedPose.upperR);
+    if (forearmLRef.current) forearmLRef.current.quaternion.copy(relaxedPose.foreL);
+    if (forearmRRef.current) forearmRRef.current.quaternion.copy(relaxedPose.foreR);
+    // Lock clavicles too — prevents shoulder lift from breathing propagation
+    if (clavLRef.current) clavLRef.current.quaternion.set(0, 0, 0, 1); // identity
+    if (clavRRef.current) clavRRef.current.quaternion.set(0, 0, 0, 1);
 
     // =======================================
     // HIP SWAY — natural weight shifting (additive on top of mixer)
@@ -1162,14 +1166,14 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
       }
 
       if (vol > 0.02) {
-        // Speaking: subtle lip movement for natural speech animation.
+        // Speaking: lip movement for natural speech animation.
         // Verified in Blender: jawOpen 0.03 = slight lip part,
-        // 0.10 = clearly open, 0.30 = screaming. Cap at 0.09 for speech.
-        const jawBase = Math.pow(jaw, 0.85) * 0.08;
-        const jawFlutter = Math.sin(t * 6.2) * 0.004 + Math.sin(t * 9.4) * 0.003
-          + Math.sin(t * 14.1) * 0.001; // high-freq for consonant feel
-        const jawTarget = Math.min(0.09, jawBase + jawFlutter);
-        const wideTarget = Math.min(0.02, Math.pow(width, 0.8) * 0.016);
+        // 0.10 = clearly open, 0.30 = screaming. Cap at 0.15 for speech.
+        const jawBase = Math.pow(jaw, 0.85) * 0.14;
+        const jawFlutter = Math.sin(t * 6.2) * 0.006 + Math.sin(t * 9.4) * 0.004
+          + Math.sin(t * 14.1) * 0.002; // high-freq for consonant feel
+        const jawTarget = Math.min(0.15, jawBase + jawFlutter);
+        const wideTarget = Math.min(0.03, Math.pow(width, 0.8) * 0.025);
         infl[jawIdx] = THREE.MathUtils.lerp(infl[jawIdx], Math.max(0, jawTarget), 0.30);
         infl[wideIdx] = THREE.MathUtils.lerp(infl[wideIdx], Math.max(0, wideTarget), 0.25);
       } else {
@@ -1182,7 +1186,7 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
 
   return (
     <group ref={groupRef} position={[0, -1, 0]}>
-      <primitive object={clone} dispose={null} rotation={[0, -Math.PI / 2, 0]} />
+      <primitive object={clone} dispose={null} />
     </group>
   );
 }
