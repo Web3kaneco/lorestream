@@ -250,7 +250,7 @@ export default function SparkPage() {
         {/* Left: 3D Avatar */}
         <div className="md:w-2/5 relative min-h-[250px] md:min-h-0 border-b md:border-b-0 md:border-r" style={{ borderColor: 'var(--border)' }}>
           <div className="absolute inset-0">
-            <Scene modelUrl="/tutor.glb" volumeRef={volumeRef} animationState={animationState} />
+            <Scene modelUrl="/kanecov1.glb" volumeRef={volumeRef} animationState={animationState} />
           </div>
           {/* Mobile voice orb fallback */}
           <div className="md:hidden absolute bottom-4 left-1/2 -translate-x-1/2">
