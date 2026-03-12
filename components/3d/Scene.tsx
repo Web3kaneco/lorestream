@@ -8,18 +8,17 @@ import type { AnimationState } from './Avatar';
 import type { VisemeData } from '@/hooks/useGeminiLive';
 
 
-// 1. Give Scene its own guest list so it can accept the data from page.tsx!
 interface SceneProps {
   modelUrl: string;
   volumeRef: React.MutableRefObject<VisemeData>;
   animationState?: AnimationState;
+  /** Base Y rotation in radians — corrects model facing direction */
+  facingRotationY?: number;
 }
 
-export default function Scene({ modelUrl, volumeRef, animationState }: SceneProps) {
+export default function Scene({ modelUrl, volumeRef, animationState, facingRotationY }: SceneProps) {
   return (
     <Canvas
-    // 🚀 Push the Z position closer (e.g., from 5 down to 2 or 3)
-    // 🚀 Raise the Y position to frame his torso/head (e.g., 1 or 1.5)
     camera={{ position: [0, 1.2, 2.5], fov: 45 }}
     className="w-full h-full"
   >
@@ -30,7 +29,7 @@ export default function Scene({ modelUrl, volumeRef, animationState }: SceneProp
              because drei's useAnimations reuses the same AnimationMixer via useState.
              On model switch, the mixer's PropertyBinding cache (keyed by rootUuid+trackName)
              retains stale bindings pointing to the OLD clone's bones. Fresh mount = fresh mixer. */}
-         <Avatar key={modelUrl} modelUrl={modelUrl} volumeRef={volumeRef} animationState={animationState} />
+         <Avatar key={modelUrl} modelUrl={modelUrl} volumeRef={volumeRef} animationState={animationState} facingRotationY={facingRotationY} />
       </Suspense>
       <OrbitControls enableZoom={false} enablePan={false} maxPolarAngle={Math.PI / 2 + 0.1} minPolarAngle={Math.PI / 3} />
     </Canvas>

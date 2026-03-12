@@ -256,6 +256,46 @@ export function useToolHandlers({
       }
     }
 
+    // --- Record learner progress (Spark tutor mode) ---
+    else if (functionCall.name === "record_progress") {
+      const { subject, correct, topic } = functionCall.args;
+      console.log(`[TUTOR TOOL] Progress: ${subject} ${correct ? 'correct' : 'incorrect'} (${topic})`);
+
+      safeSend({
+        toolResponse: {
+          functionResponses: [{
+            id: functionCall.id,
+            name: "record_progress",
+            response: { result: "Success", action: "Progress recorded." }
+          }]
+        }
+      });
+
+      if (onToolCallback) {
+        onToolCallback('record_progress', { subject, correct, topic });
+      }
+    }
+
+    // --- Save learner name (Spark tutor mode) ---
+    else if (functionCall.name === "save_learner_name") {
+      const { name } = functionCall.args;
+      console.log(`[TUTOR TOOL] Saving learner name: ${name}`);
+
+      safeSend({
+        toolResponse: {
+          functionResponses: [{
+            id: functionCall.id,
+            name: "save_learner_name",
+            response: { result: "Success", action: `Student name "${name}" saved. Use their name throughout the conversation.` }
+          }]
+        }
+      });
+
+      if (onToolCallback) {
+        onToolCallback('save_learner_name', { name });
+      }
+    }
+
     // --- Save new agent lore (Architect interview) ---
     else if (functionCall.name === "save_new_agent_lore") {
       console.log("[ARCHITECT] Saving character lore:", functionCall.args);

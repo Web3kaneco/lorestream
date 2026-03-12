@@ -109,6 +109,8 @@ interface AvatarProps {
   modelUrl: string;
   volumeRef: React.MutableRefObject<VisemeData>;
   animationState?: AnimationState;
+  /** Base Y rotation in radians — corrects model facing direction. Default: 0 */
+  facingRotationY?: number;
 }
 
 // Animation clip name → state mapping keywords
@@ -332,7 +334,7 @@ function createMouthMorphTargets(mesh: THREE.SkinnedMesh): boolean {
 }
 
 
-export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarProps) {
+export function Avatar({ modelUrl, volumeRef, animationState = 'idle', facingRotationY = 0 }: AvatarProps) {
   const groupRef = useRef<THREE.Group>(null!);
   const { scene, animations } = useGLTF(modelUrl);
 
@@ -783,7 +785,7 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
         groupRef.current.position.y = -1 + breathY;
         groupRef.current.position.x = lateralX;
         groupRef.current.rotation.x = 0;
-        groupRef.current.rotation.y = 0;
+        groupRef.current.rotation.y = facingRotationY;
       } else {
         // No animation clip — move the whole group for life-like sway
         const amp = 2.5;
@@ -795,7 +797,7 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
         groupRef.current.position.y = -1 + breathY;
         groupRef.current.position.x = lateralX;
         groupRef.current.rotation.x = swayX;
-        groupRef.current.rotation.y = lookY;
+        groupRef.current.rotation.y = facingRotationY + lookY;
       }
     }
 
