@@ -384,22 +384,10 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
         bound === total ? 'color: #00ff00; font-weight: bold' : 'color: #ffa500; font-weight: bold');
     }
 
-    // Strip arm tracks from the animation — breathing animation flaps arms unnaturally.
-    // Arms are driven by the static relaxed pose quaternions in the per-frame loop instead.
-    const armBoneNames = ['upperarm', 'forearm', 'clavicle', 'hand'];
-    let armStripped = 0;
-    for (const clip of realClips) {
-      const before = clip.tracks.length;
-      clip.tracks = clip.tracks.filter(track => {
-        const bn = track.name.toLowerCase();
-        return !armBoneNames.some(ab => bn.includes(ab));
-      });
-      armStripped += before - clip.tracks.length;
-    }
-    if (armStripped > 0) {
-      console.log(`%c[AVATAR] Stripped ${armStripped} arm tracks (arms driven by relaxed pose)`,
-        'color: #ff6600; font-weight: bold');
-    }
+    // ARM TRACKS: Kept intact — animation drives arms naturally.
+    // Previous approach stripped arm tracks and applied static quaternions,
+    // but the ARM_POSES quaternions are in Blender space, not GLTF space,
+    // causing T-pose. Let the breathing animation handle arm positioning.
 
     // Strip ALL scale tracks — breathing animation bakes scale on every bone
     // including Head, which causes cheeks to puff/expand unnaturally.
@@ -939,19 +927,12 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     } // end disabled ARM GESTURE SYSTEM
 
     // =======================================
-    // STATIC ARM POSE — arms relaxed at sides
-    // Animation arm tracks are stripped, but parent chain (spine/hip) still
-    // propagates to arms. Force-copy the relaxed quaternions each frame to
-    // completely eliminate any residual flapping from the breathing animation.
+    // ARM POSE — driven by animation
+    // Arms are left to the breathing animation's natural positioning.
+    // The ARM_POSES quaternions are in Blender coordinate space and produce
+    // T-pose in GLTF/Three.js space. Let the animation handle arms until
+    // we compute correct GLTF-space quaternions.
     // =======================================
-    const relaxedPose = ARM_POSES[0]; // 'relaxed' — arms at sides
-    if (armLRef.current) armLRef.current.quaternion.copy(relaxedPose.upperL);
-    if (armRRef.current) armRRef.current.quaternion.copy(relaxedPose.upperR);
-    if (forearmLRef.current) forearmLRef.current.quaternion.copy(relaxedPose.foreL);
-    if (forearmRRef.current) forearmRRef.current.quaternion.copy(relaxedPose.foreR);
-    // Lock clavicles too — prevents shoulder lift from breathing propagation
-    if (clavLRef.current) clavLRef.current.quaternion.set(0, 0, 0, 1); // identity
-    if (clavRRef.current) clavRRef.current.quaternion.set(0, 0, 0, 1);
 
     // =======================================
     // HIP SWAY — natural weight shifting (additive on top of mixer)
