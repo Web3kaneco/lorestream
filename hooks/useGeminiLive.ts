@@ -86,7 +86,7 @@ export function useGeminiLive(agentId: string, userId: string, isAdmin: boolean 
   }, []);
 
   const { handleToolCall } = useToolHandlers({
-    safeSend, userId, agentId, saveToMemory,
+    userId, agentId, saveToMemory,
     setVaultItems, setIsGeneratingVaultItem, setTranscripts,
     onToolCallback: config?.onToolCallback
   });
@@ -428,14 +428,26 @@ Keep it playful and make them want more.`;
           }
 
           // Handle tool calls — Live API sends these as a SEPARATE message type
-          // Track processed IDs across messages to prevent duplicate execution
+          // CRITICAL: All function responses from a single batch MUST be sent in
+          // ONE toolResponse message. Sending them individually puts Gemini into a
+          // broken state where it stops processing user audio input.
           if (data.toolCall?.functionCalls) {
+            const batchResponses: any[] = [];
             for (const fc of data.toolCall.functionCalls) {
               const callId = fc.id || `${fc.name}_${Date.now()}`;
               if (processedToolIdsRef.current.has(callId)) continue;
               processedToolIdsRef.current.add(callId);
               console.log("[TOOL CALL RECEIVED via toolCall]", fc.name, "id:", fc.id);
-              handleToolCall(fc).catch(err => console.error("[TOOL HANDLER ERROR]", err));
+              try {
+                const response = await handleToolCall(fc);
+                if (response) batchResponses.push(response);
+              } catch (err) {
+                console.error("[TOOL HANDLER ERROR]", err);
+              }
+            }
+            if (batchResponses.length > 0) {
+              safeSend({ toolResponse: { functionResponses: batchResponses } });
+              console.log(`%c[TOOLS] Batched response sent for ${batchResponses.length} function(s): ${batchResponses.map(r => r.name).join(', ')}`, 'color: #00ff00');
             }
           }
 
@@ -449,6 +461,8 @@ Keep it playful and make them want more.`;
           }
 
           if (data.serverContent?.modelTurn) {
+            const inlineToolCalls: any[] = [];
+
             for (const part of data.serverContent.modelTurn.parts) {
               // 1. Text transcripts + memory buffering
               if (part.text) {
@@ -475,21 +489,46 @@ Keep it playful and make them want more.`;
                 playAudioBuffer(part.inlineData.data, audioContextRef.current, analyzerRef.current);
               }
 
-              // 3. Tool calls (delegated) — deduplicate against toolCall.functionCalls above
+              // 3. Collect inline tool calls for batched response
               if (part.functionCall) {
                 const callId = part.functionCall.id || `${part.functionCall.name}_${Date.now()}`;
                 if (!processedToolIdsRef.current.has(callId)) {
                   processedToolIdsRef.current.add(callId);
-                  console.log("[TOOL CALL RECEIVED]", part.functionCall.name, "id:", part.functionCall.id);
-                  handleToolCall(part.functionCall).catch(err => console.error("[TOOL HANDLER ERROR]", err));
+                  console.log("[TOOL CALL RECEIVED via modelTurn]", part.functionCall.name, "id:", part.functionCall.id);
+                  inlineToolCalls.push(part.functionCall);
                 }
+              }
+            }
+
+            // Batch inline tool call responses (same reason as toolCall batching above)
+            if (inlineToolCalls.length > 0) {
+              try {
+                const responses = await Promise.all(
+                  inlineToolCalls.map(fc => handleToolCall(fc).catch(err => {
+                    console.error("[TOOL HANDLER ERROR]", err);
+                    return null;
+                  }))
+                );
+                const validResponses = responses.filter(Boolean);
+                if (validResponses.length > 0) {
+                  safeSend({ toolResponse: { functionResponses: validResponses } });
+                  console.log(`%c[TOOLS] Batched inline response for ${validResponses.length} function(s)`, 'color: #00ff00');
+                }
+              } catch (err) {
+                console.error("[TOOL BATCH ERROR]", err);
               }
             }
           }
 
-          // 4. User speech transcripts + memory buffering
+          // 4. Turn complete signal — model finished speaking, now listening
+          if (data.serverContent?.turnComplete) {
+            console.log('%c[MODEL] Turn complete — now listening for user speech', 'color: #00aaff; font-weight: bold');
+          }
+
+          // 5. User speech transcripts + memory buffering
           if (data.serverContent?.inputTranscript) {
             const userText = data.serverContent.inputTranscript;
+            console.log(`%c[USER SPEECH DETECTED] "${userText}"`, 'color: #ffaa00; font-weight: bold');
             setTranscripts(prev => {
               const updated = [...prev, { speaker: 'USER', text: userText }];
               return updated.length > 500 ? updated.slice(-500) : updated;
@@ -545,11 +584,19 @@ Keep it playful and make them want more.`;
         workletNodeRef.current = workletNode;
 
         let micSendCount = 0;
+        let micBlockedCount = 0;
         workletNode.port.onmessage = (event) => {
-          if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || !socketReadyRef.current) return;
+          if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || !socketReadyRef.current) {
+            micBlockedCount++;
+            if (micBlockedCount === 1 || micBlockedCount % 200 === 0) {
+              console.warn(`[MIC] Blocked — ws=${wsRef.current?.readyState} ready=${socketReadyRef.current} (blocked ${micBlockedCount}x)`);
+            }
+            return;
+          }
           const { pcmData } = event.data;
-          if (micSendCount === 0) console.log('%c[MIC] First audio chunk sent to Gemini', 'color: #00ff00');
           micSendCount++;
+          if (micSendCount === 1) console.log('%c[MIC] First audio chunk sent to Gemini', 'color: #00ff00');
+          else if (micSendCount % 200 === 0) console.log(`[MIC] Chunk #${micSendCount} sent (stream healthy)`);
 
           const bytes = new Uint8Array(pcmData.buffer);
           let binary = '';

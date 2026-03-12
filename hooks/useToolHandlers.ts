@@ -2,8 +2,17 @@ import { useCallback } from 'react';
 import { getAuthHeaders } from '@/lib/getAuthToken';
 import type { MemoryImage } from './useAgentMemory';
 
+/**
+ * A single function response to be sent back to Gemini.
+ * The caller is responsible for batching these into a single toolResponse message.
+ */
+export interface FunctionResponse {
+  id: string;
+  name: string;
+  response: Record<string, any>;
+}
+
 interface ToolHandlerDeps {
-  safeSend: (payload: any) => boolean;
   userId: string;
   agentId: string;
   saveToMemory: (text: string, speaker: 'user' | 'agent', image?: MemoryImage) => void;
@@ -15,8 +24,18 @@ interface ToolHandlerDeps {
 
 const MAX_TRANSCRIPTS = 500;
 
+/**
+ * Tool call handler hook.
+ *
+ * IMPORTANT: handleToolCall returns the FunctionResponse instead of sending it.
+ * The caller MUST batch all responses from the same toolCall message and send
+ * them in a SINGLE toolResponse WebSocket message. The Gemini Live API requires
+ * all function responses from a batch to arrive together — sending them
+ * individually puts the session into a broken state where the model stops
+ * processing user audio.
+ */
 export function useToolHandlers({
-  safeSend, userId, agentId, saveToMemory,
+  userId, agentId, saveToMemory,
   setVaultItems, setIsGeneratingVaultItem, setTranscripts,
   onToolCallback
 }: ToolHandlerDeps) {
@@ -29,7 +48,10 @@ export function useToolHandlers({
     });
   }, [setTranscripts]);
 
-  const handleToolCall = useCallback(async (functionCall: { name: string; args: any; id?: string }) => {
+  const handleToolCall = useCallback(async (functionCall: { name: string; args: any; id?: string }): Promise<FunctionResponse | null> => {
+    // Ensure we always have an ID for the response (Gemini needs it to match)
+    const responseId = functionCall.id || `${functionCall.name}_${Date.now()}`;
+
     // --- Image generation tool (with optional reference images) ---
     if (functionCall.name === "create_vault_artifact") {
       const { prompt, rationale, referenceImageUrls } = functionCall.args;
@@ -37,17 +59,6 @@ export function useToolHandlers({
 
       setIsGeneratingVaultItem(true);
       appendTranscript('SYSTEM', `Generating image: "${prompt}"${referenceImageUrls?.length ? ` (using ${referenceImageUrls.length} reference images)` : ''}`);
-
-      // Send tool response IMMEDIATELY so the model can keep talking
-      safeSend({
-        toolResponse: {
-          functionResponses: [{
-            id: functionCall.id,
-            name: "create_vault_artifact",
-            response: { result: "Success", action: "Image generation started. It will appear in the vault shortly." }
-          }]
-        }
-      });
 
       // Fire-and-forget: generate image in background while agent keeps talking
       getAuthHeaders().then(hdrs => fetch('/api/generate-image', {
@@ -98,6 +109,12 @@ export function useToolHandlers({
           appendTranscript('SYSTEM', `Image generation failed: ${err.message || 'Unknown error'}. Try again.`);
         })
         .finally(() => setIsGeneratingVaultItem(false));
+
+      return {
+        id: responseId,
+        name: "create_vault_artifact",
+        response: { result: "Success", action: "Image generation started. It will appear in the vault shortly." }
+      };
     }
 
     // --- Document artifact tool ---
@@ -105,17 +122,6 @@ export function useToolHandlers({
       const { title, content, language, description } = functionCall.args;
       console.log(`[AGENT TOOL] Creating document: "${title}" (${language})`);
       appendTranscript('SYSTEM', `Creating document: "${title}"`);
-
-      // Immediate response so model keeps talking
-      safeSend({
-        toolResponse: {
-          functionResponses: [{
-            id: functionCall.id,
-            name: "createDocumentArtifact",
-            response: { result: "Success", action: "Document created and added to the vault." }
-          }]
-        }
-      });
 
       // Add to vault state
       const docItem = {
@@ -141,6 +147,12 @@ export function useToolHandlers({
       }
 
       saveToMemory(`I created a document titled "${title}" (${language}). ${description || ''}`, 'agent');
+
+      return {
+        id: responseId,
+        name: "createDocumentArtifact",
+        response: { result: "Success", action: "Document created and added to the vault." }
+      };
     }
 
     // --- Chalkboard math tool (Spark mode) ---
@@ -148,21 +160,16 @@ export function useToolHandlers({
       const { problem, hint, difficulty } = functionCall.args;
       console.log(`[TUTOR TOOL] Chalkboard: "${problem}" (${difficulty})`);
 
-      // Immediate response
-      safeSend({
-        toolResponse: {
-          functionResponses: [{
-            id: functionCall.id,
-            name: "displayChalkboard",
-            response: { result: "Success", action: "Math problem displayed on the chalkboard." }
-          }]
-        }
-      });
-
       // Delegate to parent page via callback (Spark page renders ChalkboardCard)
       if (onToolCallback) {
         onToolCallback('displayChalkboard', { problem, hint, difficulty });
       }
+
+      return {
+        id: responseId,
+        name: "displayChalkboard",
+        response: { result: "Success", action: "Math problem displayed on the chalkboard." }
+      };
     }
 
     // --- Learning visual tool (Spark tutor mode) ---
@@ -170,17 +177,6 @@ export function useToolHandlers({
       const { prompt, subject, concept } = functionCall.args;
       console.log(`[TUTOR TOOL] Learning visual: "${concept}" (${subject})`);
       appendTranscript('SYSTEM', `Creating visual aid: "${concept}"`);
-
-      // Immediate response so Leo keeps talking while image generates
-      safeSend({
-        toolResponse: {
-          functionResponses: [{
-            id: functionCall.id,
-            name: "create_learning_visual",
-            response: { result: "Success", action: "Learning visual is being generated. Continue teaching while it appears." }
-          }]
-        }
-      });
 
       // Fire-and-forget: generate educational image in background
       getAuthHeaders().then(hdrs => fetch('/api/generate-image', {
@@ -210,6 +206,12 @@ export function useToolHandlers({
           console.error("Learning visual generation failed:", err);
           appendTranscript('SYSTEM', 'Visual aid generation failed. Continuing lesson.');
         });
+
+      return {
+        id: responseId,
+        name: "create_learning_visual",
+        response: { result: "Success", action: "Learning visual is being generated. Continue teaching while it appears." }
+      };
     }
 
     // --- Memory search tool ---
@@ -233,26 +235,22 @@ export function useToolHandlers({
           ? result.memories.join('\n- ')
           : "No relevant memories found in the database for this query.";
 
-        safeSend({
-          toolResponse: {
-            functionResponses: [{
-              id: functionCall.id,
-              name: "search_memory",
-              response: {
-                result: "Success",
-                action: "Retrieved relevant memories.",
-                memories_found: retrievedMemories
-              }
-            }]
+        return {
+          id: responseId,
+          name: "search_memory",
+          response: {
+            result: "Success",
+            action: "Retrieved relevant memories.",
+            memories_found: retrievedMemories
           }
-        });
+        };
       } catch (err) {
         console.error("Memory Search Failed:", err);
-        safeSend({
-          toolResponse: {
-            functionResponses: [{ id: functionCall.id, name: "search_memory", response: { error: "Failed to access Pinecone memory vault." } }]
-          }
-        });
+        return {
+          id: responseId,
+          name: "search_memory",
+          response: { error: "Failed to access Pinecone memory vault." }
+        };
       }
     }
 
@@ -261,19 +259,15 @@ export function useToolHandlers({
       const { subject, correct, topic } = functionCall.args;
       console.log(`[TUTOR TOOL] Progress: ${subject} ${correct ? 'correct' : 'incorrect'} (${topic})`);
 
-      safeSend({
-        toolResponse: {
-          functionResponses: [{
-            id: functionCall.id,
-            name: "record_progress",
-            response: { result: "Success", action: "Progress recorded." }
-          }]
-        }
-      });
-
       if (onToolCallback) {
         onToolCallback('record_progress', { subject, correct, topic });
       }
+
+      return {
+        id: responseId,
+        name: "record_progress",
+        response: { result: "Success", action: "Progress recorded." }
+      };
     }
 
     // --- Save learner name (Spark tutor mode) ---
@@ -281,19 +275,15 @@ export function useToolHandlers({
       const { name } = functionCall.args;
       console.log(`[TUTOR TOOL] Saving learner name: ${name}`);
 
-      safeSend({
-        toolResponse: {
-          functionResponses: [{
-            id: functionCall.id,
-            name: "save_learner_name",
-            response: { result: "Success", action: `Student name "${name}" saved. Use their name throughout the conversation.` }
-          }]
-        }
-      });
-
       if (onToolCallback) {
         onToolCallback('save_learner_name', { name });
       }
+
+      return {
+        id: responseId,
+        name: "save_learner_name",
+        response: { result: "Success", action: `Student name "${name}" saved. Use their name throughout the conversation.` }
+      };
     }
 
     // --- Save new agent lore (Architect interview) ---
@@ -306,21 +296,24 @@ export function useToolHandlers({
         onToolCallback('save_new_agent_lore', functionCall.args);
       }
 
-      // Send success response back to Gemini
-      safeSend({
-        toolResponse: {
-          functionResponses: [{
-            id: functionCall.id,
-            name: "save_new_agent_lore",
-            response: {
-              result: "Success",
-              action: "Character lore has been saved. Tell the user their character's essence has been captured and ask them to upload an image of their character."
-            }
-          }]
+      return {
+        id: responseId,
+        name: "save_new_agent_lore",
+        response: {
+          result: "Success",
+          action: "Character lore has been saved. Tell the user their character's essence has been captured and ask them to upload an image of their character."
         }
-      });
+      };
     }
-  }, [safeSend, userId, agentId, saveToMemory, setVaultItems, setIsGeneratingVaultItem, appendTranscript, onToolCallback]);
+
+    // --- Unknown tool ---
+    console.warn(`[TOOL] Unknown tool call: "${functionCall.name}" — returning generic success`);
+    return {
+      id: responseId,
+      name: functionCall.name,
+      response: { result: "Success", action: "Tool executed." }
+    };
+  }, [userId, agentId, saveToMemory, setVaultItems, setIsGeneratingVaultItem, appendTranscript, onToolCallback]);
 
   return { handleToolCall };
 }
