@@ -7,6 +7,16 @@ import { TUTOR_CONFIG } from '@/lib/agents/tutor';
 import { useTheme } from '@/lib/theme';
 import { VoiceOrb } from '@/components/ui/VoiceOrb';
 import { ChalkboardCard } from '@/components/ui/ChalkboardCard';
+import {
+  loadLearnerProfile,
+  createLearnerProfile,
+  startLearnerSession,
+  recordProblemAttempt,
+  buildLearnerContext,
+  saveLearnerProfile,
+  type LearnerProfile,
+  type SubjectProgress,
+} from '@/lib/learnerProfile';
 import type { AnimationState } from '@/components/3d/Avatar';
 import dynamic from 'next/dynamic';
 
@@ -37,44 +47,103 @@ export default function SparkPage() {
   const [chalkboardItems, setChalkboardItems] = useState<{ problem: string; hint: string; difficulty: 'easy' | 'medium' | 'hard' }[]>([]);
   const [learningVisuals, setLearningVisuals] = useState<LearningVisual[]>([]);
   const [animationState, setAnimationState] = useState<AnimationState>('idle');
+  const [learnerProfile, setLearnerProfile] = useState<LearnerProfile | null>(null);
   const animTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const prevSubjectRef = useRef<Subject>(subject);
+  const sendContextRef = useRef<((text: string, attachments: any[]) => boolean) | null>(null);
 
-  // Set spark theme on mount
+  // Set spark theme on mount + load learner profile
   useEffect(() => {
     setMode('spark');
+    const profile = loadLearnerProfile();
+    if (profile) setLearnerProfile(profile);
   }, [setMode]);
 
-  // Wrap TUTOR_CONFIG with tool callbacks
-  // New chalkboard calls REPLACE the old one (board clears for next problem)
+  // Tool callback handler — chalkboard, visuals, progress tracking, name saving
   const handleSparkToolCallback = useCallback((toolName: string, args: any) => {
     if (toolName === 'displayChalkboard') {
       setChalkboardItems([args]);          // Replace — always show only the current problem
       setLearningVisuals([]);              // Clear old visual when new problem starts
     } else if (toolName === 'create_learning_visual') {
       setLearningVisuals([args as LearningVisual]); // Replace — show only current visual
+    } else if (toolName === 'record_progress') {
+      // Track progress in learner profile
+      const { subject: subj, correct, topic } = args;
+      const validSubject = (['math', 'spanish', 'science', 'general'].includes(subj) ? subj : 'general') as keyof SubjectProgress;
+      const updated = recordProblemAttempt(validSubject, correct, topic);
+      if (updated) setLearnerProfile(updated);
+    } else if (toolName === 'save_learner_name') {
+      // Save the learner's name
+      const { name } = args;
+      let profile = loadLearnerProfile();
+      if (!profile) {
+        profile = createLearnerProfile(name);
+      } else {
+        profile.name = name;
+        saveLearnerProfile(profile);
+      }
+      setLearnerProfile(profile);
+      console.log(`[LEARNER] Name saved: ${name}`);
     }
   }, []);
 
+  // Build subject context
   const SUBJECT_CONTEXT: Record<Subject, string> = useMemo(() => ({
     general: '',
-    math: '\n\nSUBJECT FOCUS: MATH. Say a quick hi, then jump straight into an easy math problem. Call displayChalkboard AND create_learning_visual together. Say "What do you think?" then STOP and WAIT for the child to answer. Do NOT keep talking. When they answer correctly, count it out loud for them (one apple, two apples...), celebrate, then immediately give a new problem.',
-    spanish: '\n\nSUBJECT FOCUS: SPANISH. Greet in Spanish, translate, then start teaching vocabulary with visual flashcards. Say the word, show the image, ask the child to repeat it, then STOP and WAIT for them.',
-    science: '\n\nSUBJECT FOCUS: SCIENCE. Share a fun fact, then ask "Want to know why?" and STOP. Wait for the child. Use visual aids for diagrams.'
+    math: '\n\nSUBJECT FOCUS: MATH. Say a quick hi (use their name if known), then jump straight into an easy math problem. Call displayChalkboard AND create_learning_visual together. Say "What do you think?" then STOP and WAIT for the child to answer. Do NOT keep talking. When they answer correctly, count it out loud for them (one apple, two apples...), call record_progress, celebrate, then immediately give a new problem.',
+    spanish: '\n\nSUBJECT FOCUS: SPANISH. Greet in Spanish, translate, then start teaching vocabulary with visual flashcards. Say the word, show the image, ask the child to repeat it, then STOP and WAIT for them. Call record_progress after each attempt.',
+    science: '\n\nSUBJECT FOCUS: SCIENCE. Share a fun fact, then ask "Want to know why?" and STOP. Wait for the child. Use visual aids for diagrams. Call record_progress after each question.'
   }), []);
+
+  // Build the full system instruction with learner context
+  const learnerContext = useMemo(() => {
+    if (!learnerProfile) return '\n\nNO STUDENT PROFILE — this is a new student. Ask their name first! Say: "Hey there! I\'m Leo, your learning buddy! What\'s your name?" Then wait for their answer and call save_learner_name with their name.';
+    return '\n\n' + buildLearnerContext(learnerProfile);
+  }, [learnerProfile]);
 
   const sparkConfig = useMemo(() => ({
     ...TUTOR_CONFIG,
-    systemInstruction: (TUTOR_CONFIG.systemInstruction || '') + SUBJECT_CONTEXT[subject],
+    systemInstruction: (TUTOR_CONFIG.systemInstruction || '') + learnerContext + SUBJECT_CONTEXT[subject],
     onToolCallback: handleSparkToolCallback
-  }), [handleSparkToolCallback, subject, SUBJECT_CONTEXT]);
+  }), [handleSparkToolCallback, subject, SUBJECT_CONTEXT, learnerContext]);
 
   const {
     isConnected,
     startSession,
     stopSession,
     volumeRef,
-    transcripts
+    transcripts,
+    sendContext
   } = useGeminiLive('tutor_demo', 'anonymous', false, sparkConfig);
+
+  // Keep sendContextRef up to date for subject switching
+  useEffect(() => {
+    sendContextRef.current = sendContext;
+  }, [sendContext]);
+
+  // When subject changes MID-SESSION, send a context message to Gemini
+  useEffect(() => {
+    if (!isConnected || !hasStarted) return;
+    if (prevSubjectRef.current === subject) return;
+
+    const prev = prevSubjectRef.current;
+    prevSubjectRef.current = subject;
+
+    // Send a text message to Gemini about the subject change
+    const name = learnerProfile?.name || 'the student';
+    const subjectName = SUBJECT_LABELS[subject];
+    const message = `[SYSTEM: ${name} wants to switch from ${SUBJECT_LABELS[prev]} to ${subjectName}. Present a NEW ${subjectName.toLowerCase()} problem IMMEDIATELY. Call displayChalkboard with a new problem AND create_learning_visual with a matching image. Do this right now.]`;
+
+    if (sendContextRef.current) {
+      const sent = sendContextRef.current(message, []);
+      if (sent) {
+        console.log(`[SPARK] Subject switched: ${prev} -> ${subject}`);
+        // Clear stale content
+        setChalkboardItems([]);
+        setLearningVisuals([]);
+      }
+    }
+  }, [subject, isConnected, hasStarted, learnerProfile]);
 
   // Poll volumeRef at 4Hz to derive animationState
   useEffect(() => {
@@ -97,6 +166,10 @@ export default function SparkPage() {
 
   const handleStart = () => {
     setHasStarted(true);
+    prevSubjectRef.current = subject;
+    // Record session start
+    const updated = startLearnerSession();
+    if (updated) setLearnerProfile(updated);
     startSession();
   };
 
@@ -127,11 +200,19 @@ export default function SparkPage() {
           </button>
         </div>
 
-        {/* Quick-start hero — single tap to begin (user gesture required for audio) */}
+        {/* Quick-start hero */}
         <div className="relative z-10 text-center max-w-lg px-6">
           <h1 className="text-4xl md:text-5xl font-bold mb-3" style={{ color: 'var(--text-primary)' }}>
             Leo&apos;s Learning Lab
           </h1>
+
+          {/* Welcome back message */}
+          {learnerProfile && (
+            <p className="text-sm mb-4" style={{ color: 'var(--text-secondary)' }}>
+              Welcome back, <strong>{learnerProfile.name}</strong>!
+              {learnerProfile.totalSessions > 0 && ` Session #${learnerProfile.totalSessions + 1}`}
+            </p>
+          )}
 
           {/* Subject pills */}
           <div className="flex flex-wrap justify-center gap-3 mb-8">
@@ -195,7 +276,7 @@ export default function SparkPage() {
         </div>
 
         <div className="flex items-center gap-3">
-          {/* Subject tabs */}
+          {/* Subject tabs — clickable mid-session to switch topics */}
           <div className="hidden md:flex gap-1 p-1 rounded-lg" style={{ backgroundColor: 'var(--bg-secondary)' }}>
             {(Object.keys(SUBJECT_LABELS) as Subject[]).map((s) => (
               <button
@@ -211,6 +292,18 @@ export default function SparkPage() {
               </button>
             ))}
           </div>
+
+          {/* Learner info badge */}
+          {learnerProfile && (
+            <div className="hidden md:flex items-center gap-1.5 px-2 py-1 rounded-md text-xs" style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-muted)' }}>
+              <span>{learnerProfile.name}</span>
+              {learnerProfile.progress[subject as keyof SubjectProgress]?.streak > 0 && (
+                <span style={{ color: 'var(--accent)' }}>
+                  {learnerProfile.progress[subject as keyof SubjectProgress].streak} streak
+                </span>
+              )}
+            </div>
+          )}
 
           <button
             onClick={handleEnd}
@@ -228,10 +321,15 @@ export default function SparkPage() {
 
       {/* Main content */}
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
-        {/* Left: 3D Avatar */}
+        {/* Left: 3D Avatar — facingRotationY corrects model orientation */}
         <div className="md:w-2/5 relative min-h-[250px] md:min-h-0 border-b md:border-b-0 md:border-r" style={{ borderColor: 'var(--border)' }}>
           <div className="absolute inset-0">
-            <Scene modelUrl="/leo.glb" volumeRef={volumeRef} animationState={animationState} />
+            <Scene
+              modelUrl="/leo.glb"
+              volumeRef={volumeRef}
+              animationState={animationState}
+              facingRotationY={Math.PI}
+            />
           </div>
           {/* Mobile voice orb fallback */}
           <div className="md:hidden absolute bottom-4 left-1/2 -translate-x-1/2">
@@ -241,7 +339,7 @@ export default function SparkPage() {
 
         {/* Right: Whiteboard / Content Area */}
         <div className="md:w-3/5 flex flex-col">
-          {/* Chalkboard display — latest math problem */}
+          {/* Chalkboard display — latest problem */}
           {chalkboardItems.length > 0 && (
             <div className="px-6 pt-4">
               <ChalkboardCard {...chalkboardItems[chalkboardItems.length - 1]} />
