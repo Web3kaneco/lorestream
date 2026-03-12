@@ -939,27 +939,27 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle' }: AvatarP
     // Amplified for visible hip movement; multi-frequency for organic feel
     // =======================================
     if (hipRef.current) {
-      const swayY = Math.sin(t * 0.3) * (0.012 + energy * 0.004)
+      const swayY = Math.sin(t * 0.3) * 0.012
                    + Math.sin(t * 0.7) * 0.004; // secondary frequency
-      const tiltX = Math.sin(t * 0.4) * (0.008 + energy * 0.002);
-      const hipTwist = Math.sin(t * 0.2) * (0.006 + energy * 0.002);
+      const tiltX = Math.sin(t * 0.4) * 0.008;
+      const hipTwist = Math.sin(t * 0.2) * 0.006;
       _e.set(tiltX, swayY, hipTwist);
       hipRef.current.quaternion.multiply(_q.setFromEuler(_e));
     }
 
     // =======================================
     // SPINE — counter-rotation to complement hip sway (additive on top of mixer)
-    // Energy multipliers reduced ~70% to prevent arm flapping via skeleton cascade
+    // Energy multipliers removed entirely — speech energy was cascading to arms
     // =======================================
     if (spine01Ref.current) {
       const counterZ = -Math.sin(t * 0.3) * 0.005;
-      const leanX = Math.sin(t * 0.5) * (0.005 + energy * 0.002);
+      const leanX = Math.sin(t * 0.5) * 0.005;
       _e.set(leanX, 0, counterZ);
       spine01Ref.current.quaternion.multiply(_q.setFromEuler(_e));
     }
     if (spine02Ref.current) {
-      const turnY = Math.sin(t * 0.25) * (0.006 + energy * 0.003);
-      const leanZ = Math.sin(t * 0.55) * (0.004 + energy * 0.002);
+      const turnY = Math.sin(t * 0.25) * 0.006;
+      const leanZ = Math.sin(t * 0.55) * 0.004;
       _e.set(0, turnY, leanZ);
       spine02Ref.current.quaternion.multiply(_q.setFromEuler(_e));
     }

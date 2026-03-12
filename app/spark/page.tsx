@@ -33,16 +33,24 @@ export default function SparkPage() {
   const router = useRouter();
   const { setMode } = useTheme();
   const [subject, setSubject] = useState<Subject>('general');
-  const [hasStarted, setHasStarted] = useState(false);
+  const [hasStarted, setHasStarted] = useState(true);
   const [chalkboardItems, setChalkboardItems] = useState<{ problem: string; hint: string; difficulty: 'easy' | 'medium' | 'hard' }[]>([]);
   const [learningVisuals, setLearningVisuals] = useState<LearningVisual[]>([]);
   const [animationState, setAnimationState] = useState<AnimationState>('idle');
   const animTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Set spark theme on mount
+  // Set spark theme and auto-start session on mount
   useEffect(() => {
     setMode('spark');
   }, [setMode]);
+
+  // Auto-start session (no splash screen)
+  useEffect(() => {
+    if (hasStarted && !isConnected) {
+      startSession();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Wrap TUTOR_CONFIG with tool callbacks
   const handleSparkToolCallback = useCallback((toolName: string, args: any) => {
@@ -242,7 +250,7 @@ export default function SparkPage() {
         {/* Left: 3D Avatar */}
         <div className="md:w-2/5 relative min-h-[250px] md:min-h-0 border-b md:border-b-0 md:border-r" style={{ borderColor: 'var(--border)' }}>
           <div className="absolute inset-0">
-            <Scene modelUrl="/WOW.glb" volumeRef={volumeRef} animationState={animationState} />
+            <Scene modelUrl="/tutor.glb" volumeRef={volumeRef} animationState={animationState} />
           </div>
           {/* Mobile voice orb fallback */}
           <div className="md:hidden absolute bottom-4 left-1/2 -translate-x-1/2">
@@ -285,10 +293,10 @@ export default function SparkPage() {
             </div>
           )}
 
-          {/* Whiteboard panel */}
+          {/* Whiteboard panel — voice-only, no transcript */}
           <div className="flex-1 overflow-y-auto p-6">
             <div className="max-w-lg mx-auto space-y-4">
-              {transcripts.length === 0 && chalkboardItems.length === 0 && learningVisuals.length === 0 && (
+              {chalkboardItems.length === 0 && learningVisuals.length === 0 && (
                 <div className="text-center py-12">
                   <div className="w-12 h-12 mx-auto mb-4 rounded-xl flex items-center justify-center" style={{ backgroundColor: 'var(--bg-panel)', border: '1px solid var(--border)' }}>
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ color: 'var(--accent)' }}>
@@ -304,40 +312,6 @@ export default function SparkPage() {
                   </p>
                 </div>
               )}
-
-              {transcripts.map((msg, idx) => (
-                <div
-                  key={idx}
-                  className={`flex ${msg.speaker === 'USER' ? 'justify-end' : 'justify-start'}`}
-                >
-                  <div
-                    className={`max-w-[80%] px-4 py-3 rounded-2xl text-sm ${
-                      msg.speaker === 'USER'
-                        ? 'rounded-br-sm'
-                        : msg.speaker === 'SYSTEM'
-                          ? 'text-xs italic'
-                          : 'rounded-bl-sm'
-                    }`}
-                    style={{
-                      backgroundColor: msg.speaker === 'USER'
-                        ? 'var(--accent)'
-                        : msg.speaker === 'SYSTEM'
-                          ? 'transparent'
-                          : 'var(--bg-panel)',
-                      color: msg.speaker === 'USER'
-                        ? '#000'
-                        : msg.speaker === 'SYSTEM'
-                          ? 'var(--text-muted)'
-                          : 'var(--text-primary)',
-                      border: msg.speaker === 'AGENT' ? `1px solid var(--border)` : 'none',
-                      boxShadow: msg.speaker !== 'SYSTEM' ? '0 1px 3px var(--panel-shadow)' : 'none'
-                    }}
-                  >
-                    {msg.speaker === 'AGENT' && <span className="font-bold mr-1" style={{ color: 'var(--accent)' }}>LEO</span>}
-                    {msg.text}
-                  </div>
-                </div>
-              ))}
             </div>
           </div>
 
