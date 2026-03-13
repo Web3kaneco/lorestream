@@ -111,6 +111,8 @@ interface AvatarProps {
   animationState?: AnimationState;
   /** Base Y rotation in radians — corrects model facing direction. Default: 0 */
   facingRotationY?: number;
+  /** Skip procedural hip/spine/neck/head additive motion — for models with full idle animation baked in (e.g. Tripo-generated). Default: false */
+  skipProceduralMotion?: boolean;
 }
 
 // Animation clip name → state mapping keywords
@@ -334,7 +336,7 @@ function createMouthMorphTargets(mesh: THREE.SkinnedMesh): boolean {
 }
 
 
-export function Avatar({ modelUrl, volumeRef, animationState = 'idle', facingRotationY = 0 }: AvatarProps) {
+export function Avatar({ modelUrl, volumeRef, animationState = 'idle', facingRotationY = 0, skipProceduralMotion = false }: AvatarProps) {
   const __DEV__ = process.env.NODE_ENV === 'development';
   const groupRef = useRef<THREE.Group>(null!);
   const { scene, animations } = useGLTF(modelUrl);
@@ -392,43 +394,49 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle', facingRot
     // but the ARM_POSES quaternions are in Blender space, not GLTF space,
     // causing T-pose. Let the breathing animation handle arm positioning.
 
-    // Strip ALL scale tracks — breathing animation bakes scale on every bone
-    // including Head, which causes cheeks to puff/expand unnaturally.
-    let scaleStripped = 0;
-    for (const clip of realClips) {
-      const before = clip.tracks.length;
-      clip.tracks = clip.tracks.filter(track => !track.name.endsWith('.scale'));
-      scaleStripped += before - clip.tracks.length;
-    }
-    if (__DEV__ && scaleStripped > 0) {
-      console.log(`%c[AVATAR] Stripped ${scaleStripped} scale tracks (prevents face puffing)`,
-        'color: #ff6600; font-weight: bold');
-    }
+    // Track stripping only for demo models — generated models (Tripo pipeline)
+    // have properly designed idle animation that should be played as-is.
+    if (!skipProceduralMotion) {
+      // Strip ALL scale tracks — breathing animation bakes scale on every bone
+      // including Head, which causes cheeks to puff/expand unnaturally.
+      let scaleStripped = 0;
+      for (const clip of realClips) {
+        const before = clip.tracks.length;
+        clip.tracks = clip.tracks.filter(track => !track.name.endsWith('.scale'));
+        scaleStripped += before - clip.tracks.length;
+      }
+      if (__DEV__ && scaleStripped > 0) {
+        console.log(`%c[AVATAR] Stripped ${scaleStripped} scale tracks (prevents face puffing)`,
+          'color: #ff6600; font-weight: bold');
+      }
 
-    // Strip Head POSITION tracks — breathing animation moves Head bone position
-    // slightly, which shifts the face forward/back creating a "cheek breathing" effect.
-    // Rotation tracks are kept (handled by additive procedural motion).
-    let headPosStripped = 0;
-    for (const clip of realClips) {
-      const before = clip.tracks.length;
-      clip.tracks = clip.tracks.filter(track => {
-        const di = track.name.lastIndexOf('.');
-        const bn = (di >= 0 ? track.name.substring(0, di) : track.name).toLowerCase();
-        const prop = di >= 0 ? track.name.substring(di) : '';
-        return !(bn.includes('head') && prop === '.position');
-      });
-      headPosStripped += before - clip.tracks.length;
-    }
-    if (__DEV__ && headPosStripped > 0) {
-      console.log(`%c[AVATAR] Stripped ${headPosStripped} Head position tracks (prevents cheek breathing)`,
-        'color: #ff6600; font-weight: bold');
+      // Strip Head POSITION tracks — breathing animation moves Head bone position
+      // slightly, which shifts the face forward/back creating a "cheek breathing" effect.
+      // Rotation tracks are kept (handled by additive procedural motion).
+      let headPosStripped = 0;
+      for (const clip of realClips) {
+        const before = clip.tracks.length;
+        clip.tracks = clip.tracks.filter(track => {
+          const di = track.name.lastIndexOf('.');
+          const bn = (di >= 0 ? track.name.substring(0, di) : track.name).toLowerCase();
+          const prop = di >= 0 ? track.name.substring(di) : '';
+          return !(bn.includes('head') && prop === '.position');
+        });
+        headPosStripped += before - clip.tracks.length;
+      }
+      if (__DEV__ && headPosStripped > 0) {
+        console.log(`%c[AVATAR] Stripped ${headPosStripped} Head position tracks (prevents cheek breathing)`,
+          'color: #ff6600; font-weight: bold');
+      }
+    } else if (__DEV__) {
+      console.log('%c[AVATAR] skipProceduralMotion=true — keeping all animation tracks intact', 'color: #00ccff; font-weight: bold');
     }
 
     const skipped = animations.length - realClips.length;
     if (__DEV__ && skipped > 0) console.log(`%c[AVATAR] Skipped ${skipped} static clips (<${MIN_CLIP_DURATION}s)`, 'color: #ff8800');
 
     return { repairedClips: realClips, hasRealAnimation: realClips.length > 0 };
-  }, [clone, animations]);
+  }, [clone, animations, skipProceduralMotion]);
 
   // ============================================================
   // CRITICAL FIX #3: Use drei's useAnimations hook
@@ -841,76 +849,77 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle', facingRot
     // We capture the first-frame quaternions (which are in correct GLTF space
     // from the animation) and override every frame to keep arms static.
     // This runs AFTER mixer.update(), so our values win.
+    // Skipped for generated models — their baked idle animation handles arms properly.
     // =======================================
     const dt = 1 / 60; // approximate frame delta (still used by hip/spine)
-    if (!armFrozenRef.current && armLRef.current) {
-      // Capture whatever the animation set on the first frame — these are
-      // the correct arms-down quaternions in GLTF space.
-      armFreezeL.current.copy(armLRef.current.quaternion);
-      if (armRRef.current) armFreezeR.current.copy(armRRef.current.quaternion);
-      if (forearmLRef.current) foreFreezeL.current.copy(forearmLRef.current.quaternion);
-      if (forearmRRef.current) foreFreezeR.current.copy(forearmRRef.current.quaternion);
-      armFrozenRef.current = true;
-      if (__DEV__) console.log('%c[AVATAR] Captured arm freeze quaternions from animation frame 0', 'color: #00ffaa; font-weight: bold');
-    }
-    if (armFrozenRef.current) {
-      if (armLRef.current) armLRef.current.quaternion.copy(armFreezeL.current);
-      if (armRRef.current) armRRef.current.quaternion.copy(armFreezeR.current);
-      if (forearmLRef.current) forearmLRef.current.quaternion.copy(foreFreezeL.current);
-      if (forearmRRef.current) forearmRRef.current.quaternion.copy(foreFreezeR.current);
-    }
-
-    // =======================================
-    // HIP SWAY — natural weight shifting (additive on top of mixer)
-    // Amplified for visible hip movement; multi-frequency for organic feel
-    // =======================================
-    if (hipRef.current) {
-      const swayY = Math.sin(t * 0.3) * 0.012
-                   + Math.sin(t * 0.7) * 0.004; // secondary frequency
-      const tiltX = Math.sin(t * 0.4) * 0.008;
-      const hipTwist = Math.sin(t * 0.2) * 0.006;
-      _e.set(tiltX, swayY, hipTwist);
-      hipRef.current.quaternion.multiply(_q.setFromEuler(_e));
+    if (!skipProceduralMotion) {
+      if (!armFrozenRef.current && armLRef.current) {
+        // Capture whatever the animation set on the first frame — these are
+        // the correct arms-down quaternions in GLTF space.
+        armFreezeL.current.copy(armLRef.current.quaternion);
+        if (armRRef.current) armFreezeR.current.copy(armRRef.current.quaternion);
+        if (forearmLRef.current) foreFreezeL.current.copy(forearmLRef.current.quaternion);
+        if (forearmRRef.current) foreFreezeR.current.copy(forearmRRef.current.quaternion);
+        armFrozenRef.current = true;
+        if (__DEV__) console.log('%c[AVATAR] Captured arm freeze quaternions from animation frame 0', 'color: #00ffaa; font-weight: bold');
+      }
+      if (armFrozenRef.current) {
+        if (armLRef.current) armLRef.current.quaternion.copy(armFreezeL.current);
+        if (armRRef.current) armRRef.current.quaternion.copy(armFreezeR.current);
+        if (forearmLRef.current) forearmLRef.current.quaternion.copy(foreFreezeL.current);
+        if (forearmRRef.current) forearmRRef.current.quaternion.copy(foreFreezeR.current);
+      }
     }
 
     // =======================================
-    // SPINE — counter-rotation to complement hip sway (additive on top of mixer)
-    // Energy multipliers removed entirely — speech energy was cascading to arms
+    // PROCEDURAL ADDITIVE MOTION — hip sway, spine, neck, head
+    // Skipped for models with full idle animation baked in (Tripo-generated)
+    // to avoid doubling the motion and causing visual distortion.
     // =======================================
-    if (spine01Ref.current) {
-      const counterZ = -Math.sin(t * 0.3) * 0.005;
-      const leanX = Math.sin(t * 0.5) * 0.005;
-      _e.set(leanX, 0, counterZ);
-      spine01Ref.current.quaternion.multiply(_q.setFromEuler(_e));
-    }
-    if (spine02Ref.current) {
-      const turnY = Math.sin(t * 0.25) * 0.006;
-      const leanZ = Math.sin(t * 0.55) * 0.004;
-      _e.set(0, turnY, leanZ);
-      spine02Ref.current.quaternion.multiply(_q.setFromEuler(_e));
+    if (!skipProceduralMotion) {
+      // HIP SWAY — natural weight shifting (additive on top of mixer)
+      if (hipRef.current) {
+        const swayY = Math.sin(t * 0.3) * 0.012
+                     + Math.sin(t * 0.7) * 0.004;
+        const tiltX = Math.sin(t * 0.4) * 0.008;
+        const hipTwist = Math.sin(t * 0.2) * 0.006;
+        _e.set(tiltX, swayY, hipTwist);
+        hipRef.current.quaternion.multiply(_q.setFromEuler(_e));
+      }
+
+      // SPINE — counter-rotation to complement hip sway
+      if (spine01Ref.current) {
+        const counterZ = -Math.sin(t * 0.3) * 0.005;
+        const leanX = Math.sin(t * 0.5) * 0.005;
+        _e.set(leanX, 0, counterZ);
+        spine01Ref.current.quaternion.multiply(_q.setFromEuler(_e));
+      }
+      if (spine02Ref.current) {
+        const turnY = Math.sin(t * 0.25) * 0.006;
+        const leanZ = Math.sin(t * 0.55) * 0.004;
+        _e.set(0, turnY, leanZ);
+        spine02Ref.current.quaternion.multiply(_q.setFromEuler(_e));
+      }
+
+      // HEAD/NECK — subtle, always active, scales with speech
+      if (neckBoneRef.current) {
+        const neckY = Math.sin(t * 0.5) * (0.012 + energy * 0.02);
+        const neckX = Math.sin(t * 0.7) * (0.006 + energy * 0.01);
+        _e.set(neckX, neckY, 0);
+        neckBoneRef.current.quaternion.multiply(_q.setFromEuler(_e));
+      }
+      if (headBoneRef.current) {
+        const headZ = Math.sin(t * 0.6) * (0.010 + energy * 0.018);
+        const headX = Math.sin(t * 1.0) * (0.005 + energy * 0.008);
+        const headY = Math.sin(t * 0.35) * (0.006 + energy * 0.005);
+        _e.set(headX, headY, headZ);
+        headBoneRef.current.quaternion.multiply(_q.setFromEuler(_e));
+      }
     }
 
     // SHOULDERS — disabled. Clavicle rotation cascades to entire arm chain,
     // causing disproportionate visual movement. Arms get their motion from
     // the gesture pose system instead.
-
-    // =======================================
-    // HEAD/NECK — subtle, always active, scales with speech (additive)
-    // Reduced amplitudes for more natural, less constant motion
-    // =======================================
-    if (neckBoneRef.current) {
-      const neckY = Math.sin(t * 0.5) * (0.012 + energy * 0.02);
-      const neckX = Math.sin(t * 0.7) * (0.006 + energy * 0.01);
-      _e.set(neckX, neckY, 0);
-      neckBoneRef.current.quaternion.multiply(_q.setFromEuler(_e));
-    }
-    if (headBoneRef.current) {
-      const headZ = Math.sin(t * 0.6) * (0.010 + energy * 0.018);
-      const headX = Math.sin(t * 1.0) * (0.005 + energy * 0.008);
-      const headY = Math.sin(t * 0.35) * (0.006 + energy * 0.005);
-      _e.set(headX, headY, headZ);
-      headBoneRef.current.quaternion.multiply(_q.setFromEuler(_e));
-    }
 
     // =======================================
     // DIAGNOSTIC LOGGING (dev only, first few frames)
