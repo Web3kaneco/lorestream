@@ -18,7 +18,7 @@ const Scene = dynamic(() => import('@/components/3d/Scene'), { ssr: false });
 type LandingState = 'LANDING' | 'INTERVIEW' | 'REDIRECT';
 
 const DEMO_MODELS = [
-  { url: '/kanecov1.glb', label: 'KANE', voiceName: 'Fenrir', facingRotationY: -Math.PI / 2 },
+  { url: '/leo.glb', label: 'KANE', voiceName: 'Fenrir', facingRotationY: Math.PI / 2 },
   { url: '/WOW.glb', label: 'WOW', voiceName: 'Aoede', facingRotationY: -Math.PI / 2 },
 ] as const;
 
@@ -557,7 +557,7 @@ export default function LandingPage() {
               ))}
             </div>
             <div className="absolute inset-0">
-              <Scene modelUrl={DEMO_MODELS[demoModelIdx].url} volumeRef={volumeRef} animationState={animationState} facingRotationY={DEMO_MODELS[demoModelIdx].facingRotationY} />
+              <Scene modelUrl={DEMO_MODELS[demoModelIdx].url} volumeRef={volumeRef} animationState={animationState} facingRotationY={DEMO_MODELS[demoModelIdx].facingRotationY} cameraPosition={[0, 1.3, 1.8]} />
             </div>
             <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(transparent_50%,rgba(0,0,0,0.15)_50%)] bg-[length:100%_4px] opacity-10" />
           </div>
