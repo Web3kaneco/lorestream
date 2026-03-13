@@ -3,7 +3,7 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { httpsCallable } from 'firebase/functions';
-import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, setDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
 import { auth, functions, db } from '@/lib/firebase';
 import { useGeminiLive } from '@/hooks/useGeminiLive';
 import { ARCHITECT_CONFIG } from '@/lib/agents/architect';
@@ -69,6 +69,15 @@ export default function LandingPage() {
   const transcriptEndRef = useRef<HTMLDivElement>(null);
   const pendingVoiceRestartRef = useRef(false);
 
+  // State-tracking refs for Architect context awareness
+  const sendContextRef = useRef<((text: string, attachments: any[]) => boolean) | null>(null);
+  const imageUploadNotifiedRef = useRef(false);
+  const loreSavedNotifiedRef = useRef(false);
+  const extrusionStatusNotifiedRef = useRef<string>('');
+  const extrusionUnsubRef = useRef<(() => void) | null>(null);
+  const imageUploadedRef = useRef(false);     // mirror for callback access
+  const isGenerating3DRef = useRef(false);    // mirror for callback access
+
   // Handle the save_new_agent_lore tool callback from Architect
   const handleArchitectToolCallback = useCallback(async (toolName: string, args: any) => {
     if (toolName === 'save_new_agent_lore') {
@@ -103,6 +112,23 @@ export default function LandingPage() {
           console.error("[ARCHITECT] Failed to save lore to Firestore:", err);
         }
       }
+
+      // Notify Architect that lore has been saved
+      if (!loreSavedNotifiedRef.current && sendContextRef.current) {
+        loreSavedNotifiedRef.current = true;
+        const hasImage = imageUploadedRef.current || isGenerating3DRef.current;
+        if (hasImage) {
+          sendContextRef.current(
+            '[SYSTEM: Lore saved. The character soul has been captured and saved. The image is already uploaded and 3D is being generated. Keep the conversation going naturally until 3D is complete.]',
+            []
+          );
+        } else {
+          sendContextRef.current(
+            '[SYSTEM: Lore saved. The character soul has been captured and saved. BUT the user has NOT uploaded an image yet. Recommend they upload a full-body image using the upload area in the right-hand corner of the screen. Full body works best.]',
+            []
+          );
+        }
+      }
     }
   }, []);
 
@@ -117,7 +143,8 @@ export default function LandingPage() {
     startSession,
     stopSession,
     volumeRef,
-    transcripts
+    transcripts,
+    sendContext
   } = useGeminiLive('architect_demo', auth.currentUser?.uid || 'anonymous', false, architectConfig);
 
   useEffect(() => {
@@ -142,6 +169,51 @@ export default function LandingPage() {
     }
   }, [isConnected, pageState, startSession]);
 
+  // Keep refs in sync for callback access
+  useEffect(() => { sendContextRef.current = sendContext; }, [sendContext]);
+  useEffect(() => { imageUploadedRef.current = imageUploaded; }, [imageUploaded]);
+  useEffect(() => { isGenerating3DRef.current = isGenerating3D; }, [isGenerating3D]);
+
+  // Firestore listener for 3D generation progress — sends status updates to Architect
+  useEffect(() => {
+    const userId = auth.currentUser?.uid;
+    if (!userId || !newAgentId || !isGenerating3D) return;
+
+    if (extrusionUnsubRef.current) extrusionUnsubRef.current();
+
+    const unsub = onSnapshot(
+      doc(db, `users/${userId}/agents/${newAgentId}`),
+      (docSnapshot) => {
+        if (!docSnapshot.exists()) return;
+        const data = docSnapshot.data();
+        const status = data.extrusionStatus as string;
+
+        if (status && status !== extrusionStatusNotifiedRef.current) {
+          extrusionStatusNotifiedRef.current = status;
+
+          const statusMessages: Record<string, string> = {
+            generating: '[SYSTEM: 3D status: generating. The 3D model is being generated from the uploaded image. Keep building the soul.]',
+            rigging: '[SYSTEM: 3D status: rigging. The 3D model is now being rigged with a skeleton for animation. Give the user a quick update.]',
+            animating: '[SYSTEM: 3D status: animating. Animation is being applied to the 3D model. Almost done! Let the user know.]',
+            complete: '[SYSTEM: 3D status: complete. The 3D model is fully generated, rigged, and animated. If lore has already been saved, tell the user they can hit "Enter Workspace" to meet their character — it has been a pleasure building with them. If lore is NOT saved yet, keep the interview going.]',
+            error: `[SYSTEM: 3D status: error. There was a problem generating the 3D model: ${data.extrusionError || 'Unknown error'}. Suggest the user try a different image.]`,
+          };
+
+          const message = statusMessages[status];
+          if (message && sendContextRef.current) {
+            sendContextRef.current(message, []);
+          }
+        }
+      },
+      (err) => {
+        console.error('[FORGE] Firestore extrusion listener error:', err);
+      }
+    );
+
+    extrusionUnsubRef.current = unsub;
+    return () => unsub();
+  }, [newAgentId, isGenerating3D]);
+
   const handleBeginInterview = async () => {
     if (!auth.currentUser) {
       alert("Please log in first to begin your creation.");
@@ -157,6 +229,15 @@ export default function LandingPage() {
     if (!newAgentId) setNewAgentId(agentId);
     setImageUploaded(true);
     setIsGenerating3D(true);
+
+    // Notify Architect about the image upload
+    if (!imageUploadNotifiedRef.current && sendContextRef.current) {
+      imageUploadNotifiedRef.current = true;
+      sendContextRef.current(
+        '[SYSTEM: Image uploaded. The user has uploaded a character image and 3D generation is starting. Acknowledge this warmly and keep building the soul.]',
+        []
+      );
+    }
 
     if (!characterLore) {
       try {
@@ -385,7 +466,7 @@ export default function LandingPage() {
           <StepIndicator currentStep={currentStep} />
 
           <div className="flex items-center gap-3">
-            {isGenerating3D && (
+            {isGenerating3D && characterLore && (
               <button
                 onClick={handleGoToWorkspace}
                 className="px-4 py-1.5 text-xs font-bold rounded bg-[#d4af37] text-black hover:bg-[#c9a030] transition-colors"
@@ -570,7 +651,7 @@ export default function LandingPage() {
             </div>
 
             {/* Go to workspace button */}
-            {isGenerating3D && (
+            {isGenerating3D && characterLore && (
               <button
                 onClick={handleGoToWorkspace}
                 className="w-full px-4 py-2.5 text-black font-bold text-sm rounded-lg transition-all"
