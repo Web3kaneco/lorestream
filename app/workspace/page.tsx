@@ -241,7 +241,7 @@ function WorkspacePage() {
         <>
           {/* Full-screen 3D Avatar */}
           <div className="absolute inset-0 z-0">
-            <Scene modelUrl={modelUrl} volumeRef={volumeRef} animationState={animationState} />
+            <Scene modelUrl={modelUrl} volumeRef={volumeRef} animationState={animationState} facingRotationY={Math.PI / 2} />
             {/* Subtle scanline overlay */}
             <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(transparent_50%,rgba(0,0,0,0.12)_50%)] bg-[length:100%_4px] opacity-10" />
             {/* Bottom fade for toolbar readability */}

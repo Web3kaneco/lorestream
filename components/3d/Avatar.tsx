@@ -325,7 +325,7 @@ function createMouthMorphTargets(mesh: THREE.SkinnedMesh): boolean {
   const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
   mats.forEach(m => { (m as THREE.Material).needsUpdate = true; });
 
-  console.log(
+  if (process.env.NODE_ENV === 'development') console.log(
     `%c[MORPH] Created mouth morphs: headVerts=${headIdxs.length} jawVerts=${jawVerts} wideVerts=${wideVerts} ` +
     `faceAxis=${faceAxis === 0 ? 'X' : 'Z'}${faceSign > 0 ? '+' : '-'} headH=${headH.toFixed(4)}`,
     'color: #ff69b4; font-weight: bold'
@@ -335,6 +335,7 @@ function createMouthMorphTargets(mesh: THREE.SkinnedMesh): boolean {
 
 
 export function Avatar({ modelUrl, volumeRef, animationState = 'idle', facingRotationY = 0 }: AvatarProps) {
+  const __DEV__ = process.env.NODE_ENV === 'development';
   const groupRef = useRef<THREE.Group>(null!);
   const { scene, animations } = useGLTF(modelUrl);
 
@@ -347,7 +348,7 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle', facingRot
   // ============================================================
   const clone = useMemo(() => {
     const c = SkeletonUtils.clone(scene);
-    console.log('%c[AVATAR] Scene cloned via SkeletonUtils', 'color: #d4af37; font-weight: bold');
+    if (__DEV__) console.log('%c[AVATAR] Scene cloned via SkeletonUtils', 'color: #d4af37; font-weight: bold');
     return c;
   }, [scene]);
 
@@ -369,7 +370,7 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle', facingRot
 
     if (realClips.length > 0) {
       const count = repairTrackNames(realClips, boneNames);
-      if (count > 0) console.log(`%c[AVATAR] Repaired ${count} track names`, 'color: #ffa500');
+      if (__DEV__ && count > 0) console.log(`%c[AVATAR] Repaired ${count} track names`, 'color: #ffa500');
 
       // Binding diagnostic
       let bound = 0, total = 0;
@@ -380,9 +381,9 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle', facingRot
           const bn = di >= 0 ? track.name.substring(0, di) : track.name;
           if (clone.getObjectByName(bn)) bound++;
         }
-        console.log(`  Clip "${clip.name}" dur=${clip.duration.toFixed(2)}s tracks=${clip.tracks.length}`);
+        if (__DEV__) console.log(`  Clip "${clip.name}" dur=${clip.duration.toFixed(2)}s tracks=${clip.tracks.length}`);
       }
-      console.log(`%c[AVATAR] Track binding: ${bound}/${total} (${total > 0 ? (bound / total * 100).toFixed(0) : 0}%)`,
+      if (__DEV__) console.log(`%c[AVATAR] Track binding: ${bound}/${total} (${total > 0 ? (bound / total * 100).toFixed(0) : 0}%)`,
         bound === total ? 'color: #00ff00; font-weight: bold' : 'color: #ffa500; font-weight: bold');
     }
 
@@ -399,7 +400,7 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle', facingRot
       clip.tracks = clip.tracks.filter(track => !track.name.endsWith('.scale'));
       scaleStripped += before - clip.tracks.length;
     }
-    if (scaleStripped > 0) {
+    if (__DEV__ && scaleStripped > 0) {
       console.log(`%c[AVATAR] Stripped ${scaleStripped} scale tracks (prevents face puffing)`,
         'color: #ff6600; font-weight: bold');
     }
@@ -418,13 +419,13 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle', facingRot
       });
       headPosStripped += before - clip.tracks.length;
     }
-    if (headPosStripped > 0) {
+    if (__DEV__ && headPosStripped > 0) {
       console.log(`%c[AVATAR] Stripped ${headPosStripped} Head position tracks (prevents cheek breathing)`,
         'color: #ff6600; font-weight: bold');
     }
 
     const skipped = animations.length - realClips.length;
-    if (skipped > 0) console.log(`%c[AVATAR] Skipped ${skipped} static clips (<${MIN_CLIP_DURATION}s)`, 'color: #ff8800');
+    if (__DEV__ && skipped > 0) console.log(`%c[AVATAR] Skipped ${skipped} static clips (<${MIN_CLIP_DURATION}s)`, 'color: #ff8800');
 
     return { repairedClips: realClips, hasRealAnimation: realClips.length > 0 };
   }, [clone, animations]);
@@ -628,7 +629,7 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle', facingRot
         // Disable frustum culling — animated models can have wrong bounding boxes
         // causing them to disappear when the camera moves
         sm.frustumCulled = false;
-        console.log(`  SkinnedMesh: "${sm.name}" bones=${sm.skeleton?.bones.length ?? 0} bindMode=${sm.bindMode}`);
+        if (__DEV__) console.log(`  SkinnedMesh: "${sm.name}" bones=${sm.skeleton?.bones.length ?? 0} bindMode=${sm.bindMode}`);
       }
     });
 
@@ -638,12 +639,14 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle', facingRot
     const hasBlender = allBoneNames.some(n => n.includes('.'));
     const convention = hasMixamo ? 'Mixamo' : hasTripo ? 'Tripo' : hasBlender ? 'Blender' : 'Unknown';
 
-    console.log(`%c[AVATAR] ${allBoneNames.length} bones (${convention} skeleton), ${skinnedCount} SkinnedMesh(es)`, 'color: #d4af37; font-weight: bold');
-    console.log(`  Head=${headBoneRef.current?.name ?? 'MISS'} Neck=${neckBoneRef.current?.name ?? 'MISS'} Jaw=${jawBoneRef.current?.name ?? 'MISS'}`);
-    console.log(`  Arms: L=${armLRef.current?.name ?? 'MISS'} R=${armRRef.current?.name ?? 'MISS'} ForeL=${forearmLRef.current?.name ?? 'MISS'} ForeR=${forearmRRef.current?.name ?? 'MISS'}`);
-    console.log(`  Spine: hip=${hipRef.current?.name ?? 'MISS'} s1=${spine01Ref.current?.name ?? 'MISS'} s2=${spine02Ref.current?.name ?? 'MISS'} clavL=${clavLRef.current?.name ?? 'MISS'} clavR=${clavRRef.current?.name ?? 'MISS'}`);
-    console.log(`  MouthRig=${hasFullMouthRigRef.current ? 'FULL' : 'NONE (morph target fallback)'}`);
-    console.log(`  All bones: ${allBoneNames.join(', ')}`);
+    if (__DEV__) {
+      console.log(`%c[AVATAR] ${allBoneNames.length} bones (${convention} skeleton), ${skinnedCount} SkinnedMesh(es)`, 'color: #d4af37; font-weight: bold');
+      console.log(`  Head=${headBoneRef.current?.name ?? 'MISS'} Neck=${neckBoneRef.current?.name ?? 'MISS'} Jaw=${jawBoneRef.current?.name ?? 'MISS'}`);
+      console.log(`  Arms: L=${armLRef.current?.name ?? 'MISS'} R=${armRRef.current?.name ?? 'MISS'} ForeL=${forearmLRef.current?.name ?? 'MISS'} ForeR=${forearmRRef.current?.name ?? 'MISS'}`);
+      console.log(`  Spine: hip=${hipRef.current?.name ?? 'MISS'} s1=${spine01Ref.current?.name ?? 'MISS'} s2=${spine02Ref.current?.name ?? 'MISS'} clavL=${clavLRef.current?.name ?? 'MISS'} clavR=${clavRRef.current?.name ?? 'MISS'}`);
+      console.log(`  MouthRig=${hasFullMouthRigRef.current ? 'FULL' : 'NONE (morph target fallback)'}`);
+      console.log(`  All bones: ${allBoneNames.join(', ')}`);
+    }
 
     // Mouth animation for models WITHOUT facial bones:
     // 1. Check if the GLB has built-in morph targets (jawOpen, mouthWide)
@@ -661,14 +664,14 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle', facingRot
         if (dict && ('jawOpen' in dict) && ('mouthWide' in dict)) {
           morphMeshRef.current = targetMesh;
           hasMorphMouthRef.current = true;
-          console.log('%c[AVATAR] Using built-in GLB morph targets: jawOpen=%d mouthWide=%d',
+          if (__DEV__) console.log('%c[AVATAR] Using built-in GLB morph targets: jawOpen=%d mouthWide=%d',
             'color: #00ff00; font-weight: bold', dict['jawOpen'], dict['mouthWide']);
         } else {
           // Fallback: create programmatic morph targets from vertex analysis
           hasMorphMouthRef.current = createMouthMorphTargets(targetMesh);
           if (hasMorphMouthRef.current) {
             morphMeshRef.current = targetMesh;
-            console.log('%c[AVATAR] Using programmatic morph targets (fallback)', 'color: #ffa500; font-weight: bold');
+            if (__DEV__) console.log('%c[AVATAR] Using programmatic morph targets (fallback)', 'color: #ffa500; font-weight: bold');
           }
         }
 
@@ -681,7 +684,7 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle', facingRot
           mats.forEach(m => {
             (m as THREE.MeshStandardMaterial).side = THREE.DoubleSide;
           });
-          console.log('%c[AVATAR] DoubleSide applied to mesh material', 'color: #ff69b4; font-weight: bold');
+          if (__DEV__) console.log('%c[AVATAR] DoubleSide applied to mesh material', 'color: #ff69b4; font-weight: bold');
         }
       }
     }
@@ -714,7 +717,7 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle', facingRot
       action.play();
       currentActionRef.current = action;
       currentAnimStateRef.current = 'idle';
-      console.log(`%c[AVATAR] Playing: "${idleClip.name}" via drei actions`, 'color: #00ff00; font-weight: bold');
+      if (__DEV__) console.log(`%c[AVATAR] Playing: "${idleClip.name}" via drei actions`, 'color: #00ff00; font-weight: bold');
     }
   }, [actions, names, repairedClips, hasRealAnimation]);
 
@@ -848,7 +851,7 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle', facingRot
       if (forearmLRef.current) foreFreezeL.current.copy(forearmLRef.current.quaternion);
       if (forearmRRef.current) foreFreezeR.current.copy(forearmRRef.current.quaternion);
       armFrozenRef.current = true;
-      console.log('%c[AVATAR] Captured arm freeze quaternions from animation frame 0', 'color: #00ffaa; font-weight: bold');
+      if (__DEV__) console.log('%c[AVATAR] Captured arm freeze quaternions from animation frame 0', 'color: #00ffaa; font-weight: bold');
     }
     if (armFrozenRef.current) {
       if (armLRef.current) armLRef.current.quaternion.copy(armFreezeL.current);
@@ -910,57 +913,11 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle', facingRot
     }
 
     // =======================================
-    // DIAGNOSTIC LOGGING (~every 3 sec)
+    // DIAGNOSTIC LOGGING (dev only, first few frames)
     // =======================================
-    if (diagFrameRef.current % 180 === 1) {
+    if (process.env.NODE_ENV === 'development' && diagFrameRef.current <= 20 && diagFrameRef.current % 10 === 1) {
       const la = armLRef.current;
       const laQ = la ? `z=${la.quaternion.z.toFixed(3)} w=${la.quaternion.w.toFixed(3)}` : 'null';
-
-      // Frame 1: initial skeleton check
-      if (diagFrameRef.current === 1) {
-        clone.traverse(c => {
-          if ((c as THREE.SkinnedMesh).isSkinnedMesh) {
-            const sm = c as THREE.SkinnedMesh;
-            const skel = sm.skeleton;
-            console.log(`%c[AVATAR] f=1 "${sm.name}" boneTexture=${!!skel?.boneTexture} bones=${skel?.bones.length} bindMode=${sm.bindMode} visible=${sm.visible}`,
-              'color: #00ff00; font-weight: bold');
-          }
-        });
-      }
-
-      // Frame ~10+: deep skeleton verification (after renderer has had time to process)
-      if (diagFrameRef.current >= 10 && diagFrameRef.current < 20) {
-        clone.traverse(c => {
-          if ((c as THREE.SkinnedMesh).isSkinnedMesh) {
-            const sm = c as THREE.SkinnedMesh;
-            const skel = sm.skeleton;
-            const bt = skel?.boneTexture;
-            const btInfo = bt ? `${bt.image.width}x${bt.image.height}` : 'NONE';
-
-            // Verify skeleton bones are the SAME objects we're manipulating
-            const headBone = headBoneRef.current;
-            let headInSkeleton = false;
-            if (headBone && skel?.bones) {
-              headInSkeleton = skel.bones.some(b => b === headBone);
-            }
-
-            // Check if boneMatrices are changing
-            const bm = skel?.boneMatrices;
-            const sample = bm ? `[0..3]=${bm[0]?.toFixed(3)},${bm[1]?.toFixed(3)},${bm[2]?.toFixed(3)},${bm[3]?.toFixed(3)}` : 'null';
-
-            console.log(`%c[AVATAR] f=${diagFrameRef.current} DEEP: "${sm.name}" boneTexture=${btInfo} headInSkeleton=${headInSkeleton} boneMatrices=${sample} frustumCulled=${sm.frustumCulled}`,
-              bt ? 'color: #00ff00; font-weight: bold' : 'color: #ff0000; font-weight: bold');
-          }
-        });
-
-        // Mixer action diagnostics — verify actions are actually playing
-        if (hasRealAnimation && currentActionRef.current) {
-          const act = currentActionRef.current;
-          console.log(`%c[AVATAR] f=${diagFrameRef.current} MIXER: action="${act.getClip().name}" isRunning=${act.isRunning()} weight=${act.getEffectiveWeight().toFixed(3)} time=${act.time.toFixed(3)} mixerTime=${mixer.time.toFixed(3)}`,
-            act.isRunning() ? 'color: #00ff00; font-weight: bold' : 'color: #ff0000; font-weight: bold');
-        }
-      }
-
       const mouthInfo = hasMorphMouthRef.current
         ? `morphJaw=${morphMeshRef.current?.morphTargetInfluences?.[0]?.toFixed(3) ?? '?'} morphWide=${morphMeshRef.current?.morphTargetInfluences?.[1]?.toFixed(3) ?? '?'}`
         : (hasFullMouthRigRef.current ? 'boneRig' : 'NONE');
