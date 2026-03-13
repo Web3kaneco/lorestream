@@ -476,7 +476,7 @@ export default function LandingPage() {
               ))}
             </div>
             <div className="absolute inset-0">
-              <Scene modelUrl={DEMO_MODELS[demoModelIdx].url} volumeRef={volumeRef} animationState={animationState} />
+              <Scene modelUrl={DEMO_MODELS[demoModelIdx].url} volumeRef={volumeRef} animationState={animationState} facingRotationY={Math.PI / 2} />
             </div>
             <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(transparent_50%,rgba(0,0,0,0.15)_50%)] bg-[length:100%_4px] opacity-10" />
           </div>
