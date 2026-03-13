@@ -18,8 +18,8 @@ const Scene = dynamic(() => import('@/components/3d/Scene'), { ssr: false });
 type LandingState = 'LANDING' | 'INTERVIEW' | 'REDIRECT';
 
 const DEMO_MODELS = [
-  { url: '/kanecov1.glb', label: 'KANE', voiceName: 'Fenrir' },
-  { url: '/WOW.glb', label: 'WOW', voiceName: 'Aoede' },
+  { url: '/kanecov1.glb', label: 'KANE', voiceName: 'Fenrir', facingRotationY: -Math.PI / 2 },
+  { url: '/WOW.glb', label: 'WOW', voiceName: 'Aoede', facingRotationY: -Math.PI / 2 },
 ] as const;
 
 interface CharacterLore {
@@ -557,7 +557,7 @@ export default function LandingPage() {
               ))}
             </div>
             <div className="absolute inset-0">
-              <Scene modelUrl={DEMO_MODELS[demoModelIdx].url} volumeRef={volumeRef} animationState={animationState} facingRotationY={Math.PI / 2} />
+              <Scene modelUrl={DEMO_MODELS[demoModelIdx].url} volumeRef={volumeRef} animationState={animationState} facingRotationY={DEMO_MODELS[demoModelIdx].facingRotationY} />
             </div>
             <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(transparent_50%,rgba(0,0,0,0.15)_50%)] bg-[length:100%_4px] opacity-10" />
           </div>

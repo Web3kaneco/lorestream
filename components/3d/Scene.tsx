@@ -14,9 +14,11 @@ interface SceneProps {
   animationState?: AnimationState;
   /** Base Y rotation in radians — corrects model facing direction */
   facingRotationY?: number;
+  /** Skip procedural hip/spine/neck/head additive motion — for models with full idle animation baked in */
+  skipProceduralMotion?: boolean;
 }
 
-export default function Scene({ modelUrl, volumeRef, animationState, facingRotationY }: SceneProps) {
+export default function Scene({ modelUrl, volumeRef, animationState, facingRotationY, skipProceduralMotion }: SceneProps) {
   return (
     <Canvas
     camera={{ position: [0, 1.2, 2.5], fov: 45 }}
@@ -29,7 +31,7 @@ export default function Scene({ modelUrl, volumeRef, animationState, facingRotat
              because drei's useAnimations reuses the same AnimationMixer via useState.
              On model switch, the mixer's PropertyBinding cache (keyed by rootUuid+trackName)
              retains stale bindings pointing to the OLD clone's bones. Fresh mount = fresh mixer. */}
-         <Avatar key={modelUrl} modelUrl={modelUrl} volumeRef={volumeRef} animationState={animationState} facingRotationY={facingRotationY} />
+         <Avatar key={modelUrl} modelUrl={modelUrl} volumeRef={volumeRef} animationState={animationState} facingRotationY={facingRotationY} skipProceduralMotion={skipProceduralMotion} />
       </Suspense>
       <OrbitControls enableZoom={false} enablePan={false} maxPolarAngle={Math.PI / 2 + 0.1} minPolarAngle={Math.PI / 3} />
     </Canvas>
