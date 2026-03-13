@@ -16,12 +16,16 @@ interface SceneProps {
   facingRotationY?: number;
   /** Skip procedural hip/spine/neck/head additive motion — for models with full idle animation baked in */
   skipProceduralMotion?: boolean;
+  /** Camera position override — [x, y, z]. Default: [0, 1.2, 2.5] (full body) */
+  cameraPosition?: [number, number, number];
+  /** Camera FOV override — Default: 45 */
+  cameraFov?: number;
 }
 
-export default function Scene({ modelUrl, volumeRef, animationState, facingRotationY, skipProceduralMotion }: SceneProps) {
+export default function Scene({ modelUrl, volumeRef, animationState, facingRotationY, skipProceduralMotion, cameraPosition = [0, 1.2, 2.5], cameraFov = 45 }: SceneProps) {
   return (
     <Canvas
-    camera={{ position: [0, 1.2, 2.5], fov: 45 }}
+    camera={{ position: cameraPosition, fov: cameraFov }}
     className="w-full h-full"
   >
       {/* Local HDR file — avoids CDN fetches that CSP blocks */}
