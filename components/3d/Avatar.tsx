@@ -486,6 +486,14 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle', facingRot
   const FOREARM_REST_L = useMemo(() => new THREE.Quaternion(0.0512, 0.0017, 0.0334, 0.9981), []);
   const FOREARM_REST_R = useMemo(() => new THREE.Quaternion(0.0509, -0.0004, -0.0083, 0.9987), []);
 
+  // Arm freeze: capture first-frame quaternions from animation, then override every frame.
+  // The breathing animation oscillates arms ("flapping"). We lock them at the initial pose.
+  const armFrozenRef = useRef(false);
+  const armFreezeL = useRef(new THREE.Quaternion());
+  const armFreezeR = useRef(new THREE.Quaternion());
+  const foreFreezeL = useRef(new THREE.Quaternion());
+  const foreFreezeR = useRef(new THREE.Quaternion());
+
   // Diagnostic frame counter
   const diagFrameRef = useRef(0);
 
@@ -539,6 +547,7 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle', facingRot
     armRRef.current = null;
     forearmLRef.current = null;
     forearmRRef.current = null;
+    armFrozenRef.current = false;
     spine01Ref.current = null;
     spine02Ref.current = null;
     hipRef.current = null;
@@ -824,117 +833,29 @@ export function Avatar({ modelUrl, volumeRef, animationState = 'idle', facingRot
     const energy = speechEnergyRef.current;
 
     // =======================================
-    // ARM GESTURE SYSTEM — DISABLED
-    // Quaternions were in Blender coordinate space, not glTF Y-up space.
-    // Arms are now driven by the idle_breathing animation clips.
-    // The gesture state machine and arm quaternion application below are
-    // skipped so the animation's natural arm positions come through.
+    // ARM FREEZE — lock arms at initial animation pose
+    // The breathing animation oscillates arm bones up/down ("flapping").
+    // We capture the first-frame quaternions (which are in correct GLTF space
+    // from the animation) and override every frame to keep arms static.
+    // This runs AFTER mixer.update(), so our values win.
     // =======================================
     const dt = 1 / 60; // approximate frame delta (still used by hip/spine)
-    if (false) {
-    // Advance gesture hold timer (DISABLED)
-    gestureHoldTimerRef.current -= dt;
-
-    // When hold expires, maybe pick a new target pose (or just stay still longer)
-    if (gestureHoldTimerRef.current <= 0 && gestureBlendRef.current >= 1) {
-      // 40% chance to just re-hold same pose → more resting / less constant motion
-      if (Math.random() < 0.4) {
-        const current = ARM_POSES[gestureTargetRef.current];
-        gestureHoldTimerRef.current = current.holdMin + Math.random() * (current.holdMax - current.holdMin);
-      } else {
-        const currentPoseName = ARM_POSES[gestureTargetRef.current]?.name;
-        const isSpeaking = energy > 0.15;
-
-        // When leaving gestureR (pointing), always route through relaxed first.
-        // Direct gestureR→hipPose looks jarring — bring arms down first, then go to new pose.
-        if (currentPoseName === 'gestureR') {
-          const relaxedIdx = ARM_POSES.findIndex(p => p.name === 'relaxed');
-          if (relaxedIdx >= 0) {
-            gesturePoseRef.current = gestureTargetRef.current;
-            gestureTargetRef.current = relaxedIdx;
-            gestureBlendRef.current = 0;
-            gestureTransDurRef.current = 1.5 + Math.random() * 1.0; // 1.5–2.5s (faster return)
-          }
-        } else {
-          // Filter available poses based on speech state
-          const available = ARM_POSES
-            .map((p, i) => ({ p, i }))
-            .filter(({ p, i }) => i !== gestureTargetRef.current && (!p.speechOnly || isSpeaking));
-          const pick = available[Math.floor(Math.random() * available.length)];
-          if (pick) {
-            gesturePoseRef.current = gestureTargetRef.current; // current becomes "from"
-            gestureTargetRef.current = pick.i;
-            gestureBlendRef.current = 0; // start transition
-            gestureTransDurRef.current = 2.0 + Math.random() * 1.5; // 2.0–3.5s slow transition
-          }
-        }
-      }
+    if (!armFrozenRef.current && armLRef.current) {
+      // Capture whatever the animation set on the first frame — these are
+      // the correct arms-down quaternions in GLTF space.
+      armFreezeL.current.copy(armLRef.current.quaternion);
+      if (armRRef.current) armFreezeR.current.copy(armRRef.current.quaternion);
+      if (forearmLRef.current) foreFreezeL.current.copy(forearmLRef.current.quaternion);
+      if (forearmRRef.current) foreFreezeR.current.copy(forearmRRef.current.quaternion);
+      armFrozenRef.current = true;
+      console.log('%c[AVATAR] Captured arm freeze quaternions from animation frame 0', 'color: #00ffaa; font-weight: bold');
     }
-
-    // Advance blend (0→1 over transitionDuration seconds)
-    if (gestureBlendRef.current < 1) {
-      gestureBlendRef.current = Math.min(1, gestureBlendRef.current + dt / gestureTransDurRef.current);
-      // When transition completes, set the hold timer
-      if (gestureBlendRef.current >= 1) {
-        const target = ARM_POSES[gestureTargetRef.current];
-        gestureHoldTimerRef.current = target.holdMin + Math.random() * (target.holdMax - target.holdMin);
-      }
+    if (armFrozenRef.current) {
+      if (armLRef.current) armLRef.current.quaternion.copy(armFreezeL.current);
+      if (armRRef.current) armRRef.current.quaternion.copy(armFreezeR.current);
+      if (forearmLRef.current) forearmLRef.current.quaternion.copy(foreFreezeL.current);
+      if (forearmRRef.current) forearmRRef.current.quaternion.copy(foreFreezeR.current);
     }
-
-    // Smooth ease-in-out curve for natural motion
-    const rawBlend = gestureBlendRef.current;
-    const blend = rawBlend < 0.5
-      ? 2 * rawBlend * rawBlend                           // ease in
-      : 1 - Math.pow(-2 * rawBlend + 2, 2) / 2;          // ease out
-
-    const fromPose = ARM_POSES[gesturePoseRef.current];
-    const toPose = ARM_POSES[gestureTargetRef.current];
-
-    // Apply blended arm poses via slerp
-    if (armLRef.current) {
-      _slerpQ.copy(fromPose.upperL).slerp(toPose.upperL, blend);
-      armLRef.current.quaternion.copy(_slerpQ);
-    }
-    if (armRRef.current) {
-      _slerpQ.copy(fromPose.upperR).slerp(toPose.upperR, blend);
-      armRRef.current.quaternion.copy(_slerpQ);
-    }
-    if (forearmLRef.current) {
-      _slerpQ.copy(fromPose.foreL).slerp(toPose.foreL, blend);
-      forearmLRef.current.quaternion.copy(_slerpQ);
-    }
-    if (forearmRRef.current) {
-      _slerpQ.copy(fromPose.foreR).slerp(toPose.foreR, blend);
-      forearmRRef.current.quaternion.copy(_slerpQ);
-    }
-
-    // Clavicle (shoulder) pose: only set when the current/target pose has clavicle data.
-    // Identity quaternion used as fallback for poses without clavicle override.
-    const identityQ = _q.set(0, 0, 0, 1);
-    if (clavLRef.current) {
-      const fromCL = fromPose.clavL ?? identityQ;
-      const toCL = toPose.clavL ?? identityQ;
-      _slerpQ.copy(fromCL).slerp(toCL, blend);
-      clavLRef.current.quaternion.copy(_slerpQ);
-    }
-    if (clavRRef.current) {
-      const fromCR = fromPose.clavR ?? identityQ;
-      const toCR = toPose.clavR ?? identityQ;
-      _slerpQ.copy(fromCR).slerp(toCR, blend);
-      clavRRef.current.quaternion.copy(_slerpQ);
-    }
-
-    // NOTE: Finger curl via bones removed — WOW model has no finger bones.
-    // Fingers are handled by 'relaxedHands' morph target shape key.
-    } // end disabled ARM GESTURE SYSTEM
-
-    // =======================================
-    // ARM POSE — driven by animation
-    // Arms are left to the breathing animation's natural positioning.
-    // The ARM_POSES quaternions are in Blender coordinate space and produce
-    // T-pose in GLTF/Three.js space. Let the animation handle arms until
-    // we compute correct GLTF-space quaternions.
-    // =======================================
 
     // =======================================
     // HIP SWAY — natural weight shifting (additive on top of mixer)
