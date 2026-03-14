@@ -133,7 +133,7 @@ Frontend (Next.js 14 + React Three Fiber)
 | **Database** | Cloud Firestore |
 | **Storage** | Firebase Cloud Storage |
 | **Functions** | Cloud Functions for Firebase (Node.js 20) |
-| **Vector Memory** | Pinecone (text-embedding-005 + multimodal) |
+| **Vector Memory** | Pinecone (Gemini Embedding 2 Preview + multimodal) |
 | **Styling** | Tailwind CSS |
 | **Language** | TypeScript |
 
