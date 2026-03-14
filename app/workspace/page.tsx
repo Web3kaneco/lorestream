@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback, useMemo, Suspense } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { httpsCallable } from 'firebase/functions';
 import { auth, functions } from '@/lib/firebase';
 import { DropZone } from '@/components/ui/DropZone';
@@ -39,6 +39,7 @@ export default function WorkspaceWrapper() {
 
 function WorkspacePage() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const paramAgentId = searchParams.get('agentId');
 
   // If no agentId, skip ingestion and go straight to LIVE with demo model
@@ -276,7 +277,10 @@ function WorkspacePage() {
               VAULT
             </button>
           )}
-          <LoginButton />
+          <LoginButton onLogout={() => {
+            if (isConnected) stopSession();
+            router.push('/');
+          }} />
         </div>
       </div>
 

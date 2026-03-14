@@ -298,7 +298,7 @@ export default function LandingPage() {
         <div className="sticky top-0 z-50 flex items-center justify-between px-6 py-4"
              style={{ backgroundColor: 'rgba(5,5,5,0.8)', backdropFilter: 'blur(12px)' }}>
           <img src="/lxxi-logo.png" alt="LXXI" className="h-6 mix-blend-screen" />
-          <LoginButton />
+          <LoginButton onLogout={() => { setPageState('LANDING'); }} />
         </div>
 
         {/* ── HERO ── */}
@@ -489,7 +489,7 @@ export default function LandingPage() {
                 Enter Workspace &rarr;
               </button>
             )}
-            <LoginButton />
+            <LoginButton onLogout={() => { stopSession(); setPageState('LANDING'); }} />
           </div>
         </div>
 
