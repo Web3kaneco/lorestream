@@ -1,8 +1,9 @@
 'use client';
 
-import { Suspense } from 'react';
+import { Suspense, useMemo } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { Environment, OrbitControls } from '@react-three/drei';
+import * as THREE from 'three';
 import { Avatar } from './Avatar';
 import type { AnimationState } from './Avatar';
 import type { VisemeData } from '@/hooks/useGeminiLive';
@@ -20,9 +21,12 @@ interface SceneProps {
   cameraPosition?: [number, number, number];
   /** Camera FOV override — Default: 45 */
   cameraFov?: number;
+  /** OrbitControls target override — [x, y, z]. Default: [0, 0, 0] */
+  cameraTarget?: [number, number, number];
 }
 
-export default function Scene({ modelUrl, volumeRef, animationState, facingRotationY, skipProceduralMotion, cameraPosition = [0, 1.2, 2.5], cameraFov = 45 }: SceneProps) {
+export default function Scene({ modelUrl, volumeRef, animationState, facingRotationY, skipProceduralMotion, cameraPosition = [0, 1.2, 2.5], cameraFov = 45, cameraTarget }: SceneProps) {
+  const target = useMemo(() => cameraTarget ? new THREE.Vector3(...cameraTarget) : undefined, [cameraTarget]);
   return (
     <Canvas
     camera={{ position: cameraPosition, fov: cameraFov }}
@@ -37,7 +41,7 @@ export default function Scene({ modelUrl, volumeRef, animationState, facingRotat
              retains stale bindings pointing to the OLD clone's bones. Fresh mount = fresh mixer. */}
          <Avatar key={modelUrl} modelUrl={modelUrl} volumeRef={volumeRef} animationState={animationState} facingRotationY={facingRotationY} skipProceduralMotion={skipProceduralMotion} />
       </Suspense>
-      <OrbitControls enableZoom={false} enablePan={false} maxPolarAngle={Math.PI / 2 + 0.1} minPolarAngle={Math.PI / 3} />
+      <OrbitControls enableZoom={false} enablePan={false} maxPolarAngle={Math.PI / 2 + 0.1} minPolarAngle={Math.PI / 3} target={target} />
     </Canvas>
   );
 }

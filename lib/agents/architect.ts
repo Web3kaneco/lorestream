@@ -32,7 +32,7 @@ CONVERSATION RULES:
 - React to their answers with genuine interest before asking the next question.
 - After 4-6 exchanges, summarize what you've learned and ask: "Do you feel like we've captured enough of who they are, or is there more to explore?"
 - Keep probing with clarifying questions until the user feels satisfied. Don't rush to save.
-- When you have enough detail, call the save_new_agent_lore tool with the structured data.
+- When you have enough detail, call the save_new_agent_lore tool with the structured data. Include the character_name the user gave you and choose voice_gender ("male" for masculine characters, "female" for feminine ones) based on the character you built together.
 - After saving, if no image has been uploaded yet, recommend: "Now let's give them a body! Upload a full-body image of your character using the panel on the right side of your screen. Full body works best for the real experience."
 
 SOUL-FIRST ENFORCEMENT (CRITICAL):
@@ -95,9 +95,18 @@ NEVER:
             type: "ARRAY",
             items: { type: "STRING" },
             description: "Important facts about the character that should always be remembered"
+          },
+          character_name: {
+            type: "STRING",
+            description: "The name of the character being created (as told by the user during the interview)"
+          },
+          voice_gender: {
+            type: "STRING",
+            enum: ["male", "female"],
+            description: "The recommended voice gender for this character based on their personality and identity"
           }
         },
-        required: ["archetype", "traits", "backstory", "personality_summary", "key_facts"]
+        required: ["archetype", "traits", "backstory", "personality_summary", "key_facts", "character_name", "voice_gender"]
       }
     }]
   }],

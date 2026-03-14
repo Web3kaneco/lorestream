@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback, Suspense } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { httpsCallable } from 'firebase/functions';
 import { auth, functions } from '@/lib/firebase';
@@ -46,6 +46,7 @@ function WorkspacePage() {
   );
   const [activeAgentId, setActiveAgentId] = useState<string | null>(paramAgentId || 'demo_wow');
   const [modelUrl, setModelUrl] = useState<string>(paramAgentId ? '' : DEMO_MODEL_URL);
+  const [voiceName, setVoiceName] = useState<string>('Aoede');
   const [showLibrary, setShowLibrary] = useState(false);
 
   // Dismissed floating artifacts — visual only, items persist in Firebase
@@ -76,7 +77,8 @@ function WorkspacePage() {
     }
   }, [paramAgentId, activeAgentId]);
 
-  const { isConnected, vaultItems, isGeneratingVaultItem, startSession, stopSession, volumeRef, sendContext, ingestFile, demoLimitReached } = useGeminiLive(activeAgentId || '', effectiveUserId, isAdmin);
+  const geminiConfig = useMemo(() => ({ voiceName }), [voiceName]);
+  const { isConnected, vaultItems, isGeneratingVaultItem, startSession, stopSession, volumeRef, sendContext, ingestFile, demoLimitReached } = useGeminiLive(activeAgentId || '', effectiveUserId, isAdmin, geminiConfig);
 
   // Demo limit reached — stop session after a short delay to let final response play
   useEffect(() => {
@@ -196,14 +198,27 @@ function WorkspacePage() {
   return (
     <main className="relative w-screen h-screen bg-[#050505] overflow-hidden font-mono selection:bg-[#d4af37] selection:text-black">
 
-      {/* Top bar — minimal branding + login */}
+      {/* Top bar — minimal branding + login + vault */}
       <div className="absolute top-0 left-0 right-0 z-50 flex items-center justify-between px-4 py-3">
         <div className="flex items-center gap-3">
           <img src="/lxxi-logo.png" alt="LXXI" className="h-6 mix-blend-screen" />
           <span className="text-white/20 text-xs">WORKSPACE</span>
           <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-[#d4af37] animate-pulse' : 'bg-gray-600'}`} />
         </div>
-        <LoginButton />
+        <div className="flex items-center gap-2">
+          {auth.currentUser && appState === 'LIVE' && (
+            <button
+              onClick={() => {
+                if (isConnected) stopSession();
+                setShowLibrary(true);
+              }}
+              className="px-3 py-1.5 text-[10px] tracking-widest uppercase text-white/30 hover:text-[#d4af37] border border-white/10 hover:border-[#d4af37]/30 rounded-lg transition-all"
+            >
+              VAULT
+            </button>
+          )}
+          <LoginButton />
+        </div>
       </div>
 
       {/* Full-screen overlays for non-LIVE states */}
@@ -212,9 +227,10 @@ function WorkspacePage() {
           {showLibrary ? (
             <AgentLibrary
               userId={auth.currentUser?.uid || ''}
-              onSelectAgent={(selectedAgentId, url) => {
+              onSelectAgent={(selectedAgentId, url, selectedVoice) => {
                 setActiveAgentId(selectedAgentId);
                 setModelUrl(url);
+                setVoiceName(selectedVoice);
                 setAppState('LIVE');
                 setShowLibrary(false);
               }}
@@ -223,15 +239,33 @@ function WorkspacePage() {
         </div>
       )}
 
-      {appState === 'LOADING' && activeAgentId && (
+      {appState === 'LOADING' && activeAgentId && effectiveUserId && (
         <div className="absolute inset-0 z-40">
           <ActiveLoadingScreen
-            userId={auth.currentUser?.uid || ''}
+            userId={effectiveUserId}
             agentId={activeAgentId}
-            onComplete={(url) => {
+            onComplete={(url, fetchedVoice) => {
               setModelUrl(url);
+              setVoiceName(fetchedVoice);
               setAppState('LIVE');
             }}
+          />
+        </div>
+      )}
+
+      {/* Agent Library overlay — accessible from LIVE state via VAULT button */}
+      {appState === 'LIVE' && showLibrary && auth.currentUser && (
+        <div className="absolute inset-0 z-40 bg-black/80 backdrop-blur-sm flex items-center justify-center">
+          <AgentLibrary
+            userId={auth.currentUser.uid}
+            onSelectAgent={(selectedAgentId, url, selectedVoice) => {
+              if (isConnected) stopSession();
+              setActiveAgentId(selectedAgentId);
+              setModelUrl(url);
+              setVoiceName(selectedVoice);
+              setShowLibrary(false);
+            }}
+            onClose={() => setShowLibrary(false)}
           />
         </div>
       )}
