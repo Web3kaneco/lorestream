@@ -12,6 +12,7 @@ interface SharePanelProps {
   onClear: () => void;
   onSendContext: (text: string, attachments: StagedFile[]) => boolean;
   onIngestFile?: (fileBase64: string, fileMimeType: string, fileName: string, description?: string) => Promise<{ success: boolean; count?: number; error?: string }>;
+  onOpenVault?: () => void;
   itemCount: number;
 }
 
@@ -36,6 +37,7 @@ export function SharePanel({
   onClear,
   onSendContext,
   onIngestFile,
+  onOpenVault,
   itemCount,
 }: SharePanelProps) {
   const [textInput, setTextInput] = useState('');
@@ -240,6 +242,27 @@ export function SharePanel({
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6" />
             </svg>
+          </button>
+        )}
+
+        {/* Artifact vault button — grid icon, opens the vault panel */}
+        {onOpenVault && (
+          <button
+            onClick={onOpenVault}
+            className="relative w-8 h-8 flex items-center justify-center rounded-lg text-white/30 hover:text-[#d4af37] transition-colors flex-shrink-0"
+            title="Artifact vault"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <rect x="3" y="3" width="7" height="7" rx="1" />
+              <rect x="14" y="3" width="7" height="7" rx="1" />
+              <rect x="3" y="14" width="7" height="7" rx="1" />
+              <rect x="14" y="14" width="7" height="7" rx="1" />
+            </svg>
+            {itemCount > 0 && (
+              <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-[14px] flex items-center justify-center rounded-full bg-[#d4af37] text-black text-[8px] font-bold px-0.5">
+                {itemCount > 99 ? '99+' : itemCount}
+              </span>
+            )}
           </button>
         )}
 

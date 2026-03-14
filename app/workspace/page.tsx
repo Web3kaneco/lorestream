@@ -18,6 +18,8 @@ import type { StagedFile } from '@/types/lxxi';
 import dynamic from 'next/dynamic';
 import { LoginButton } from '@/components/ui/LoginButton';
 import { AgentLibrary } from '@/components/AgentLibrary';
+import { ArtifactVault } from '@/components/ui/ArtifactVault';
+import type { VaultItem } from '@/types/lxxi';
 
 const Scene = dynamic(() => import('@/components/3d/Scene'), { ssr: false });
 
@@ -50,6 +52,7 @@ function WorkspacePage() {
   const [modelUrl, setModelUrl] = useState<string>(paramAgentId ? '' : DEMO_MODEL_URL);
   const [voiceName, setVoiceName] = useState<string>('Aoede');
   const [showLibrary, setShowLibrary] = useState(false);
+  const [showArtifactVault, setShowArtifactVault] = useState(false);
 
   // Dismissed floating artifacts — persisted in localStorage per agent so they
   // don't reappear on page reload. Keyed by item ID (Firestore doc ID or fallback).
@@ -202,6 +205,32 @@ function WorkspacePage() {
     return true;
   }, [sendContext, addVaultItem]);
 
+  // Reference a vault artifact — sends context to Gemini so the agent knows about it
+  const handleReferenceArtifact = useCallback((item: VaultItem) => {
+    if (!isConnected) {
+      console.warn('[WORKSPACE] Cannot reference artifact — session not active');
+      return;
+    }
+
+    if (item.type === 'image' && 'url' in item) {
+      sendContext(
+        `[SYSTEM: User is referencing a previously created image. URL: ${item.url}. Prompt: "${item.prompt || 'Image'}". Include this URL in referenceImageUrls when the user asks to modify, remix, or build upon this image.]`,
+        []
+      );
+      console.log(`[WORKSPACE] Referenced image artifact: "${item.prompt}"`);
+    } else if (item.type === 'document' && 'title' in item) {
+      const preview = ('content' in item ? item.content || '' : '').substring(0, 500);
+      sendContext(
+        `[SYSTEM: User is referencing a previously created document. Title: "${item.title}". Content preview: ${preview}. The user wants to discuss or iterate on this document.]`,
+        []
+      );
+      console.log(`[WORKSPACE] Referenced document artifact: "${item.title}"`);
+    }
+
+    // Close vault after referencing
+    setShowArtifactVault(false);
+  }, [isConnected, sendContext]);
+
   const handleAwaken = async (data: any) => {
     if (!auth.currentUser) {
       alert("You must be logged in to awaken an Agent.");
@@ -318,7 +347,7 @@ function WorkspacePage() {
               }}
               className="px-3 py-1.5 text-[10px] tracking-widest uppercase text-white/30 hover:text-[#d4af37] border border-white/10 hover:border-[#d4af37]/30 rounded-lg transition-all"
             >
-              VAULT
+              SOULS
             </button>
           )}
           <LoginButton onLogout={() => {
@@ -341,6 +370,7 @@ function WorkspacePage() {
                 setAppState('LIVE');
                 setShowLibrary(false);
               }}
+              onClose={() => setShowLibrary(false)}
             />
           ) : <DropZone onAwaken={handleAwaken} userId={auth.currentUser?.uid} />}
         </div>
@@ -360,9 +390,9 @@ function WorkspacePage() {
         </div>
       )}
 
-      {/* Agent Library overlay — accessible from LIVE state via VAULT button */}
+      {/* Agent Library overlay — accessible from LIVE state via SOULS button */}
       {appState === 'LIVE' && showLibrary && auth.currentUser && (
-        <div className="absolute inset-0 z-40 bg-black/80 backdrop-blur-sm flex items-center justify-center">
+        <div className="absolute inset-0 z-[60] bg-black/80 backdrop-blur-sm flex items-center justify-center overflow-y-auto">
           <AgentLibrary
             userId={auth.currentUser.uid}
             onSelectAgent={(selectedAgentId, url, selectedVoice) => {
@@ -414,6 +444,15 @@ function WorkspacePage() {
           {/* Demo limit banner */}
           {demoLimitReached && <DemoLimitBanner />}
 
+          {/* Artifact Vault — slide-up panel above SharePanel */}
+          {showArtifactVault && (
+            <ArtifactVault
+              items={vaultItems}
+              onReference={handleReferenceArtifact}
+              onClose={() => setShowArtifactVault(false)}
+            />
+          )}
+
           {/* Share Panel — text input + file staging + send */}
           <SharePanel
             isConnected={isConnected}
@@ -423,7 +462,8 @@ function WorkspacePage() {
             onClear={handleClearWorkspace}
             onSendContext={handleSendContext}
             onIngestFile={isAdmin ? ingestFile : undefined}
-            itemCount={visibleItems.length}
+            onOpenVault={() => setShowArtifactVault(prev => !prev)}
+            itemCount={vaultItems.length}
           />
         </>
       )}

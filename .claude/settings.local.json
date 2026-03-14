@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(ls -la /c/lorestream/*.json)",
-      "Bash(git push)"
+      "Bash(git push)",
+      "Bash(npx tsc --noEmit --pretty)"
     ]
   }
 }
