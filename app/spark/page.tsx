@@ -60,11 +60,27 @@ export default function SparkPage() {
     if (profile) setLearnerProfile(profile);
   }, [setMode]);
 
+  // Track when progress was last recorded — used to delay chalkboard transitions
+  const lastProgressTimeRef = useRef(0);
+
   // Tool callback handler — chalkboard, visuals, progress tracking, name saving
   const handleSparkToolCallback = useCallback((toolName: string, args: any) => {
     if (toolName === 'displayChalkboard') {
-      setChalkboardItems([args]);          // Replace — always show only the current problem
-      setLearningVisuals([]);              // Clear old visual when new problem starts
+      const timeSinceProgress = Date.now() - lastProgressTimeRef.current;
+      if (timeSinceProgress < 1000) {
+        // Arrived right after record_progress (same tool batch) — delay the
+        // chalkboard transition so Leo has time to celebrate the correct answer.
+        // Without this delay, the screen would jump to the next problem instantly
+        // while Leo is still saying "Great job!"
+        console.log(`[SPARK] Delaying chalkboard transition (${timeSinceProgress}ms since progress)`);
+        setTimeout(() => {
+          setChalkboardItems([args]);
+          setLearningVisuals([]);
+        }, 4000);
+      } else {
+        setChalkboardItems([args]);
+        setLearningVisuals([]);
+      }
     } else if (toolName === 'create_learning_visual') {
       // Math visuals are handled by the programmatic CountingVisual component
       // (renders exact emoji counts instantly). Only show AI images for non-math.
@@ -72,6 +88,7 @@ export default function SparkPage() {
         setLearningVisuals([args as LearningVisual]);
       }
     } else if (toolName === 'record_progress') {
+      lastProgressTimeRef.current = Date.now();
       // Track progress in learner profile
       const { subject: subj, correct, topic } = args;
       const validSubject = (['math', 'spanish', 'science', 'general'].includes(subj) ? subj : 'general') as keyof SubjectProgress;
@@ -125,6 +142,31 @@ export default function SparkPage() {
   useEffect(() => {
     sendContextRef.current = sendContext;
   }, [sendContext]);
+
+  // Auto-trigger greeting when session connects — reduces initial delay
+  // Without this, Leo waits for the student to speak first, which feels sluggish
+  const hasGreetedRef = useRef(false);
+  useEffect(() => {
+    if (isConnected && hasStarted && !hasGreetedRef.current) {
+      hasGreetedRef.current = true;
+      // Brief delay to let WebSocket stabilize, then send greeting prompt
+      const timer = setTimeout(() => {
+        if (sendContextRef.current) {
+          const name = learnerProfile?.name;
+          const subjectName = SUBJECT_LABELS[subject];
+          const prompt = name
+            ? `[SYSTEM: Session started. ${name} is ready for ${subjectName}. Greet them BY NAME warmly, then immediately present a ${subjectName.toLowerCase()} problem with displayChalkboard.]`
+            : `[SYSTEM: Session started. This is a new student. Ask their name first — say "Hey there! I'm Leo! What's your name?" and WAIT for their answer.]`;
+          sendContextRef.current(prompt, []);
+          console.log('[SPARK] Auto-greeting sent to reduce initial delay');
+        }
+      }, 1500);
+      return () => clearTimeout(timer);
+    }
+    if (!isConnected) {
+      hasGreetedRef.current = false; // Reset for next session
+    }
+  }, [isConnected, hasStarted, learnerProfile, subject]);
 
   // When subject changes MID-SESSION, send a context message to Gemini
   useEffect(() => {
