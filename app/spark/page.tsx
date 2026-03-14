@@ -94,6 +94,16 @@ export default function SparkPage() {
       const validSubject = (['math', 'spanish', 'science', 'general'].includes(subj) ? subj : 'general') as keyof SubjectProgress;
       const updated = recordProblemAttempt(validSubject, correct, topic);
       if (updated) setLearnerProfile(updated);
+
+      // Clear the screen immediately when the student answers correctly.
+      // This prevents the OLD problem from staying visible while Leo celebrates
+      // and transitions to a new problem. The new chalkboard will appear when
+      // displayChalkboard fires for the next question.
+      if (correct) {
+        console.log('[SPARK] Correct answer — clearing screen for celebration');
+        setChalkboardItems([]);
+        setLearningVisuals([]);
+      }
     } else if (toolName === 'save_learner_name') {
       // Save the learner's name
       const { name } = args;
@@ -112,7 +122,7 @@ export default function SparkPage() {
   // Build subject context
   const SUBJECT_CONTEXT: Record<Subject, string> = useMemo(() => ({
     general: '',
-    math: '\n\nSUBJECT FOCUS: MATH. Say a quick hi (use their name if known), then jump straight into an easy math problem. Call displayChalkboard AND create_learning_visual together. Say "What do you think?" then STOP and WAIT for the child to answer. Do NOT keep talking. When they answer correctly, count it out loud for them (one apple, two apples...), call record_progress, celebrate, then immediately give a new problem.',
+    math: '\n\nSUBJECT FOCUS: MATH. Say a quick hi (use their name if known), then jump straight into an easy math problem. Call displayChalkboard AND create_learning_visual together. Say "What do you think?" then STOP and WAIT for the child to answer. Do NOT keep talking. When they answer correctly, count using plain numbers (1, 2, 3...) — NEVER name specific objects like apples or stars. Call record_progress, celebrate, then immediately give a new problem.',
     spanish: '\n\nSUBJECT FOCUS: SPANISH. Greet in Spanish, translate, then start teaching vocabulary with visual flashcards. Say the word, show the image, ask the child to repeat it, then STOP and WAIT for them. Call record_progress after each attempt.',
     science: '\n\nSUBJECT FOCUS: SCIENCE. Share a fun fact, then ask "Want to know why?" and STOP. Wait for the child. Use visual aids for diagrams. Call record_progress after each question.'
   }), []);
