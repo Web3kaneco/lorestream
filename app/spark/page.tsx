@@ -60,27 +60,18 @@ export default function SparkPage() {
     if (profile) setLearnerProfile(profile);
   }, [setMode]);
 
-  // Track when progress was last recorded — used to delay chalkboard transitions
+  // Track when progress was last recorded — used for logging
   const lastProgressTimeRef = useRef(0);
 
   // Tool callback handler — chalkboard, visuals, progress tracking, name saving
   const handleSparkToolCallback = useCallback((toolName: string, args: any) => {
     if (toolName === 'displayChalkboard') {
-      const timeSinceProgress = Date.now() - lastProgressTimeRef.current;
-      if (timeSinceProgress < 1000) {
-        // Arrived right after record_progress (same tool batch) — delay the
-        // chalkboard transition so Leo has time to celebrate the correct answer.
-        // Without this delay, the screen would jump to the next problem instantly
-        // while Leo is still saying "Great job!"
-        console.log(`[SPARK] Delaying chalkboard transition (${timeSinceProgress}ms since progress)`);
-        setTimeout(() => {
-          setChalkboardItems([args]);
-          setLearningVisuals([]);
-        }, 4000);
-      } else {
-        setChalkboardItems([args]);
-        setLearningVisuals([]);
-      }
+      // Always update the board INSTANTLY — no delays. The board must stay
+      // in sync with Leo's audio. Any delay here causes the voice to talk
+      // about a new problem while the old one is still visible.
+      console.log(`[SPARK] Chalkboard updated: "${args.problem}" (${args.difficulty})`);
+      setChalkboardItems([args]);
+      setLearningVisuals([]);
     } else if (toolName === 'create_learning_visual') {
       // Math visuals are handled by the programmatic CountingVisual component
       // (renders exact emoji counts instantly). Only show AI images for non-math.

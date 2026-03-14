@@ -173,7 +173,7 @@ export function useToolHandlers({
       return {
         id: responseId,
         name: "displayChalkboard",
-        response: { result: "Success", action: "Problem displayed on the chalkboard. IMPORTANT: Say ONE short sentence asking the student to try it, then STOP TALKING COMPLETELY. Do NOT present another problem. Do NOT keep explaining. Wait silently for the student's answer." }
+        response: { result: "Success", action: "Problem is now visible on the chalkboard. The board updates INSTANTLY when you call this tool — so ALWAYS call displayChalkboard BEFORE saying anything about the new problem, so voice and screen stay in sync. Say ONE short guiding sentence, then STOP TALKING COMPLETELY. Wait silently for the student's answer." }
       };
     }
 
@@ -292,8 +292,8 @@ export function useToolHandlers({
         id: responseId,
         name: "record_progress",
         response: correct
-          ? { result: "Success", action: "FINAL answer recorded as correct. The problem is still visible on screen — it will stay until you call displayChalkboard with a NEW problem. Celebrate briefly with their name, then present ONE new problem with displayChalkboard. After presenting it, STOP TALKING and wait for their next answer. IMPORTANT: Only call record_progress for FINAL answers, not intermediate guided steps." }
-          : { result: "Success", action: "FINAL answer recorded as incorrect. Encourage them gently with their name. Use the Progressive Hint Ladder — give a guided hint and STOP TALKING. Wait for them to try again. Do NOT give the answer. IMPORTANT: Only call record_progress for FINAL answers, not intermediate guided steps." }
+          ? { result: "Success", action: "FINAL answer correct. Celebrate briefly with their name. Then call displayChalkboard with the NEW problem FIRST — the board updates instantly. Only AFTER calling the tool, say ONE sentence about the new problem, then STOP TALKING. The board MUST match what you're saying — always call the tool before speaking about the new problem." }
+          : { result: "Success", action: "FINAL answer incorrect. Encourage gently with their name. Use the Progressive Hint Ladder — give a guided hint and STOP TALKING. Wait for retry. Do NOT give the answer. Only call record_progress for FINAL answers, not guided steps." }
       };
     }
 
