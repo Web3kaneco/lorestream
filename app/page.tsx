@@ -18,7 +18,7 @@ const Scene = dynamic(() => import('@/components/3d/Scene'), { ssr: false });
 type LandingState = 'LANDING' | 'INTERVIEW' | 'REDIRECT';
 
 const DEMO_MODELS = [
-  { url: '/leo.glb', label: 'KANE', voiceName: 'Fenrir', facingRotationY: Math.PI / 2 },
+  { url: '/leo.glb', label: 'KANE', voiceName: 'Fenrir', facingRotationY: -Math.PI / 2 },
   { url: '/WOW.glb', label: 'WOW', voiceName: 'Aoede', facingRotationY: -Math.PI / 2 },
 ] as const;
 
