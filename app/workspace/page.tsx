@@ -121,11 +121,16 @@ function WorkspacePage() {
   // 3. Add to vault as floating artifact
   // 4. Notify Gemini with the URL so it can use referenceImageUrls
   const handleSendContext = useCallback((text: string, attachments: StagedFile[]) => {
+    console.log(`[WORKSPACE] handleSendContext called: text="${text.substring(0, 50)}", attachments=${attachments.length}, types=${attachments.map(a => a.mimeType).join(',')}`);
     const sent = sendContext(text, attachments);
-    if (!sent) return false;
+    if (!sent) {
+      console.warn('[WORKSPACE] sendContext returned false — session may not be active');
+      return false;
+    }
 
     // Process image attachments in background — don't block the send
     const imageAttachments = attachments.filter(a => a.mimeType.startsWith('image/'));
+    console.log(`[WORKSPACE] Image attachments to process: ${imageAttachments.length}`);
     if (imageAttachments.length > 0) {
       (async () => {
         for (const img of imageAttachments) {
