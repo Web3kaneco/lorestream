@@ -29,7 +29,9 @@ export function ChalkboardCard({ problem, hint, difficulty }: ChalkboardCardProp
           {'★'.repeat(config.stars)}{'☆'.repeat(3 - config.stars)} {config.label}
         </span>
         <span className="text-[10px] text-white/40 uppercase tracking-widest">
-          Math Challenge
+          {/\d+\s*[+\-x×÷*\/]\s*\d+/.test(problem) ? 'Math Challenge' :
+           /spanish|español|gato|perro|casa|hola/i.test(problem) || problem.includes("in English") || problem.includes("in Spanish") ? 'Spanish' :
+           'Challenge'}
         </span>
       </div>
 

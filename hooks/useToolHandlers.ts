@@ -118,7 +118,7 @@ export function useToolHandlers({
       return {
         id: responseId,
         name: "create_vault_artifact",
-        response: { result: "Success", action: "Image generation started. It will appear in the vault shortly." }
+        response: { result: "Success", action: "Image generation started — it takes about 10 seconds to render and appear. IMPORTANT: Do NOT describe the image details yet since it has not appeared. Briefly acknowledge the creation request, then pause. Once the image appears in the vault, you can discuss it with the user." }
       };
     }
 
@@ -173,7 +173,7 @@ export function useToolHandlers({
       return {
         id: responseId,
         name: "displayChalkboard",
-        response: { result: "Success", action: "Math problem displayed on the chalkboard." }
+        response: { result: "Success", action: "Problem displayed on the chalkboard. IMPORTANT: Say ONE short sentence asking the student to try it, then STOP TALKING COMPLETELY. Do NOT present another problem. Do NOT keep explaining. Wait silently for the student's answer." }
       };
     }
 
@@ -233,7 +233,9 @@ export function useToolHandlers({
       return {
         id: responseId,
         name: "create_learning_visual",
-        response: { result: "Success", action: "Learning visual is being generated. Continue teaching while it appears." }
+        response: subject === 'math'
+          ? { result: "Success", action: "Math counting visual is now displayed with exact object counts. Ask the student to count them and give their answer, then STOP TALKING and wait for their response." }
+          : { result: "Success", action: "Image is being generated — it takes about 10 seconds to appear. IMPORTANT: Do NOT describe or reference the image yet since it has NOT loaded. Ask your question about the topic, then STOP and WAIT for the student's answer. The image will appear on its own." }
       };
     }
 
@@ -289,7 +291,9 @@ export function useToolHandlers({
       return {
         id: responseId,
         name: "record_progress",
-        response: { result: "Success", action: "Progress recorded." }
+        response: correct
+          ? { result: "Success", action: "Progress recorded — student answered correctly. Celebrate briefly with their name, then present ONE new problem with displayChalkboard. After presenting it, STOP TALKING and wait for their next answer." }
+          : { result: "Success", action: "Progress recorded — student answered incorrectly. Encourage them gently with their name and give ONE hint. Then STOP TALKING and wait for them to try again. Do NOT give the answer." }
       };
     }
 
