@@ -65,8 +65,22 @@ export function SharePanel({
         thumbnail: file.type.startsWith('image/') ? URL.createObjectURL(file) : '',
       });
     }
+
+    // Voice-first UX: auto-send files immediately when session is active
+    // The user will talk about the file via voice — no need to wait for SEND
+    if (isConnected) {
+      const sent = onSendContext('', newFiles);
+      if (sent) {
+        // Clean up thumbnails — files were sent immediately
+        newFiles.forEach(f => { if (f.thumbnail) URL.revokeObjectURL(f.thumbnail); });
+        console.log(`[SHARE PANEL] Auto-sent ${newFiles.length} file(s) to active session`);
+        return;
+      }
+    }
+
+    // Fallback: stage files for manual send (e.g. session not yet active)
     setStagedFiles(prev => [...prev, ...newFiles]);
-  }, []);
+  }, [isConnected, onSendContext]);
 
   const removeFile = useCallback((id: string) => {
     setStagedFiles(prev => {
