@@ -84,8 +84,8 @@ export const enqueue3DTask = onCall(
            }, { merge: true });
 
           } else if (imageBase64) {
-            // The Fast AI Path: Use Gemini Vision to hallucinate traits
-            const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+            // The Fast AI Path: Use Gemini Vision via Vertex AI (service account auth — no API key needed)
+            const ai = new GoogleGenAI({ vertexai: true, project: process.env.GCLOUD_PROJECT, location: "us-central1" });
             const prompt = `Analyze this character image. Return a strict JSON object with: 1. An array of 3 physical "traits". 2. A 2-word "archetype". 3. A 1-sentence "funFact" about their origin.`;
             
             // --- NEW: Strip the prefix so Gemini doesn't choke! ---
