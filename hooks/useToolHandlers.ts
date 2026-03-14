@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import { getAuthHeaders } from '@/lib/getAuthToken';
 import type { MemoryImage } from './useAgentMemory';
 
@@ -39,6 +39,11 @@ export function useToolHandlers({
   setVaultItems, setIsGeneratingVaultItem, setTranscripts,
   onToolCallback
 }: ToolHandlerDeps) {
+
+  // Generation counter for learning visuals — prevents stale images from overwriting
+  // When a new visual is requested, the counter increments. If an old generation
+  // completes after a newer one started, its callback is silently ignored.
+  const visualGenIdRef = useRef(0);
 
   // Shared helper — appends a transcript entry with bounded history
   const appendTranscript = useCallback((speaker: string, text: string) => {
@@ -178,6 +183,9 @@ export function useToolHandlers({
       console.log(`[TUTOR TOOL] Learning visual: "${concept}" (${subject})`);
       appendTranscript('SYSTEM', `Creating visual aid: "${concept}"`);
 
+      // Increment generation counter — any pending older generation will be ignored
+      const genId = ++visualGenIdRef.current;
+
       // Fire-and-forget: generate educational image in background
       getAuthHeaders().then(hdrs => fetch('/api/generate-image', {
         method: 'POST',
@@ -189,6 +197,11 @@ export function useToolHandlers({
           return res.json();
         })
         .then(async (result) => {
+          // Check if a newer visual generation was started while this one was running
+          if (genId !== visualGenIdRef.current) {
+            console.log(`[TUTOR] Stale visual generation (gen ${genId} vs current ${visualGenIdRef.current}), ignoring`);
+            return;
+          }
           if (result.imageUrl) {
             // Delegate to parent page via callback (Spark page renders the visual)
             if (onToolCallback) {
