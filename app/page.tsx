@@ -65,6 +65,7 @@ export default function LandingPage() {
   const [uploadReady, setUploadReady] = useState(false);
   const [imageUploaded, setImageUploaded] = useState(false);
   const [isGenerating3D, setIsGenerating3D] = useState(false);
+  const [extrusionComplete, setExtrusionComplete] = useState(false);
 
   const [animationState, setAnimationState] = useState<AnimationState>('idle');
   const animTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -193,6 +194,10 @@ export default function LandingPage() {
         if (!docSnapshot.exists()) return;
         const data = docSnapshot.data();
         const status = data.extrusionStatus as string;
+
+        if (status === 'complete') {
+          setExtrusionComplete(true);
+        }
 
         if (status && status !== extrusionStatusNotifiedRef.current) {
           extrusionStatusNotifiedRef.current = status;
@@ -472,10 +477,14 @@ export default function LandingPage() {
           <StepIndicator currentStep={currentStep} />
 
           <div className="flex items-center gap-3">
-            {isGenerating3D && characterLore && (
+            {isGenerating3D && (characterLore || extrusionComplete) && (
               <button
                 onClick={handleGoToWorkspace}
-                className="px-4 py-1.5 text-xs font-bold rounded bg-[#d4af37] text-black hover:bg-[#c9a030] transition-colors"
+                className={`px-4 py-1.5 text-xs font-bold rounded transition-colors ${
+                  extrusionComplete
+                    ? 'bg-[#d4af37] text-black hover:bg-[#c9a030] animate-pulse'
+                    : 'bg-[#d4af37] text-black hover:bg-[#c9a030]'
+                }`}
               >
                 Enter Workspace &rarr;
               </button>
@@ -598,7 +607,13 @@ export default function LandingPage() {
                 </div>
               )}
 
-              {isGenerating3D ? (
+              {isGenerating3D && extrusionComplete ? (
+                <div className="flex flex-col items-center gap-2 py-4">
+                  <div className="text-[#d4af37] text-3xl">&#10003;</div>
+                  <p className="text-[11px] text-[#d4af37] font-mono font-bold">3D Avatar Ready!</p>
+                  <p className="text-[9px] text-white/40">Hit &quot;Enter Workspace&quot; to meet your character</p>
+                </div>
+              ) : isGenerating3D ? (
                 <div className="flex flex-col items-center gap-2 py-4">
                   <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-[#d4af37]" />
                   <p className="text-[11px] text-[#d4af37]/60 font-mono">Synthesizing 3D DNA...</p>
@@ -659,11 +674,11 @@ export default function LandingPage() {
               </div>
             </div>
 
-            {/* Go to workspace button */}
-            {isGenerating3D && characterLore && (
+            {/* Go to workspace button — shows when lore saved OR 3D complete */}
+            {isGenerating3D && (characterLore || extrusionComplete) && (
               <button
                 onClick={handleGoToWorkspace}
-                className="w-full px-4 py-2.5 text-black font-bold text-sm rounded-lg transition-all"
+                className={`w-full px-4 py-2.5 text-black font-bold text-sm rounded-lg transition-all ${extrusionComplete ? 'animate-pulse' : ''}`}
                 style={{ backgroundColor: '#d4af37', boxShadow: '0 0 15px rgba(212,175,55,0.25)' }}
               >
                 Enter Workspace &rarr;
