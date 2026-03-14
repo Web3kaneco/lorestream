@@ -183,42 +183,52 @@ export function useToolHandlers({
       console.log(`[TUTOR TOOL] Learning visual: "${concept}" (${subject})`);
       appendTranscript('SYSTEM', `Creating visual aid: "${concept}"`);
 
-      // Increment generation counter — any pending older generation will be ignored
-      const genId = ++visualGenIdRef.current;
+      if (subject === 'math') {
+        // Math counting visuals are rendered programmatically by CountingVisual
+        // component — no AI image generation needed (exact counts, instant render)
+        console.log(`[TUTOR] Math visual: using programmatic CountingVisual (skipping image API)`);
+        if (onToolCallback) {
+          onToolCallback('create_learning_visual', { prompt, subject, concept, createdAt: Date.now() });
+        }
+      } else {
+        // Non-math subjects (Spanish, Science): generate AI image
+        // Increment generation counter — any pending older generation will be ignored
+        const genId = ++visualGenIdRef.current;
 
-      // Fire-and-forget: generate educational image in background
-      getAuthHeaders().then(hdrs => fetch('/api/generate-image', {
-        method: 'POST',
-        headers: hdrs,
-        body: JSON.stringify({ prompt })
-      }))
-        .then(res => {
-          if (!res.ok) throw new Error(`Image API returned HTTP ${res.status}`);
-          return res.json();
-        })
-        .then(async (result) => {
-          // Check if a newer visual generation was started while this one was running
-          if (genId !== visualGenIdRef.current) {
-            console.log(`[TUTOR] Stale visual generation (gen ${genId} vs current ${visualGenIdRef.current}), ignoring`);
-            return;
-          }
-          if (result.imageUrl) {
-            // Delegate to parent page via callback (Spark page renders the visual)
-            if (onToolCallback) {
-              onToolCallback('create_learning_visual', {
-                url: result.imageUrl,
-                prompt,
-                subject,
-                concept,
-                createdAt: Date.now()
-              });
+        // Fire-and-forget: generate educational image in background
+        getAuthHeaders().then(hdrs => fetch('/api/generate-image', {
+          method: 'POST',
+          headers: hdrs,
+          body: JSON.stringify({ prompt })
+        }))
+          .then(res => {
+            if (!res.ok) throw new Error(`Image API returned HTTP ${res.status}`);
+            return res.json();
+          })
+          .then(async (result) => {
+            // Check if a newer visual generation was started while this one was running
+            if (genId !== visualGenIdRef.current) {
+              console.log(`[TUTOR] Stale visual generation (gen ${genId} vs current ${visualGenIdRef.current}), ignoring`);
+              return;
             }
-          }
-        })
-        .catch(err => {
-          console.error("Learning visual generation failed:", err);
-          appendTranscript('SYSTEM', 'Visual aid generation failed. Continuing lesson.');
-        });
+            if (result.imageUrl) {
+              // Delegate to parent page via callback (Spark page renders the visual)
+              if (onToolCallback) {
+                onToolCallback('create_learning_visual', {
+                  url: result.imageUrl,
+                  prompt,
+                  subject,
+                  concept,
+                  createdAt: Date.now()
+                });
+              }
+            }
+          })
+          .catch(err => {
+            console.error("Learning visual generation failed:", err);
+            appendTranscript('SYSTEM', 'Visual aid generation failed. Continuing lesson.');
+          });
+      }
 
       return {
         id: responseId,

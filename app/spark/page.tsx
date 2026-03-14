@@ -7,6 +7,7 @@ import { TUTOR_CONFIG } from '@/lib/agents/tutor';
 import { useTheme } from '@/lib/theme';
 import { VoiceOrb } from '@/components/ui/VoiceOrb';
 import { ChalkboardCard } from '@/components/ui/ChalkboardCard';
+import { CountingVisual } from '@/components/ui/CountingVisual';
 import {
   loadLearnerProfile,
   createLearnerProfile,
@@ -65,7 +66,11 @@ export default function SparkPage() {
       setChalkboardItems([args]);          // Replace — always show only the current problem
       setLearningVisuals([]);              // Clear old visual when new problem starts
     } else if (toolName === 'create_learning_visual') {
-      setLearningVisuals([args as LearningVisual]); // Replace — show only current visual
+      // Math visuals are handled by the programmatic CountingVisual component
+      // (renders exact emoji counts instantly). Only show AI images for non-math.
+      if (args.subject !== 'math') {
+        setLearningVisuals([args as LearningVisual]);
+      }
     } else if (toolName === 'record_progress') {
       // Track progress in learner profile
       const { subject: subj, correct, topic } = args;
@@ -346,7 +351,14 @@ export default function SparkPage() {
             </div>
           )}
 
-          {/* Learning visual display — latest generated image */}
+          {/* Math counting visual — programmatic, exact counts, renders instantly */}
+          {chalkboardItems.length > 0 && (
+            <div className="px-6 pt-3">
+              <CountingVisual problem={chalkboardItems[chalkboardItems.length - 1].problem} />
+            </div>
+          )}
+
+          {/* Learning visual display — AI-generated image (Spanish, Science only) */}
           {latestVisual && (
             <div className="px-6 pt-4">
               <div className="rounded-2xl overflow-hidden shadow-lg border" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--bg-panel)' }}>
