@@ -28,6 +28,8 @@ interface CharacterLore {
   backstory: string;
   personality_summary: string;
   key_facts: string[];
+  characterName: string;
+  voiceGender: string;
 }
 
 // Manifesto principles — surfaced on the landing page
@@ -86,7 +88,9 @@ export default function LandingPage() {
         traits: args.traits || [],
         backstory: args.backstory || '',
         personality_summary: args.personality_summary || '',
-        key_facts: args.key_facts || []
+        key_facts: args.key_facts || [],
+        characterName: args.character_name || '',
+        voiceGender: args.voice_gender || 'female'
       };
       setCharacterLore(lore);
       setUploadReady(true);
@@ -100,6 +104,8 @@ export default function LandingPage() {
             archetype: lore.archetype,
             traits: lore.traits,
             funFact: lore.backstory,
+            characterName: lore.characterName,
+            voiceName: lore.voiceGender === 'male' ? 'Fenrir' : 'Aoede',
             extrusionStatus: 'pending',
             createdAt: serverTimestamp()
           });
@@ -578,6 +584,9 @@ export default function LandingPage() {
 
               {characterLore && (
                 <div className="p-2 border border-[#d4af37]/20 rounded-lg bg-[#d4af37]/[0.03] mb-2">
+                  {characterLore.characterName && (
+                    <p className="text-sm text-[#d4af37] font-bold mb-0.5">{characterLore.characterName}</p>
+                  )}
                   <p className="text-xs text-white font-bold mb-1">{characterLore.archetype}</p>
                   <div className="flex flex-wrap gap-1">
                     {characterLore.traits.slice(0, 3).map((trait, i) => (

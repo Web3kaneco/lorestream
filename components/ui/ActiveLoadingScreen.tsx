@@ -7,7 +7,7 @@ import { db } from '@/lib/firebase';
 interface ActiveLoadingProps {
   userId: string;
   agentId: string;
-  onComplete: (url: string) => void;
+  onComplete: (url: string, voiceName: string) => void;
 }
 
 const TIMEOUT_WARNING_SECONDS = 300; // 5 minutes
@@ -42,7 +42,7 @@ export function ActiveLoadingScreen({ userId, agentId, onComplete }: ActiveLoadi
           setAgentData(data);
 
           if (data.extrusionStatus === 'complete') {
-            onCompleteRef.current(data.model3dUrl || "");
+            onCompleteRef.current(data.model3dUrl || "", data.voiceName || "Aoede");
           }
 
           if (data.extrusionStatus === 'error' || data.extrusionStatus === 'failed') {
@@ -116,6 +116,9 @@ export function ActiveLoadingScreen({ userId, agentId, onComplete }: ActiveLoadi
       <div className="w-full max-w-md space-y-6 text-left">
         <div className="border border-neutral-800 p-4 rounded-lg bg-neutral-900/50">
           <p className="text-sm text-neutral-500 uppercase tracking-widest">Identified Archetype</p>
+          {agentData?.characterName && (
+            <p className="text-2xl font-bold text-white mb-1">{agentData.characterName}</p>
+          )}
           <p className="text-xl font-mono text-cyan-300">
             {agentData?.archetype || "Scanning..."}
           </p>
