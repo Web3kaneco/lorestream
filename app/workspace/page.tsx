@@ -14,6 +14,7 @@ import { getOrCreateAnonymousId } from '@/lib/anonymousId';
 import { isAdminUser } from '@/lib/adminWhitelist';
 import { DemoLimitBanner } from '@/components/ui/DemoLimitBanner';
 import type { AnimationState } from '@/components/3d/Avatar';
+import type { StagedFile } from '@/types/lxxi';
 import dynamic from 'next/dynamic';
 import { LoginButton } from '@/components/ui/LoginButton';
 import { AgentLibrary } from '@/components/AgentLibrary';
@@ -78,7 +79,7 @@ function WorkspacePage() {
   }, [paramAgentId, activeAgentId]);
 
   const geminiConfig = useMemo(() => ({ voiceName }), [voiceName]);
-  const { isConnected, vaultItems, isGeneratingVaultItem, startSession, stopSession, volumeRef, sendContext, ingestFile, demoLimitReached } = useGeminiLive(activeAgentId || '', effectiveUserId, isAdmin, geminiConfig);
+  const { isConnected, vaultItems, isGeneratingVaultItem, startSession, stopSession, volumeRef, sendContext, ingestFile, addVaultItem, demoLimitReached } = useGeminiLive(activeAgentId || '', effectiveUserId, isAdmin, geminiConfig);
 
   // Demo limit reached — stop session after a short delay to let final response play
   useEffect(() => {
@@ -113,6 +114,59 @@ function WorkspacePage() {
       if (animTimerRef.current) clearInterval(animTimerRef.current);
     };
   }, [isConnected, isGeneratingVaultItem, volumeRef]);
+
+  // Wrap sendContext to intercept image uploads:
+  // 1. Send to Gemini as inlineData (existing behavior)
+  // 2. Upload to Firebase Storage for persistent URL
+  // 3. Add to vault as floating artifact
+  // 4. Notify Gemini with the URL so it can use referenceImageUrls
+  const handleSendContext = useCallback((text: string, attachments: StagedFile[]) => {
+    const sent = sendContext(text, attachments);
+    if (!sent) return false;
+
+    // Process image attachments in background — don't block the send
+    const imageAttachments = attachments.filter(a => a.mimeType.startsWith('image/'));
+    if (imageAttachments.length > 0) {
+      (async () => {
+        for (const img of imageAttachments) {
+          try {
+            let imageUrl: string;
+
+            if (auth.currentUser) {
+              // Logged in: upload to Firebase Storage for a persistent URL
+              const { uploadBase64Image } = await import('@/lib/storageUtils');
+              const dataUrl = `data:${img.mimeType};base64,${img.base64}`;
+              imageUrl = await uploadBase64Image(auth.currentUser.uid, dataUrl, `upload_${Date.now()}_${img.name}`);
+            } else {
+              // Not logged in: use data URL directly (SSRF whitelist allows data:image/)
+              imageUrl = `data:${img.mimeType};base64,${img.base64}`;
+            }
+
+            // Add to vault so it appears as a floating artifact
+            addVaultItem({
+              type: 'image' as const,
+              prompt: `Uploaded: ${img.name}`,
+              url: imageUrl,
+              rationale: 'User upload',
+              createdAt: Date.now()
+            });
+
+            // Notify Gemini so the agent can reference this URL in future image generation
+            sendContext(
+              `[SYSTEM: Image "${img.name}" has been uploaded and stored. URL: ${imageUrl} — When the user asks you to use, reference, or incorporate this image in new creations, include this URL in your referenceImageUrls array when calling create_vault_artifact.]`,
+              []
+            );
+
+            console.log(`[WORKSPACE] Uploaded image "${img.name}" to storage, URL available for referenceImageUrls`);
+          } catch (err) {
+            console.error('[WORKSPACE] Failed to persist uploaded image:', err);
+          }
+        }
+      })();
+    }
+
+    return true;
+  }, [sendContext, addVaultItem]);
 
   const handleAwaken = async (data: any) => {
     if (!auth.currentUser) {
@@ -314,7 +368,7 @@ function WorkspacePage() {
             onStart={startSession}
             onStop={stopSession}
             onClear={handleClearWorkspace}
-            onSendContext={sendContext}
+            onSendContext={handleSendContext}
             onIngestFile={isAdmin ? ingestFile : undefined}
             itemCount={visibleItems.length}
           />

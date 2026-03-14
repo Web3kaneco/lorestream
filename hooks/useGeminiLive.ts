@@ -207,13 +207,13 @@ Keep it playful and make them want more.`;
         functionDeclarations: [
           {
             name: "create_vault_artifact",
-            description: "The ONLY way to create images. You MUST call this tool whenever the user requests ANY visual content — drawings, paintings, scenes, portraits, landscapes, or any image. Call this tool INSTEAD of describing what you would create. Never narrate — just call. If the user wants to incorporate elements from previously generated images, include referenceImageUrls.",
+            description: "The ONLY way to create images. You MUST call this tool whenever the user requests ANY visual content — drawings, paintings, scenes, portraits, landscapes, or any image. Call this tool INSTEAD of describing what you would create. Never narrate — just call. If the user wants to incorporate elements from previously generated images or user-uploaded images, include referenceImageUrls.",
             parameters: {
               type: "OBJECT",
               properties: {
                 prompt: { type: "STRING", description: "A highly detailed visual description of the image to generate. Be specific about composition, colors, style, lighting, and mood." },
                 rationale: { type: "STRING", description: "A short sentence explaining your visual choices." },
-                referenceImageUrls: { type: "ARRAY", items: { type: "STRING" }, description: "Optional array of URLs of previously generated vault images to use as style or content references for the new image. Use when the user wants to incorporate elements from previous creations. Maximum 3." }
+                referenceImageUrls: { type: "ARRAY", items: { type: "STRING" }, description: "Optional array of URLs of previously generated vault images or user-uploaded images to use as style or content references for the new image. User-uploaded image URLs are announced via [SYSTEM:] messages. Use when the user wants to incorporate elements from previous creations or uploads. Maximum 3." }
               },
               required: ["prompt", "rationale"]
             }
@@ -752,5 +752,13 @@ Keep it playful and make them want more.`;
     };
   }, []);
 
-  return { isConnected, vaultItems, isGeneratingVaultItem, startSession, stopSession, volumeRef, transcripts, sendContext, ingestFile, demoLimitReached };
+  // Expose a way for external callers (e.g. workspace) to add items to the vault
+  const addVaultItem = useCallback((item: any) => {
+    setVaultItems(prev => {
+      const updated = [...prev, item];
+      return updated.length > 100 ? updated.slice(-100) : updated;
+    });
+  }, []);
+
+  return { isConnected, vaultItems, isGeneratingVaultItem, startSession, stopSession, volumeRef, transcripts, sendContext, ingestFile, addVaultItem, demoLimitReached };
 }
