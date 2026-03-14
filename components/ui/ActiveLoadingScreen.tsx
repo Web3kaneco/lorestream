@@ -17,6 +17,9 @@ export function ActiveLoadingScreen({ userId, agentId, onComplete }: ActiveLoadi
   const [error, setError] = useState<string | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  // Stable ref for onComplete — prevents listener churn from inline arrow functions
+  const onCompleteRef = useRef(onComplete);
+  onCompleteRef.current = onComplete;
 
   // Elapsed time counter
   useEffect(() => {
@@ -30,6 +33,7 @@ export function ActiveLoadingScreen({ userId, agentId, onComplete }: ActiveLoadi
 
   // Firestore real-time listener with error handling
   useEffect(() => {
+    if (!userId || !agentId) return;
     const unsub = onSnapshot(
       doc(db, `users/${userId}/agents/${agentId}`),
       (docSnapshot) => {
@@ -38,7 +42,7 @@ export function ActiveLoadingScreen({ userId, agentId, onComplete }: ActiveLoadi
           setAgentData(data);
 
           if (data.extrusionStatus === 'complete') {
-            onComplete(data.model3dUrl || "");
+            onCompleteRef.current(data.model3dUrl || "");
           }
 
           if (data.extrusionStatus === 'error' || data.extrusionStatus === 'failed') {
@@ -52,7 +56,7 @@ export function ActiveLoadingScreen({ userId, agentId, onComplete }: ActiveLoadi
       }
     );
     return () => unsub();
-  }, [userId, agentId, onComplete]);
+  }, [userId, agentId]);
 
   if (error) {
     return (

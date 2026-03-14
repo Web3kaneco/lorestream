@@ -223,10 +223,10 @@ function WorkspacePage() {
         </div>
       )}
 
-      {appState === 'LOADING' && activeAgentId && (
+      {appState === 'LOADING' && activeAgentId && effectiveUserId && (
         <div className="absolute inset-0 z-40">
           <ActiveLoadingScreen
-            userId={auth.currentUser?.uid || ''}
+            userId={effectiveUserId}
             agentId={activeAgentId}
             onComplete={(url) => {
               setModelUrl(url);
