@@ -336,4 +336,4 @@ Admin emails are configured in `NEXT_PUBLIC_ADMIN_EMAILS` environment variable.
 ## Repository
 
 **GitHub**: [https://github.com/Web3kaneco/lorestream](https://github.com/Web3kaneco/lorestream)
-**Branch**: `feature/tutor-two-way-system`
+
