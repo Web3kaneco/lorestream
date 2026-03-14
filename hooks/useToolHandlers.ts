@@ -292,8 +292,8 @@ export function useToolHandlers({
         id: responseId,
         name: "record_progress",
         response: correct
-          ? { result: "Success", action: "Progress recorded — student answered correctly. Celebrate briefly with their name, then present ONE new problem with displayChalkboard. After presenting it, STOP TALKING and wait for their next answer." }
-          : { result: "Success", action: "Progress recorded — student answered incorrectly. Encourage them gently with their name and give ONE hint. Then STOP TALKING and wait for them to try again. Do NOT give the answer." }
+          ? { result: "Success", action: "FINAL answer recorded as correct. The problem is still visible on screen — it will stay until you call displayChalkboard with a NEW problem. Celebrate briefly with their name, then present ONE new problem with displayChalkboard. After presenting it, STOP TALKING and wait for their next answer. IMPORTANT: Only call record_progress for FINAL answers, not intermediate guided steps." }
+          : { result: "Success", action: "FINAL answer recorded as incorrect. Encourage them gently with their name. Use the Progressive Hint Ladder — give a guided hint and STOP TALKING. Wait for them to try again. Do NOT give the answer. IMPORTANT: Only call record_progress for FINAL answers, not intermediate guided steps." }
       };
     }
 

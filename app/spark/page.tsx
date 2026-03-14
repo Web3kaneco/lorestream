@@ -95,15 +95,12 @@ export default function SparkPage() {
       const updated = recordProblemAttempt(validSubject, correct, topic);
       if (updated) setLearnerProfile(updated);
 
-      // Clear the screen immediately when the student answers correctly.
-      // This prevents the OLD problem from staying visible while Leo celebrates
-      // and transitions to a new problem. The new chalkboard will appear when
-      // displayChalkboard fires for the next question.
-      if (correct) {
-        console.log('[SPARK] Correct answer — clearing screen for celebration');
-        setChalkboardItems([]);
-        setLearningVisuals([]);
-      }
+      // Do NOT clear the screen here. The solved problem stays visible while
+      // Leo celebrates — this is intentional. The board only updates when
+      // displayChalkboard fires with the NEXT problem. Clearing here caused
+      // issues when Leo was guiding through multi-step counting (intermediate
+      // step answers would wipe the board mid-conversation).
+      console.log(`[SPARK] Progress recorded: ${correct ? 'correct' : 'incorrect'} (${topic})`);
     } else if (toolName === 'save_learner_name') {
       // Save the learner's name
       const { name } = args;
