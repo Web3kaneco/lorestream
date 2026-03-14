@@ -51,8 +51,36 @@ function WorkspacePage() {
   const [voiceName, setVoiceName] = useState<string>('Aoede');
   const [showLibrary, setShowLibrary] = useState(false);
 
-  // Dismissed floating artifacts — visual only, items persist in Firebase
-  const [dismissedIndices, setDismissedIndices] = useState<Set<number>>(new Set());
+  // Dismissed floating artifacts — persisted in localStorage per agent so they
+  // don't reappear on page reload. Keyed by item ID (Firestore doc ID or fallback).
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
+
+  // Helper to get a stable key for a vault item (Firestore ID or content-based fallback)
+  const getItemKey = useCallback((item: any): string => {
+    if (item.id) return item.id;
+    return `${item.type}_${item.createdAt || 0}`;
+  }, []);
+
+  // Load dismissed IDs from localStorage when agent changes
+  useEffect(() => {
+    if (!activeAgentId) return;
+    try {
+      const stored = localStorage.getItem(`lxxi_dismissed_${activeAgentId}`);
+      if (stored) {
+        setDismissedIds(new Set(JSON.parse(stored)));
+      } else {
+        setDismissedIds(new Set());
+      }
+    } catch { setDismissedIds(new Set()); }
+  }, [activeAgentId]);
+
+  // Persist dismissals to localStorage whenever they change
+  const saveDismissals = useCallback((ids: Set<string>) => {
+    if (!activeAgentId) return;
+    try {
+      localStorage.setItem(`lxxi_dismissed_${activeAgentId}`, JSON.stringify(Array.from(ids)));
+    } catch { /* localStorage full — ignore */ }
+  }, [activeAgentId]);
 
   // Artifact positions — keyed by original vault index
   // Positions are calculated lazily and updated on drag
@@ -197,23 +225,39 @@ function WorkspacePage() {
     }
   };
 
-  // Visible floating items — filter dismissed only (no cap — user controls what stays visible)
-  const visibleItems = vaultItems
-    .map((item, idx) => ({ item, originalIndex: idx }))
-    .filter(({ originalIndex }) => !dismissedIndices.has(originalIndex));
+  // Maximum floating artifacts visible at once — prevents screen flooding.
+  // All items remain in the VAULT panel for browsing; only the newest show as floating cards.
+  const MAX_FLOATING = 5;
 
-  const handleDismiss = (originalIndex: number) => {
-    setDismissedIndices(prev => new Set(prev).add(originalIndex));
-  };
+  // Visible floating items — filter out dismissed, then cap at newest MAX_FLOATING
+  const visibleItems = useMemo(() => {
+    const nonDismissed = vaultItems
+      .map((item, idx) => ({ item, originalIndex: idx }))
+      .filter(({ item }) => !dismissedIds.has(getItemKey(item)));
+    // Only float the newest items — older ones are accessible via VAULT
+    return nonDismissed.slice(-MAX_FLOATING);
+  }, [vaultItems, dismissedIds, getItemKey]);
 
-  const handleClearWorkspace = () => {
-    const allIndices = new Set(dismissedIndices);
-    vaultItems.forEach((_, idx) => allIndices.add(idx));
-    setDismissedIndices(allIndices);
+  const handleDismiss = useCallback((originalIndex: number) => {
+    const item = vaultItems[originalIndex];
+    if (!item) return;
+    const key = getItemKey(item);
+    setDismissedIds(prev => {
+      const next = new Set(prev).add(key);
+      saveDismissals(next);
+      return next;
+    });
+  }, [vaultItems, getItemKey, saveDismissals]);
+
+  const handleClearWorkspace = useCallback(() => {
+    const allKeys = new Set(dismissedIds);
+    vaultItems.forEach(item => allKeys.add(getItemKey(item)));
+    setDismissedIds(allKeys);
+    saveDismissals(allKeys);
     // Reset positions so cleared items don't leave ghost state
     setArtifactPositions({});
     positionedIndicesRef.current = new Set();
-  };
+  }, [vaultItems, dismissedIds, getItemKey, saveDismissals]);
 
   // Compute initial positions for new artifacts (runs when visibleItems changes)
   useEffect(() => {
