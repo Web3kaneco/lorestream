@@ -4,6 +4,8 @@
 
 LXXI (Seventy-One) is a real-time voice AI platform where users create persistent AI characters with souls, 3D avatars, and long-term memory. Characters see you through your camera, speak to you in real time, remember every conversation, and build alongside you — generating images, writing code, and thinking through problems as true creative partners.
 
+> **Hackathon demo?** See the [Demo Instructions](DEMO_INSTRUCTIONS.md) for a step-by-step walkthrough.
+
 ---
 
 ## The Problem
@@ -59,6 +61,8 @@ LXXI is built around **presence**, not access. The agent is always on, always wa
 
 ## System Architecture
 
+![LXXI Architecture Diagram](architecture_diagram.png)
+
 ```
 User (Voice + Camera)
     |
@@ -71,6 +75,8 @@ User (Voice + Camera)
     |                           |-- createDocumentArtifact --> [Code/Doc Card]
     |                           |-- search_memory ----------> [Pinecone Vector Search]
     |                           |-- displayChalkboard ------> [Chalkboard Card] (Spark mode)
+    |                           |-- create_learning_visual -> [CountingVisual] (math) / [Imagen 4] (other)
+    |                           |-- record_progress --------> [Learner Profile] (Spark mode)
     |
     |-- Transcripts -----> [Memory Buffer] --> [Gemini Embedding] --> [Pinecone]
     |
@@ -97,6 +103,9 @@ Webcam frames captured at adaptive intervals (2-16 seconds), encoded as JPEG, an
 ### Vault System
 Multi-modal artifact storage for images, code, and documents. Generated assets persist to Firebase Storage and Firestore. Displayed as floating glass cards over the 3D avatar workspace (max 5 visible, newest on top). All items downloadable.
 
+### Adaptive Tutoring (Spark)
+Leo's Learning Lab uses an adaptive learner profile system that tracks student progress across subjects (math, Spanish, science). Difficulty scales automatically based on streak performance. Programmatic `CountingVisual` renders exact emoji groups for math problems (no AI image generation needed for accurate counting). Spanish and science use AI-generated visuals as learning aids.
+
 ### 3D Generation Pipeline
 User uploads an image (or connects an NFT via Alchemy). Firebase Cloud Function sends the image through Tripo3D's pipeline: image-to-model, automatic skeleton rigging, animation retargeting from template. Final GLB stored in Firebase Storage. Frontend polls Firestore status and transitions to live workspace when ready.
 
@@ -106,56 +115,76 @@ User uploads an image (or connects an NFT via Alchemy). Firebase Cloud Function 
 
 ```
 app/
-  page.tsx              Landing page — hero, two paths (Prime/Spark), manifesto
+  page.tsx              Landing page — hero, two paths (Prime/Spark), Architect interview
   workspace/page.tsx    Live workspace — full-screen avatar, floating artifacts, toolbar
-  spark/page.tsx        Leo's Learning Lab — voice tutoring with chalkboard
+  spark/page.tsx        Leo's Learning Lab — voice tutoring with chalkboard + counting visuals
   manifesto/page.tsx    Philosophy and core principles
   api/
+    gemini-session/     GET  — Returns Gemini API key for WebSocket (rate-limited)
     generate-image/     POST — Imagen 4 generation (standard or reference-based)
     memory/             POST — Save utterance embedding to Pinecone
     memory/search/      POST — Semantic search across agent memory
+    memory/ingest/      POST — Bulk file ingestion (PDF, images)
 
 components/
   3d/
-    Scene.tsx           Three.js canvas, lighting, camera, OrbitControls
-    Avatar.tsx          Core avatar: GLB loading, animation, mouth morphs, bone detection
+    Scene.tsx             Three.js canvas, lighting, camera, OrbitControls
+    Avatar.tsx            Core avatar: GLB loading, animation, mouth morphs, bone detection
   ui/
     FloatingArtifact.tsx  Glass card for vault items (images, code, docs)
+    SharePanel.tsx        File/image attachment panel with auto-send for voice sessions
     WorkspaceToolbar.tsx  Bottom bar: voice toggle, upload, clear, status
     DropZone.tsx          Image upload for 3D generation
     DocumentCard.tsx      Syntax-highlighted code display
-    ChalkboardCard.tsx    Math problem card (Spark mode)
+    ChalkboardCard.tsx    Math/Spanish/science problem card (Spark mode)
+    CountingVisual.tsx    Programmatic emoji counting groups for math (exact counts)
+    VoiceOrb.tsx          Animated voice activity indicator (Spark mode)
     StepIndicator.tsx     3-step progress (Describe → Upload → Generate)
-    LoginButton.tsx       Firebase Google Auth
-    AgentLibrary.tsx      Browse saved agents
+    LoginButton.tsx       Firebase Google Auth with session disconnect on logout
+    AgentLibrary.tsx      Browse and switch between saved agents
+    DemoLimitBanner.tsx   Demo tier usage limit notification
+    ActiveLoadingScreen.tsx  3D generation pipeline progress display
+    IngestPanel.tsx       PDF/file ingestion for agent memory
+    IPVault.tsx           Vault browser overlay
 
 hooks/
-  useGeminiLive.ts      Core hook: WebSocket, audio, transcripts, tool dispatch
-  useToolHandlers.ts    Processes Gemini tool calls (image gen, code, memory, chalkboard)
-  useAgentMemory.ts     Vectorize + store utterances in Pinecone
-  useFrequencyAnalysis.ts  Audio spectrum → viseme data for mouth animation
-  useAudioPlayback.ts   PCM buffer scheduling for seamless audio output
-  useVisionPipeline.ts  Webcam frame capture and encoding for Gemini
+  useGeminiLive.ts        Core hook: WebSocket, audio, transcripts, tool dispatch
+  useToolHandlers.ts      Processes Gemini tool calls (image gen, code, memory, chalkboard)
+  useAgentMemory.ts       Vectorize + store utterances in Pinecone
+  useFrequencyAnalysis.ts Audio spectrum → viseme data for mouth animation
+  useAudioPlayback.ts     PCM buffer scheduling for seamless audio output
+  useVisionPipeline.ts    Webcam frame capture and encoding for Gemini
 
 lib/
-  firebase.ts           Firebase SDK initialization
-  systemInstructions.ts Build workspace system prompt with lore + memories
-  agents/architect.ts   The Architect config (character interview)
-  agents/tutor.ts       Leo tutor config (Spark mode)
-  vaultUtils.ts         Firestore vault persistence
-  storageUtils.ts       Firebase Storage upload utilities
-  theme.tsx             Prime/Spark theme provider
+  firebase.ts             Firebase client SDK initialization
+  firebaseAdmin.ts        Firebase Admin SDK (server-side)
+  systemInstructions.ts   Build workspace system prompt with lore + memories
+  embeddings.ts           Gemini Embedding API wrapper
+  learnerProfile.ts       Student profile/progress tracking (localStorage)
+  adminWhitelist.ts       Admin email whitelist check
+  anonymousId.ts          Persistent anonymous user ID (localStorage)
+  getAuthToken.ts         Firebase Auth header utility
+  storageUtils.ts         Firebase Storage upload utilities
+  vaultUtils.ts           Firestore vault persistence
+  theme.tsx               Prime/Spark theme provider
+  agents/
+    architect.ts          The Architect config (character creation interview)
+    tutor.ts              Leo tutor config (Spark mode — system prompt + tools)
+    demoWow.ts            Default demo agent config
 
 types/
-  lxxi.ts              VaultItem union type, mode definitions
+  lxxi.ts                VaultItem union type, StagedFile, mode definitions
 
 functions/
-  src/index.ts          Cloud Functions: enqueue3DTask, process3DExtrusion
+  src/index.ts            Cloud Functions: enqueue3DTask, process3DExtrusion
 
 public/
-  WOW.glb              Default female avatar (mouth morphs, Tripo skeleton)
-  kanecov1.glb          Male avatar variant
-  audio-processor.js    AudioWorklet for PCM capture
+  WOW.glb                Default female avatar (mouth morphs, Tripo skeleton)
+  leo.glb                Leo tutor avatar (Spark + Forge KANE demo)
+  lxxi-logo.png          LXXI logo
+  audio-processor.js     AudioWorklet for PCM capture
+  hdri/                  Environment lighting (HDR)
+  draco/                 GLTF decompression (WASM)
 ```
 
 ---
@@ -163,19 +192,31 @@ public/
 ## Environment Variables
 
 ### Frontend (`.env.local`)
-```
+```env
+# Firebase Client Config
 NEXT_PUBLIC_FIREBASE_API_KEY=
 NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=
 NEXT_PUBLIC_FIREBASE_PROJECT_ID=
 NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=
 NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=
 NEXT_PUBLIC_FIREBASE_APP_ID=
-NEXT_PUBLIC_GEMINI_KEY=
+
+# Firebase Admin (server-side)
+FIREBASE_CLIENT_EMAIL=
+FIREBASE_PRIVATE_KEY=
+
+# Gemini API
+GEMINI_API_KEY=
+
+# Pinecone (vector memory)
 PINECONE_API_KEY=
+
+# Admin whitelist (comma-separated emails for full access)
+NEXT_PUBLIC_ADMIN_EMAILS=
 ```
 
-### Cloud Functions
-```
+### Cloud Functions (`functions/.env`)
+```env
 TRIPO_API_KEY=       # Tripo3D 3D generation
 ALCHEMY_API_KEY=     # NFT metadata (optional)
 GEMINI_API_KEY=      # Gemini Vision for image analysis
@@ -191,7 +232,7 @@ npm install
 
 # Set up environment variables
 cp .env.example .env.local
-# Fill in your API keys
+# Fill in your API keys (see DEMO_INSTRUCTIONS.md for detailed setup)
 
 # Run development server
 npm run dev
@@ -199,6 +240,8 @@ npm run dev
 # Deploy Cloud Functions
 cd functions && npm install && firebase deploy --only functions
 ```
+
+For detailed setup including Firebase configuration, required public assets, and production deployment, see the [Demo Instructions](DEMO_INSTRUCTIONS.md).
 
 ---
 
