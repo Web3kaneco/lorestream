@@ -22,7 +22,8 @@ const IMAGE_MODELS = {
 } as const;
 
 // Gemini model for reference-image composition (image-to-image)
-const GEMINI_IMAGE_MODEL = 'gemini-2.0-flash-preview-image-generation';
+// Updated: gemini-2.0-flash-preview-image-generation was deprecated
+const GEMINI_IMAGE_MODEL = 'gemini-2.5-flash-image';
 
 type ImageQuality = keyof typeof IMAGE_MODELS;
 type ImageSize = '1K' | '2K';
@@ -110,46 +111,70 @@ async function handleStandardImageGeneration(prompt: string, quality?: string, s
 // --- Path A: Reference image composition via Gemini ---
 async function handleReferenceImageGeneration(prompt: string, referenceUrls: string[]) {
   // Convert each reference URL to an inlineData part (max 3 references)
-  const imageParts = await Promise.all(
-    referenceUrls.slice(0, 3).map(async (url: string) => {
-      // For data: URLs, extract base64 directly
-      if (url.startsWith('data:')) {
-        const [header, data] = url.split(',');
-        const mimeType = header.match(/data:(.*?);/)?.[1] || 'image/png';
-        return { inlineData: { mimeType, data } };
-      }
-      // For allowed https URLs, fetch and convert to base64
-      const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
-      if (!res.ok) throw new Error(`Failed to fetch reference image: HTTP ${res.status}`);
-      const buffer = await res.arrayBuffer();
-      const base64 = Buffer.from(buffer).toString('base64');
-      const mimeType = res.headers.get('content-type') || 'image/png';
-      return { inlineData: { mimeType, data: base64 } };
-    })
-  );
+  console.log(`[IMAGE GEN] Path A: reference image generation with ${referenceUrls.length} references, model=${GEMINI_IMAGE_MODEL}`);
 
-  const response = await getAI().models.generateContent({
-    model: GEMINI_IMAGE_MODEL,
-    contents: [{
-      role: 'user',
-      parts: [
-        ...imageParts,
-        { text: `Using these reference images as creative inspiration and source material, generate a new image: ${prompt}` }
-      ]
-    }],
-    config: {
-      responseModalities: ['TEXT', 'IMAGE']
-    }
-  });
+  let imageParts: any[];
+  try {
+    imageParts = await Promise.all(
+      referenceUrls.slice(0, 3).map(async (url: string, i: number) => {
+        // For data: URLs, extract base64 directly
+        if (url.startsWith('data:')) {
+          const [header, data] = url.split(',');
+          const mimeType = header.match(/data:(.*?);/)?.[1] || 'image/png';
+          console.log(`[IMAGE GEN] Reference ${i}: data URL (${mimeType}, ${(data?.length || 0)} chars)`);
+          return { inlineData: { mimeType, data } };
+        }
+        // For allowed https URLs, fetch and convert to base64
+        console.log(`[IMAGE GEN] Reference ${i}: fetching ${url.substring(0, 80)}...`);
+        const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+        if (!res.ok) throw new Error(`Failed to fetch reference image ${i}: HTTP ${res.status}`);
+        const buffer = await res.arrayBuffer();
+        const base64 = Buffer.from(buffer).toString('base64');
+        const mimeType = res.headers.get('content-type') || 'image/png';
+        console.log(`[IMAGE GEN] Reference ${i}: fetched OK (${mimeType}, ${base64.length} chars)`);
+        return { inlineData: { mimeType, data: base64 } };
+      })
+    );
+  } catch (fetchErr: any) {
+    console.error(`[IMAGE GEN] Failed to fetch reference images:`, fetchErr.message);
+    return NextResponse.json({ error: `Failed to fetch reference images: ${fetchErr.message}` }, { status: 500 });
+  }
+
+  console.log(`[IMAGE GEN] Sending ${imageParts.length} image parts + prompt to ${GEMINI_IMAGE_MODEL}`);
+
+  let response;
+  try {
+    response = await getAI().models.generateContent({
+      model: GEMINI_IMAGE_MODEL,
+      contents: [{
+        role: 'user',
+        parts: [
+          ...imageParts,
+          { text: `Using these reference images as creative inspiration and source material, generate a new image: ${prompt}` }
+        ]
+      }],
+      config: {
+        responseModalities: ['TEXT', 'IMAGE']
+      }
+    });
+  } catch (genErr: any) {
+    console.error(`[IMAGE GEN] Gemini generateContent failed:`, genErr.message || genErr);
+    return NextResponse.json({ error: `Gemini image generation failed: ${genErr.message}` }, { status: 500 });
+  }
 
   // Extract the image from the response
   const parts = response.candidates?.[0]?.content?.parts || [];
+  console.log(`[IMAGE GEN] Response parts: ${parts.length}, types: ${parts.map((p: any) => p.text ? 'text' : p.inlineData?.mimeType || 'unknown').join(', ')}`);
   const imagePart = parts.find((p: any) => p.inlineData?.mimeType?.startsWith('image/'));
 
   if (!imagePart || !imagePart.inlineData) {
+    // Log what we got so we can diagnose
+    const textParts = parts.filter((p: any) => p.text).map((p: any) => p.text).join(' ');
+    console.error(`[IMAGE GEN] No image in response. Text parts: ${textParts.substring(0, 200)}`);
     return NextResponse.json({ error: "No image generated with references" }, { status: 500 });
   }
 
   const imageUrl = `data:${imagePart.inlineData.mimeType};base64,${imagePart.inlineData.data}`;
+  console.log(`[IMAGE GEN] Success! Generated image with references (${imagePart.inlineData.data?.length || 0} chars base64)`);
   return NextResponse.json({ success: true, imageUrl });
 }
