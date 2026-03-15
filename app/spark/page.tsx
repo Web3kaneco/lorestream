@@ -134,7 +134,7 @@ export default function SparkPage() {
     volumeRef,
     transcripts,
     sendContext
-  } = useGeminiLive('tutor_demo', 'anonymous', false, sparkConfig);
+  } = useGeminiLive('tutor_demo', 'anonymous', 'demo', sparkConfig);
 
   // Keep sendContextRef up to date for subject switching
   useEffect(() => {

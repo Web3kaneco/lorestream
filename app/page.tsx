@@ -3,8 +3,9 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { httpsCallable } from 'firebase/functions';
-import { doc, setDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
+import { doc, setDoc, serverTimestamp, onSnapshot, collection, query, where, getDocs } from 'firebase/firestore';
 import { auth, functions, db } from '@/lib/firebase';
+import { getUserTier, getTierLimits } from '@/lib/userTier';
 import { useGeminiLive } from '@/hooks/useGeminiLive';
 import { ARCHITECT_CONFIG } from '@/lib/agents/architect';
 import { DropZone } from '@/components/ui/DropZone';
@@ -152,7 +153,7 @@ export default function LandingPage() {
     volumeRef,
     transcripts,
     sendContext
-  } = useGeminiLive('architect_demo', auth.currentUser?.uid || 'anonymous', false, architectConfig);
+  } = useGeminiLive('architect_demo', auth.currentUser?.uid || 'anonymous', 'demo', architectConfig);
 
   useEffect(() => {
     if (animTimerRef.current) clearInterval(animTimerRef.current);
@@ -230,6 +231,25 @@ export default function LandingPage() {
       alert("Please log in first to begin your creation.");
       return;
     }
+
+    // Check Forge character limit for non-admin users
+    const tier = getUserTier(auth.currentUser.email, true);
+    const forgeLimits = getTierLimits(tier);
+    if (forgeLimits.forgeLimit > 0) {
+      try {
+        const agentsRef = collection(db, `users/${auth.currentUser.uid}/agents`);
+        const q = query(agentsRef, where('extrusionStatus', '==', 'complete'));
+        const snapshot = await getDocs(q);
+        if (snapshot.size >= forgeLimits.forgeLimit) {
+          alert(`You've reached your character limit (${forgeLimits.forgeLimit}). Contact the team for expanded access.`);
+          return;
+        }
+      } catch (e) {
+        console.warn("[FORGE] Could not check agent count:", e);
+        // Allow through on error — don't block creation due to Firestore issues
+      }
+    }
+
     setPageState('INTERVIEW');
     setTimeout(() => startSession(), 300);
   };

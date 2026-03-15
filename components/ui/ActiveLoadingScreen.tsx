@@ -8,14 +8,16 @@ interface ActiveLoadingProps {
   userId: string;
   agentId: string;
   onComplete: (url: string, voiceName: string) => void;
+  onCancel?: () => void;
 }
 
 const TIMEOUT_WARNING_SECONDS = 300; // 5 minutes
 
-export function ActiveLoadingScreen({ userId, agentId, onComplete }: ActiveLoadingProps) {
+export function ActiveLoadingScreen({ userId, agentId, onComplete, onCancel }: ActiveLoadingProps) {
   const [agentData, setAgentData] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [showTimeWarningDismissed, setShowTimeWarningDismissed] = useState(false);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   // Stable ref for onComplete — prevents listener churn from inline arrow functions
   const onCompleteRef = useRef(onComplete);
@@ -64,20 +66,49 @@ export function ActiveLoadingScreen({ userId, agentId, onComplete }: ActiveLoadi
         <div className="text-red-400 text-5xl mb-6">!</div>
         <h2 className="text-2xl font-bold text-red-400 mb-4">Something went wrong</h2>
         <p className="text-neutral-400 mb-8 text-center max-w-md">{error}</p>
-        <button
-          onClick={() => window.location.reload()}
-          className="px-6 py-3 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white font-medium transition-colors"
-        >
-          Refresh Page
-        </button>
+        <div className="flex gap-3">
+          {agentData?.model3dUnriggedUrl ? (
+            <button
+              onClick={() => onCompleteRef.current(agentData.model3dUnriggedUrl, agentData.voiceName || 'Aoede')}
+              className="px-6 py-3 bg-[#d4af37] hover:bg-[#c4a030] text-black font-bold rounded-lg transition-all"
+            >
+              Use My Character
+            </button>
+          ) : onCancel ? (
+            <button
+              onClick={onCancel}
+              className="px-6 py-3 bg-[#d4af37] hover:bg-[#c4a030] text-black font-bold rounded-lg transition-all"
+            >
+              Go to Workspace
+            </button>
+          ) : null}
+          <button
+            onClick={() => window.location.reload()}
+            className="px-6 py-3 bg-white/10 hover:bg-white/15 text-white/70 rounded-lg transition-all border border-white/10"
+          >
+            Retry
+          </button>
+        </div>
       </div>
     );
   }
 
-  const showTimeWarning = elapsedSeconds >= TIMEOUT_WARNING_SECONDS;
+  const showTimeWarning = elapsedSeconds >= TIMEOUT_WARNING_SECONDS && !showTimeWarningDismissed;
 
   return (
-    <div className="flex flex-col items-center justify-center h-full w-full bg-black text-white p-10 pointer-events-auto z-50">
+    <div className="flex flex-col items-center justify-center h-full w-full bg-black text-white p-10 pointer-events-auto z-50 relative">
+      {/* Close/cancel button — always visible */}
+      {onCancel && (
+        <button
+          onClick={onCancel}
+          className="absolute top-6 left-1/2 -translate-x-1/2 w-10 h-10 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-white/40 hover:text-white/70 transition-all z-10"
+          title="Back to workspace"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+            <path d="M18 6L6 18M6 6l12 12" />
+          </svg>
+        </button>
+      )}
       <div className="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-cyan-400 mb-8"></div>
       <h2 className="text-3xl font-bold animate-pulse mb-4">
         {agentData?.extrusionStatus === 'animating'
@@ -102,14 +133,56 @@ export function ActiveLoadingScreen({ userId, agentId, onComplete }: ActiveLoadi
       {elapsedSeconds < 30 && <div className="mb-12" />}
 
       {showTimeWarning && (
-        <p className="text-sm text-amber-400 mb-8 text-center max-w-md">
-          Generation is taking longer than expected. You may want to refresh and try again.
-        </p>
+        <div className="flex flex-col items-center gap-3 mb-8">
+          {agentData?.model3dUnriggedUrl ? (
+            <>
+              <p className="text-sm text-amber-400 text-center max-w-md">
+                Animation is taking longer than expected. Your character&apos;s 3D model is ready &mdash; you can start using it now.
+              </p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => onCompleteRef.current(agentData.model3dUnriggedUrl, agentData.voiceName || 'Aoede')}
+                  className="px-5 py-2 bg-[#d4af37] hover:bg-[#c4a030] text-black font-bold text-sm rounded-lg transition-all"
+                >
+                  Use My Character
+                </button>
+                <button
+                  onClick={() => setShowTimeWarningDismissed(true)}
+                  className="px-5 py-2 bg-white/10 hover:bg-white/15 text-white/70 text-sm rounded-lg transition-all border border-white/10"
+                >
+                  Keep Waiting
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="text-sm text-amber-400 text-center max-w-md">
+                Generation is taking longer than expected.
+              </p>
+              <div className="flex gap-3">
+                {onCancel && (
+                  <button
+                    onClick={onCancel}
+                    className="px-5 py-2 bg-[#d4af37] hover:bg-[#c4a030] text-black font-bold text-sm rounded-lg transition-all"
+                  >
+                    Go to Workspace
+                  </button>
+                )}
+                <button
+                  onClick={() => setShowTimeWarningDismissed(true)}
+                  className="px-5 py-2 bg-white/10 hover:bg-white/15 text-white/70 text-sm rounded-lg transition-all border border-white/10"
+                >
+                  Keep Waiting
+                </button>
+              </div>
+            </>
+          )}
+        </div>
       )}
 
       {agentData?.extrusionWarning === 'rigging_failed' && (
         <p className="text-xs text-amber-500 mb-4">
-          Note: Rigging step was skipped — model may have limited animation.
+          Animation is being finalized &mdash; your character is ready to use.
         </p>
       )}
 

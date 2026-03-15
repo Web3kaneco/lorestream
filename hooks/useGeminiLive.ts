@@ -8,6 +8,8 @@ import { useAgentMemory } from './useAgentMemory';
 import { useVisionPipeline } from './useVisionPipeline';
 import { useFrequencyAnalysis } from './useFrequencyAnalysis';
 import { useAudioPlayback } from './useAudioPlayback';
+import type { UserTier } from '@/lib/userTier';
+import { getTierLimits, isWithinLimit } from '@/lib/userTier';
 import { useToolHandlers } from './useToolHandlers';
 import { buildWorkspaceSystemInstruction } from '@/lib/systemInstructions';
 import type { StagedFile } from '@/types/lxxi';
@@ -27,16 +29,21 @@ export interface GeminiLiveConfig {
   onToolCallback?: (toolName: string, args: any) => void;
 }
 
-export function useGeminiLive(agentId: string, userId: string, isAdmin: boolean = false, config?: GeminiLiveConfig) {
+export function useGeminiLive(agentId: string, userId: string, userTier: UserTier = 'demo', config?: GeminiLiveConfig) {
   const [isConnected, setIsConnected] = useState(false);
   const [vaultItems, setVaultItems] = useState<any[]>([]); // VaultItem[] at runtime
   const [isGeneratingVaultItem, setIsGeneratingVaultItem] = useState(false);
   const [transcripts, setTranscripts] = useState<{speaker: string, text: string}[]>([]);
   const [demoLimitReached, setDemoLimitReached] = useState(false);
 
-  // Demo exchange counter — tracks user speech turns for non-admin users
-  const DEMO_EXCHANGE_LIMIT = 5;
+  // Tier-based limits — resolved once from the tier config
+  const limits = getTierLimits(userTier);
+
+  // Exchange counter — tracks user speech turns for limited tiers
   const exchangeCountRef = useRef(0);
+
+  // Image generation counter — tracks create_vault_artifact calls for limited tiers
+  const imageGenCountRef = useRef(0);
 
   const wsRef = useRef<WebSocket | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -159,9 +166,9 @@ export function useGeminiLive(agentId: string, userId: string, isAdmin: boolean 
           }
         }
 
-        // Load recent Pinecone conversation history (admin only — saves API calls for demo users)
+        // Load recent Pinecone conversation history (authenticated + admin only)
         let recentMemories = "";
-        if (enableMemory && isAdmin) {
+        if (enableMemory && limits.pineconeMemory) {
           try {
             const authHdrs = await getAuthHeaders();
             const memRes = await fetch('/api/memory/search', {
@@ -184,26 +191,29 @@ export function useGeminiLive(agentId: string, userId: string, isAdmin: boolean 
           archetype
         );
 
-        // Append demo-mode instructions for non-admin users
-        if (!isAdmin) {
+        // Append tier-based instructions
+        if (userTier === 'demo') {
           systemInstructionText += `\n\n--- DEMO MODE ---
-You are currently in DEMO MODE. You only have ${DEMO_EXCHANGE_LIMIT} voice exchanges with this user.
+You are currently in DEMO MODE. You have ${limits.exchangeLimit} voice exchanges with this user.
 Make every exchange count — be captivating, warm, and show your personality.
 
-IMPORTANT: You cannot generate images, create documents, search memories, or use any tools right now.
-If the user asks you to create, draw, generate, or make anything, respond naturally explaining that
-you can't do that right now in demo mode — you're just here to intrigue them and show them what you're about.
-Tease what's possible with full access: "If you had full access, I could paint that for you in seconds..."
-Keep it playful and make them want more.`;
+You CAN generate ONE image using create_vault_artifact — use it wisely when the moment is right.
+You cannot search memories, create documents, or use any other tools.
+If the user asks for more, respond naturally: "I'd love to do more — log in and we can go deeper together."
+Tease what's possible with full access. Keep it playful and make them want more.`;
+        } else if (userTier === 'authenticated') {
+          systemInstructionText += `\n\n--- SESSION INFO ---
+You have ${limits.exchangeLimit} voice exchanges and ${limits.imageGenLimit} image generations this session.
+You have access to image generation, document creation, and memory search.
+Use your tools naturally and make every exchange count.`;
         }
+        // Admin: no extra instructions (unlimited)
       }
 
       // Build tools:
-      // 1. If config provides explicit tools (e.g. Spark tutor), ALWAYS use them regardless of admin status
-      // 2. For default workspace mode: admin users get full tools, demo users get none (voice-only)
-      const toolDeclarations = config?.tools
-        ? config.tools // Config-provided tools always active (Spark chalkboard, etc.)
-        : (!isAdmin ? [] : [{
+      // 1. If config provides explicit tools (e.g. Spark tutor), ALWAYS use them regardless of tier
+      // 2. For default workspace mode: tier determines which tools are available
+      const fullTools = [{
         functionDeclarations: [
           {
             name: "create_vault_artifact",
@@ -244,7 +254,28 @@ Keep it playful and make them want more.`;
             }
           }
         ]
-      }]);
+      }];
+
+      const demoTools = [{
+        functionDeclarations: [
+          {
+            name: "create_vault_artifact",
+            description: "Create ONE image for the user. You have a limited number of uses in demo mode — make it count. Call this INSTEAD of describing what you would create.",
+            parameters: {
+              type: "OBJECT",
+              properties: {
+                prompt: { type: "STRING", description: "A highly detailed visual description of the image to generate." },
+                rationale: { type: "STRING", description: "A short sentence explaining your visual choices." },
+              },
+              required: ["prompt", "rationale"]
+            }
+          }
+        ]
+      }];
+
+      const toolDeclarations = config?.tools
+        ? config.tools // Config-provided tools always active (Spark chalkboard, etc.)
+        : (userTier === 'demo' ? demoTools : fullTools);
 
       // Audio context setup — 24kHz matches Gemini's native audio output rate
       // Mic capture downsamples 24kHz → 16kHz in the audio worklet before sending
@@ -438,6 +469,20 @@ Keep it playful and make them want more.`;
               if (processedToolIdsRef.current.has(callId)) continue;
               processedToolIdsRef.current.add(callId);
               console.log("[TOOL CALL RECEIVED via toolCall]", fc.name, "id:", fc.id);
+
+              // Image generation limit enforcement
+              if (fc.name === 'create_vault_artifact' && limits.imageGenLimit > 0) {
+                if (!isWithinLimit(imageGenCountRef.current, limits.imageGenLimit)) {
+                  batchResponses.push({
+                    id: callId,
+                    name: 'create_vault_artifact',
+                    response: { error: "Image generation limit reached for this session. Tell the user they've used all their image generations for this session." }
+                  });
+                  continue;
+                }
+                imageGenCountRef.current++;
+              }
+
               try {
                 const response = await handleToolCall(fc);
                 if (response) batchResponses.push(response);
@@ -471,7 +516,7 @@ Keep it playful and make them want more.`;
                     return updated.length > 500 ? updated.slice(-500) : updated;
                   });
 
-                  if (enableMemory && isAdmin) {
+                  if (enableMemory && limits.pineconeMemory) {
                     agentTranscriptBufferRef.current += part.text;
                     if (memoryTimeoutRef.current) clearTimeout(memoryTimeoutRef.current);
                     memoryTimeoutRef.current = setTimeout(() => {
@@ -504,10 +549,23 @@ Keep it playful and make them want more.`;
             if (inlineToolCalls.length > 0) {
               try {
                 const responses = await Promise.all(
-                  inlineToolCalls.map(fc => handleToolCall(fc).catch(err => {
-                    console.error("[TOOL HANDLER ERROR]", err);
-                    return null;
-                  }))
+                  inlineToolCalls.map(fc => {
+                    // Image generation limit enforcement for inline tool calls
+                    if (fc.name === 'create_vault_artifact' && limits.imageGenLimit > 0) {
+                      if (!isWithinLimit(imageGenCountRef.current, limits.imageGenLimit)) {
+                        return Promise.resolve({
+                          id: fc.id || `${fc.name}_${Date.now()}`,
+                          name: 'create_vault_artifact',
+                          response: { error: "Image generation limit reached for this session. Tell the user they've used all their image generations for this session." }
+                        });
+                      }
+                      imageGenCountRef.current++;
+                    }
+                    return handleToolCall(fc).catch(err => {
+                      console.error("[TOOL HANDLER ERROR]", err);
+                      return null;
+                    });
+                  })
                 );
                 const validResponses = responses.filter(Boolean);
                 if (validResponses.length > 0) {
@@ -534,18 +592,18 @@ Keep it playful and make them want more.`;
               return updated.length > 500 ? updated.slice(-500) : updated;
             });
 
-            // Demo exchange counter — flag limit reached for non-admin users
+            // Exchange counter — flag limit reached for non-unlimited tiers
             // The actual session stop is handled by the workspace page via demoLimitReached
-            if (!isAdmin) {
+            if (limits.exchangeLimit > 0) {
               exchangeCountRef.current++;
-              console.log(`[DEMO] Exchange ${exchangeCountRef.current}/${DEMO_EXCHANGE_LIMIT}`);
-              if (exchangeCountRef.current >= DEMO_EXCHANGE_LIMIT) {
-                console.log('[DEMO] Exchange limit reached — flagging for session end');
+              console.log(`[SESSION] Exchange ${exchangeCountRef.current}/${limits.exchangeLimit}`);
+              if (exchangeCountRef.current >= limits.exchangeLimit) {
+                console.log('[SESSION] Exchange limit reached — flagging for session end');
                 setDemoLimitReached(true);
               }
             }
 
-            if (enableMemory && isAdmin) {
+            if (enableMemory && limits.pineconeMemory) {
               userTranscriptBufferRef.current += " " + userText;
               if (userMemoryTimeoutRef.current) clearTimeout(userMemoryTimeoutRef.current);
               userMemoryTimeoutRef.current = setTimeout(() => {
@@ -634,7 +692,7 @@ Keep it playful and make them want more.`;
       micStreamRef.current?.getTracks().forEach(track => track.stop());
       if (wsRef.current) { try { wsRef.current.close(); } catch(e) {} wsRef.current = null; }
     }
-  }, [agentId, userId, isConnected, isAdmin, config, enableVision, enableMemory, voiceName, saveToMemory, startVision, startAnalysis, playAudioBuffer, interruptPlayback, handleToolCall, safeSend]);
+  }, [agentId, userId, isConnected, userTier, config, enableVision, enableMemory, voiceName, saveToMemory, startVision, startAnalysis, playAudioBuffer, interruptPlayback, handleToolCall, safeSend]);
 
   const stopSession = useCallback(() => {
     userStoppedRef.current = true; // Prevent auto-reconnection
@@ -719,7 +777,7 @@ Keep it playful and make them want more.`;
         return updated.length > 500 ? updated.slice(-500) : updated;
       });
       // Save to Pinecone memory (admin only) — includes first image for multimodal embedding
-      if (enableMemory && isAdmin && text.trim()) {
+      if (enableMemory && limits.pineconeMemory && text.trim()) {
         const firstImage = attachments.find(a => a.mimeType.startsWith('image/'));
         saveToMemory(
           text.trim(),

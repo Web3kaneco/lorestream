@@ -11,7 +11,8 @@ import type { ArtifactPosition } from '@/components/ui/FloatingArtifact';
 import { SharePanel } from '@/components/ui/SharePanel';
 import { useGeminiLive } from '@/hooks/useGeminiLive';
 import { getOrCreateAnonymousId } from '@/lib/anonymousId';
-import { isAdminUser } from '@/lib/adminWhitelist';
+import { getUserTier, getTierLimits } from '@/lib/userTier';
+import type { UserTier } from '@/lib/userTier';
 import { DemoLimitBanner } from '@/components/ui/DemoLimitBanner';
 import type { AnimationState } from '@/components/3d/Avatar';
 import type { StagedFile } from '@/types/lxxi';
@@ -93,14 +94,15 @@ function WorkspacePage() {
   // Stable user ID: Firebase UID if logged in, persistent anonymous ID otherwise
   // This ensures Pinecone namespaces and Firestore vault paths always work
   const [effectiveUserId, setEffectiveUserId] = useState<string>('');
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [userTier, setUserTier] = useState<UserTier>('demo');
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged((user) => {
       setEffectiveUserId(user?.uid || getOrCreateAnonymousId());
-      setIsAdmin(isAdminUser(user?.email));
+      setUserTier(getUserTier(user?.email, !!user));
     });
     return () => unsubscribe();
   }, []);
+  const tierLimits = getTierLimits(userTier);
 
   // Handle URL params for agent pre-selection
   useEffect(() => {
@@ -111,7 +113,7 @@ function WorkspacePage() {
   }, [paramAgentId, activeAgentId]);
 
   const geminiConfig = useMemo(() => ({ voiceName }), [voiceName]);
-  const { isConnected, vaultItems, isGeneratingVaultItem, startSession, stopSession, volumeRef, sendContext, ingestFile, addVaultItem, demoLimitReached } = useGeminiLive(activeAgentId || '', effectiveUserId, isAdmin, geminiConfig);
+  const { isConnected, vaultItems, isGeneratingVaultItem, startSession, stopSession, volumeRef, sendContext, ingestFile, addVaultItem, demoLimitReached } = useGeminiLive(activeAgentId || '', effectiveUserId, userTier, geminiConfig);
 
   // Demo limit reached — stop session after a short delay to let final response play
   useEffect(() => {
@@ -339,7 +341,7 @@ function WorkspacePage() {
           <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-[#d4af37] animate-pulse' : 'bg-gray-600'}`} />
         </div>
         <div className="flex items-center gap-2">
-          {auth.currentUser && appState === 'LIVE' && (
+          {tierLimits.soulsLibrary && appState === 'LIVE' && (
             <button
               onClick={() => {
                 if (isConnected) stopSession();
@@ -384,6 +386,13 @@ function WorkspacePage() {
             onComplete={(url, fetchedVoice) => {
               setModelUrl(url);
               setVoiceName(fetchedVoice);
+              setAppState('LIVE');
+            }}
+            onCancel={() => {
+              // Bail out to demo workspace with default model
+              setActiveAgentId('demo_wow');
+              setModelUrl(DEMO_MODEL_URL);
+              setVoiceName('Aoede');
               setAppState('LIVE');
             }}
           />
@@ -442,7 +451,7 @@ function WorkspacePage() {
           </div>
 
           {/* Demo limit banner */}
-          {demoLimitReached && <DemoLimitBanner />}
+          {demoLimitReached && <DemoLimitBanner tier={userTier} />}
 
           {/* Artifact Vault — slide-up panel above SharePanel */}
           {showArtifactVault && (
@@ -461,7 +470,7 @@ function WorkspacePage() {
             onStop={stopSession}
             onClear={handleClearWorkspace}
             onSendContext={handleSendContext}
-            onIngestFile={isAdmin ? ingestFile : undefined}
+            onIngestFile={tierLimits.memoryIngestion ? ingestFile : undefined}
             onOpenVault={() => setShowArtifactVault(prev => !prev)}
             itemCount={vaultItems.length}
           />
