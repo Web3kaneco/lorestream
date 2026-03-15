@@ -3,7 +3,12 @@
     "allow": [
       "Bash(ls -la /c/lorestream/*.json)",
       "Bash(git push)",
-      "Bash(npx tsc --noEmit --pretty)"
+      "Bash(npx tsc --noEmit --pretty)",
+      "Bash(npx tsc --noEmit)",
+      "Bash(xargs grep -l \"enqueue3DTask\\\\|forge\\\\|animate_rig\")",
+      "Bash(xargs grep -l \"TIMEOUT\\\\|timeout\")",
+      "Bash(git add app/page.tsx app/spark/page.tsx app/workspace/page.tsx components/ui/ActiveLoadingScreen.tsx components/ui/DemoLimitBanner.tsx hooks/useGeminiLive.ts lib/userTier.ts)",
+      "Bash(git commit:*)"
     ]
   }
 }
