@@ -2,7 +2,7 @@
 // User Tier System — Three-tier access control
 //
 // DEMO (no login):          5 exchanges, 1 image, no memory/forge/SOULS
-// AUTHENTICATED (any Google): 25 exchanges, 5 images, memory, 1 forge char, SOULS
+// AUTHENTICATED (any Google): 25 exchanges, 25 images, memory, 1 forge char, SOULS
 // ADMIN (whitelist):         Everything unlimited
 // ──────────────────────────────────────────────────────────────
 
@@ -30,7 +30,7 @@ export const TIER_LIMITS: Record<UserTier, TierLimits> = {
   },
   authenticated: {
     exchangeLimit: 25,
-    imageGenLimit: 5,
+    imageGenLimit: 25,
     memoryIngestion: true,
     forgeLimit: 1,
     soulsLibrary: true,
