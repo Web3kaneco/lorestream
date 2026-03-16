@@ -260,13 +260,15 @@ function WorkspacePage() {
   // All items remain in the VAULT panel for browsing; only the newest show as floating cards.
   const MAX_FLOATING = 5;
 
-  // Visible floating items — filter out dismissed, then cap at newest MAX_FLOATING
+  // Visible floating items — take the newest MAX_FLOATING first, THEN remove dismissed.
+  // This prevents the "cycling" bug where dismissing an item shifts the window and
+  // pulls in an older item that the user never asked to see.
   const visibleItems = useMemo(() => {
-    const nonDismissed = vaultItems
-      .map((item, idx) => ({ item, originalIndex: idx }))
-      .filter(({ item }) => !dismissedIds.has(getItemKey(item)));
-    // Only float the newest items — older ones are accessible via VAULT
-    return nonDismissed.slice(-MAX_FLOATING);
+    const allMapped = vaultItems.map((item, idx) => ({ item, originalIndex: idx }));
+    // Fix the window to the newest MAX_FLOATING items regardless of dismissals
+    const newestWindow = allMapped.slice(-MAX_FLOATING);
+    // Then hide any the user explicitly dismissed
+    return newestWindow.filter(({ item }) => !dismissedIds.has(getItemKey(item)));
   }, [vaultItems, dismissedIds, getItemKey]);
 
   const handleDismiss = useCallback((originalIndex: number) => {
