@@ -385,9 +385,9 @@ export default function LandingPage() {
                 </div>
                 <button
                   onClick={() => router.push('/workspace')}
-                  className="w-full mt-2 py-1.5 text-[10px] text-white/20 hover:text-white/40 transition-colors text-center"
+                  className="w-full mt-2.5 py-2.5 text-sm font-semibold rounded-lg transition-all border border-white/15 bg-white/[0.06] text-white/70 hover:bg-white/[0.12] hover:border-white/30 hover:text-white"
                 >
-                  Skip to Workspace (demo)
+                  Try Workspace Demo →
                 </button>
               </div>
             </div>
