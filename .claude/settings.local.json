@@ -8,7 +8,16 @@
       "Bash(xargs grep -l \"enqueue3DTask\\\\|forge\\\\|animate_rig\")",
       "Bash(xargs grep -l \"TIMEOUT\\\\|timeout\")",
       "Bash(git add app/page.tsx app/spark/page.tsx app/workspace/page.tsx components/ui/ActiveLoadingScreen.tsx components/ui/DemoLimitBanner.tsx hooks/useGeminiLive.ts lib/userTier.ts)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(ls -lah /c/lorestream/*.png /c/lorestream/*.jpg)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(ls /c/lorestream/node_modules/.bin/next*)",
+      "Bash(ls -lh /c/lorestream/*.html /c/lorestream/*.png /c/lorestream/*.jpg)",
+      "Bash(npx skills add remotion-dev/skills)",
+      "Bash(npx skills add remotion-dev/skills --yes)",
+      "Bash(npm install)",
+      "Bash(mkdir -p out)",
+      "Bash(npx remotion render LXXIPromo out/lxxi-promo.mp4)"
     ]
   }
 }

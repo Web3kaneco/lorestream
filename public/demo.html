@@ -1,0 +1,824 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1920, height=1080, initial-scale=1">
+<title>LXXI — Demo</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700;800&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  /* ============================================================
+     GLOBAL
+     ============================================================ */
+  *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+  html, body { width:1920px; height:1080px; overflow:hidden; background:#050505; color:#e5e5e5; }
+  body { font-family:'Inter',sans-serif; position:relative; }
+
+  :root {
+    --gold: #d4af37;
+    --gold-glow: rgba(212,175,55,0.25);
+    --bg: #050505;
+    --card: rgba(255,255,255,0.04);
+    --card-border: rgba(255,255,255,0.08);
+    --text-dim: #737373;
+    --text-mid: #a3a3a3;
+    --cyan: #22d3ee;
+  }
+
+  /* ============================================================
+     SCENE SYSTEM — each scene is a full-viewport overlay
+     ============================================================ */
+  .scene {
+    position:absolute; inset:0;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    opacity:0; pointer-events:none;
+    transition: opacity 1.2s cubic-bezier(0.4,0,0.2,1);
+  }
+  .scene.active { opacity:1; pointer-events:auto; }
+  .scene.fade-out { opacity:0; }
+
+  /* ============================================================
+     COMMON ELEMENTS
+     ============================================================ */
+  .heading-serif {
+    font-family:'Playfair Display',serif;
+    font-weight:700;
+    letter-spacing:-0.02em;
+  }
+  .text-gold { color:var(--gold); }
+  .text-dim { color:var(--text-dim); }
+  .text-mid { color:var(--text-mid); }
+  .text-cyan { color:var(--cyan); }
+
+  .glass-card {
+    background:var(--card);
+    border:1px solid var(--card-border);
+    border-radius:16px;
+    padding:32px;
+    backdrop-filter:blur(12px);
+  }
+
+  /* Fade-up animation for elements */
+  .reveal {
+    opacity:0;
+    transform:translateY(30px);
+    transition: opacity 0.8s ease, transform 0.8s ease;
+  }
+  .reveal.show {
+    opacity:1;
+    transform:translateY(0);
+  }
+
+  /* Typewriter cursor */
+  .typewriter-cursor::after {
+    content:'|';
+    color:var(--gold);
+    animation: blink 0.8s infinite;
+    margin-left:2px;
+  }
+  @keyframes blink { 0%,50%{opacity:1} 51%,100%{opacity:0} }
+
+  /* Gold glow pulse */
+  @keyframes glow-pulse {
+    0%,100% { box-shadow: 0 0 60px rgba(212,175,55,0.15), 0 0 120px rgba(212,175,55,0.05); }
+    50% { box-shadow: 0 0 80px rgba(212,175,55,0.3), 0 0 160px rgba(212,175,55,0.1); }
+  }
+
+  /* Subtle float */
+  @keyframes float {
+    0%,100% { transform:translateY(0); }
+    50% { transform:translateY(-8px); }
+  }
+
+  /* Gold line divider */
+  .gold-line {
+    width:80px; height:2px;
+    background:linear-gradient(90deg, transparent, var(--gold), transparent);
+    margin:24px auto;
+  }
+
+  /* Particle canvas */
+  #particles { position:absolute; inset:0; z-index:0; pointer-events:none; }
+
+  /* ============================================================
+     SCENE 1 — OPENING
+     ============================================================ */
+  #scene1 .logo-container {
+    position:relative;
+    animation: float 4s ease-in-out infinite;
+  }
+  #scene1 .logo-container img {
+    width:280px; height:auto;
+    filter: drop-shadow(0 0 40px rgba(212,175,55,0.2));
+  }
+  #scene1 .tagline {
+    font-family:'Playfair Display',serif;
+    font-size:28px;
+    color:var(--gold);
+    margin-top:40px;
+    min-height:40px;
+    text-align:center;
+  }
+
+  /* ============================================================
+     SCENE 2 — THE PROBLEM
+     ============================================================ */
+  #scene2 { padding:80px 200px; justify-content:center; }
+  #scene2 .problem-text {
+    max-width:900px;
+    text-align:center;
+  }
+  #scene2 .problem-text p {
+    font-size:26px;
+    line-height:1.7;
+    margin-bottom:28px;
+    color:#a3a3a3;
+    font-weight:300;
+  }
+  #scene2 .problem-text .gold-quote {
+    font-family:'Playfair Display',serif;
+    font-size:34px;
+    color:var(--gold);
+    margin-top:40px;
+    font-style:italic;
+    line-height:1.4;
+  }
+
+  /* ============================================================
+     SCENE 3 — THE SOLUTION (Three Pillars)
+     ============================================================ */
+  #scene3 { gap:60px; }
+  #scene3 .pillars {
+    display:flex; gap:48px;
+    justify-content:center;
+  }
+  #scene3 .pillar {
+    width:320px;
+    text-align:center;
+    padding:48px 32px;
+  }
+  #scene3 .pillar .icon {
+    font-size:56px;
+    margin-bottom:20px;
+    display:block;
+  }
+  #scene3 .pillar h3 {
+    font-family:'Playfair Display',serif;
+    font-size:28px;
+    font-weight:700;
+    margin-bottom:12px;
+    color:#fff;
+  }
+  #scene3 .pillar p {
+    font-size:17px;
+    color:var(--text-mid);
+    line-height:1.6;
+  }
+  #scene3 .solution-tagline {
+    font-family:'Playfair Display',serif;
+    font-size:26px;
+    color:var(--gold);
+    text-align:center;
+    max-width:700px;
+  }
+
+  /* ============================================================
+     SCENE 4 — THE MANIFESTO
+     ============================================================ */
+  #scene4 { padding:60px 160px; gap:40px; }
+  #scene4 .manifesto-title {
+    font-size:16px;
+    letter-spacing:6px;
+    text-transform:uppercase;
+    color:var(--text-dim);
+  }
+  #scene4 .manifesto-list {
+    display:flex; flex-direction:column; gap:28px;
+    max-width:800px; width:100%;
+  }
+  #scene4 .manifesto-item {
+    display:flex; align-items:flex-start; gap:24px;
+    padding:24px 0;
+    border-bottom:1px solid rgba(255,255,255,0.05);
+  }
+  #scene4 .manifesto-item .num {
+    font-family:'Playfair Display',serif;
+    font-size:32px;
+    color:var(--gold);
+    font-weight:700;
+    min-width:60px;
+  }
+  #scene4 .manifesto-item h4 {
+    font-family:'Playfair Display',serif;
+    font-size:22px;
+    color:#fff;
+    margin-bottom:6px;
+    font-weight:600;
+  }
+  #scene4 .manifesto-item p {
+    font-size:16px;
+    color:var(--text-mid);
+    line-height:1.5;
+  }
+
+  /* ============================================================
+     SCENE 5 — THE FORGE
+     ============================================================ */
+  #scene5 { padding:80px 160px; gap:50px; }
+  #scene5 .section-label {
+    font-size:14px;
+    letter-spacing:6px;
+    text-transform:uppercase;
+    color:var(--gold);
+  }
+  #scene5 .section-title {
+    font-size:44px;
+    color:#fff;
+  }
+  #scene5 .steps {
+    display:flex; gap:40px; margin-top:10px;
+  }
+  #scene5 .step {
+    flex:1;
+    text-align:center;
+    padding:40px 28px;
+  }
+  #scene5 .step .step-num {
+    font-family:'Playfair Display',serif;
+    font-size:48px;
+    color:var(--gold);
+    font-weight:800;
+    margin-bottom:12px;
+  }
+  #scene5 .step h4 {
+    font-size:22px;
+    font-weight:600;
+    color:#fff;
+    margin-bottom:10px;
+    text-transform:uppercase;
+    letter-spacing:2px;
+  }
+  #scene5 .step p {
+    font-size:15px;
+    color:var(--text-mid);
+    line-height:1.5;
+  }
+  #scene5 .use-cases {
+    display:flex; flex-direction:column; gap:16px;
+    max-width:800px;
+    margin-top:10px;
+  }
+  #scene5 .use-case {
+    font-size:18px;
+    color:var(--text-mid);
+    font-style:italic;
+    padding-left:24px;
+    border-left:2px solid var(--gold);
+    line-height:1.5;
+  }
+
+  /* ============================================================
+     SCENE 6 — THE WORKSPACE
+     ============================================================ */
+  #scene6 { padding:60px 120px; gap:40px; }
+  #scene6 .feature-grid {
+    display:grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap:24px;
+    max-width:1100px;
+    width:100%;
+  }
+  #scene6 .feature-card {
+    padding:32px;
+    text-align:left;
+  }
+  #scene6 .feature-card .feature-icon {
+    font-size:32px;
+    margin-bottom:16px;
+    display:block;
+  }
+  #scene6 .feature-card h4 {
+    font-family:'Playfair Display',serif;
+    font-size:20px;
+    color:#fff;
+    margin-bottom:8px;
+    font-weight:600;
+  }
+  #scene6 .feature-card p {
+    font-size:14px;
+    color:var(--text-mid);
+    line-height:1.5;
+  }
+
+  /* ============================================================
+     SCENE 7 — LEO'S LEARNING LAB
+     ============================================================ */
+  #scene7 { padding:60px 160px; gap:40px; }
+  #scene7 .leo-features {
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:24px;
+    max-width:900px;
+    width:100%;
+  }
+  #scene7 .leo-feature {
+    padding:28px;
+  }
+  #scene7 .leo-feature h4 {
+    font-family:'Playfair Display',serif;
+    font-size:20px;
+    color:#fff;
+    margin-bottom:8px;
+    font-weight:600;
+  }
+  #scene7 .leo-feature p {
+    font-size:14px;
+    color:var(--text-mid);
+    line-height:1.5;
+  }
+  #scene7 .subject-pills {
+    display:flex; gap:16px; margin-top:10px;
+  }
+  #scene7 .pill {
+    padding:10px 28px;
+    border-radius:999px;
+    background:rgba(251,191,36,0.1);
+    border:1px solid rgba(251,191,36,0.3);
+    color:#fbbf24;
+    font-size:15px;
+    font-weight:500;
+  }
+
+  /* ============================================================
+     SCENE 8 — TECHNOLOGY
+     ============================================================ */
+  #scene8 { padding:60px 160px; gap:36px; }
+  #scene8 .tech-grid {
+    display:flex; flex-wrap:wrap; gap:20px;
+    justify-content:center;
+    max-width:900px;
+  }
+  #scene8 .tech-badge {
+    padding:16px 32px;
+    border-radius:12px;
+    background:var(--card);
+    border:1px solid var(--card-border);
+    font-size:16px;
+    font-weight:500;
+    color:#fff;
+  }
+  #scene8 .tech-badge .tech-sub {
+    font-size:12px;
+    color:var(--text-dim);
+    display:block;
+    margin-top:4px;
+  }
+  #scene8 .arch-diagram {
+    max-width:800px;
+    width:100%;
+    border-radius:16px;
+    border:1px solid var(--card-border);
+    margin-top:10px;
+  }
+
+  /* ============================================================
+     SCENE 10 — CLOSING
+     ============================================================ */
+  #scene10 .logo-container img {
+    width:240px; height:auto;
+    filter: drop-shadow(0 0 60px rgba(212,175,55,0.3));
+    animation: float 4s ease-in-out infinite;
+  }
+  #scene10 .closing-text {
+    font-family:'Playfair Display',serif;
+    font-size:36px;
+    color:var(--gold);
+    margin-top:40px;
+    min-height:50px;
+  }
+  #scene10 .url {
+    font-size:22px;
+    color:var(--text-dim);
+    margin-top:24px;
+    letter-spacing:4px;
+  }
+
+  /* ============================================================
+     PROGRESS BAR
+     ============================================================ */
+  #progress-bar {
+    position:fixed; top:0; left:0;
+    height:3px; background:var(--gold);
+    z-index:999;
+    transition: width 0.3s linear;
+    box-shadow: 0 0 10px var(--gold-glow);
+  }
+
+  /* ============================================================
+     SECTION LABEL (reused)
+     ============================================================ */
+  .section-label {
+    font-size:14px;
+    letter-spacing:6px;
+    text-transform:uppercase;
+    color:var(--gold);
+  }
+  .section-title {
+    font-family:'Playfair Display',serif;
+    font-size:44px;
+    color:#fff;
+    font-weight:700;
+  }
+</style>
+</head>
+<body>
+
+<!-- Progress bar -->
+<div id="progress-bar" style="width:0%"></div>
+
+<!-- Particle canvas (subtle background) -->
+<canvas id="particles"></canvas>
+
+<!-- ============================================================
+     SCENE 1 — OPENING
+     ============================================================ -->
+<div id="scene1" class="scene active">
+  <div class="logo-container">
+    <img src="/lxxi-logo.png" alt="LXXI" id="main-logo">
+  </div>
+  <div class="tagline" id="tagline1"></div>
+</div>
+
+<!-- ============================================================
+     SCENE 2 — THE PROBLEM
+     ============================================================ -->
+<div id="scene2" class="scene">
+  <div class="problem-text">
+    <p class="reveal" data-delay="0">Every AI tool resets to zero.</p>
+    <p class="reveal" data-delay="600">You explain your project, get a smart answer, close the tab, and start over the next day from nothing.</p>
+    <p class="reveal" data-delay="1200">The AI has no memory of you, no awareness of what you built together, no presence in your actual world.</p>
+    <div class="gold-line reveal" data-delay="2000"></div>
+    <p class="gold-quote reveal" data-delay="2400">"I didn't want a faster search engine. I wanted a partner."</p>
+  </div>
+</div>
+
+<!-- ============================================================
+     SCENE 3 — THE SOLUTION
+     ============================================================ -->
+<div id="scene3" class="scene">
+  <div class="pillars">
+    <div class="pillar glass-card reveal" data-delay="0">
+      <span class="icon">&#x1f5e3;&#xfe0f;</span>
+      <h3>Voice</h3>
+      <p>Real-time voice carries emotion that text alone cannot</p>
+    </div>
+    <div class="pillar glass-card reveal" data-delay="400">
+      <span class="icon">&#x1f9e0;</span>
+      <h3>Memory</h3>
+      <p>Agents remember you across every session</p>
+    </div>
+    <div class="pillar glass-card reveal" data-delay="800">
+      <span class="icon">&#x1f310;</span>
+      <h3>Presence</h3>
+      <p>3D avatars that see you and build with you</p>
+    </div>
+  </div>
+  <div class="gold-line reveal" data-delay="1400"></div>
+  <p class="solution-tagline reveal" data-delay="1800">Your Memory. Your Partner. Presence in Every Dimension.</p>
+</div>
+
+<!-- ============================================================
+     SCENE 4 — THE MANIFESTO
+     ============================================================ -->
+<div id="scene4" class="scene">
+  <p class="manifesto-title reveal" data-delay="0">Built with Voice, Vision, and Conviction</p>
+  <div class="gold-line reveal" data-delay="200"></div>
+  <div class="manifesto-list">
+    <div class="manifesto-item reveal" data-delay="400">
+      <span class="num">I.</span>
+      <div>
+        <h4>Characters With Souls</h4>
+        <p>Every agent has an archetype, a history, and a voice that belongs to them alone.</p>
+      </div>
+    </div>
+    <div class="manifesto-item reveal" data-delay="1000">
+      <span class="num">II.</span>
+      <div>
+        <h4>Voice Carries Emotion</h4>
+        <p>Tone, rhythm, and feeling carry meaning that text alone cannot.</p>
+      </div>
+    </div>
+    <div class="manifesto-item reveal" data-delay="1600">
+      <span class="num">III.</span>
+      <div>
+        <h4>The Screen Delivers</h4>
+        <p>3D avatars that breathe. Generated images that manifest from conversation.</p>
+      </div>
+    </div>
+    <div class="manifesto-item reveal" data-delay="2200">
+      <span class="num">IV.</span>
+      <div>
+        <h4>Memory Makes Identity</h4>
+        <p>An agent without memory is a stranger every time you meet.</p>
+      </div>
+    </div>
+    <div class="manifesto-item reveal" data-delay="2800">
+      <span class="num">V.</span>
+      <div>
+        <h4>The Forge Never Closes</h4>
+        <p>Every session adds another layer. Creation is not a one-time event.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================
+     SCENE 5 — THE FORGE
+     ============================================================ -->
+<div id="scene5" class="scene">
+  <p class="section-label reveal" data-delay="0">Prime Mode</p>
+  <h2 class="section-title heading-serif reveal" data-delay="200">THE FORGE</h2>
+  <p class="text-mid reveal" data-delay="400" style="font-size:20px;margin-bottom:10px;">Build a Partner with a Soul</p>
+  <div class="steps">
+    <div class="step glass-card reveal" data-delay="800">
+      <div class="step-num">1</div>
+      <h4>Describe</h4>
+      <p>Speak to The Architect. Define who your partner is, what they know, and how they think.</p>
+    </div>
+    <div class="step glass-card reveal" data-delay="1200">
+      <div class="step-num">2</div>
+      <h4>Upload</h4>
+      <p>Give them a face. Drop an image to generate a 3D avatar with presence and personality.</p>
+    </div>
+    <div class="step glass-card reveal" data-delay="1600">
+      <div class="step-num">3</div>
+      <h4>Create</h4>
+      <p>Enter the workspace. Your partner sees your world and builds alongside you from day one.</p>
+    </div>
+  </div>
+  <div class="use-cases">
+    <div class="use-case reveal" data-delay="2200">A trial lawyer loads a judge's complete ruling history and argues their upcoming case out loud.</div>
+    <div class="use-case reveal" data-delay="2800">A clothing designer holds fabric samples to the camera and watches generated designs appear instantly.</div>
+    <div class="use-case reveal" data-delay="3400">A founder thinks out loud and builds with someone who is fully present and never starts from zero.</div>
+  </div>
+</div>
+
+<!-- ============================================================
+     SCENE 6 — THE WORKSPACE
+     ============================================================ -->
+<div id="scene6" class="scene">
+  <p class="section-label reveal" data-delay="0">Spatial Environment</p>
+  <h2 class="section-title heading-serif reveal" data-delay="200">THE WORKSPACE</h2>
+  <p class="text-mid reveal" data-delay="400" style="font-size:20px;margin-bottom:10px;">Where Presence Lives</p>
+  <div class="feature-grid">
+    <div class="feature-card glass-card reveal" data-delay="600">
+      <span class="feature-icon">&#x1f399;&#xfe0f;</span>
+      <h4>Real-Time Voice</h4>
+      <p>Sub-second streaming with Gemini 2.5 Flash native audio. True conversation, not turn-taking.</p>
+    </div>
+    <div class="feature-card glass-card reveal" data-delay="800">
+      <span class="feature-icon">&#x1f9d1;&#x200d;&#x1f3a4;</span>
+      <h4>3D Avatar Lip Sync</h4>
+      <p>Bone-driven mouth animation from audio frequency analysis. 15+ procedural gesture poses.</p>
+    </div>
+    <div class="feature-card glass-card reveal" data-delay="1000">
+      <span class="feature-icon">&#x1f5bc;&#xfe0f;</span>
+      <h4>Image Generation</h4>
+      <p>Imagen 4 creates artifacts that float as draggable glass cards in the spatial workspace.</p>
+    </div>
+    <div class="feature-card glass-card reveal" data-delay="1200">
+      <span class="feature-icon">&#x1f4c4;</span>
+      <h4>Document Creation</h4>
+      <p>Code, markdown, and text materialize from dialogue. Reference and iterate on past work.</p>
+    </div>
+    <div class="feature-card glass-card reveal" data-delay="1400">
+      <span class="feature-icon">&#x1f4da;</span>
+      <h4>Memory &amp; RAG</h4>
+      <p>Ingest PDFs and documents. Agent recalls context across sessions. Never start from zero.</p>
+    </div>
+    <div class="feature-card glass-card reveal" data-delay="1600">
+      <span class="feature-icon">&#x2728;</span>
+      <h4>SOULS Library</h4>
+      <p>Browse and awaken your created characters. Each with their own lore, voice, and 3D avatar.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================
+     SCENE 7 — LEO'S LEARNING LAB
+     ============================================================ -->
+<div id="scene7" class="scene">
+  <p class="section-label reveal" data-delay="0" style="color:#fbbf24;">Spark Mode</p>
+  <h2 class="section-title heading-serif reveal" data-delay="200">LEO'S LEARNING LAB</h2>
+  <p class="text-mid reveal" data-delay="400" style="font-size:20px;margin-bottom:10px;">A Tutor Who Knows You</p>
+  <div class="leo-features">
+    <div class="leo-feature glass-card reveal" data-delay="600">
+      <h4>&#x1f5e3;&#xfe0f; Voice-First Learning</h4>
+      <p>Talk through problems the way you would with a real tutor who knows your learning history.</p>
+    </div>
+    <div class="leo-feature glass-card reveal" data-delay="800">
+      <h4>&#x1f4d6; Visual Chalkboard</h4>
+      <p>Math problems, hints, and explanations appear live on screen as Leo speaks.</p>
+    </div>
+    <div class="leo-feature glass-card reveal" data-delay="1000">
+      <h4>&#x1f4c8; Adaptive Difficulty</h4>
+      <p>Automatically scales to the student's pace. Streak tracking and mastery detection.</p>
+    </div>
+    <div class="leo-feature glass-card reveal" data-delay="1200">
+      <h4>&#x1f91d; Persistent Profile</h4>
+      <p>Remembers progress, friendship level, and learning style across sessions.</p>
+    </div>
+  </div>
+  <div class="subject-pills reveal" data-delay="1600">
+    <span class="pill">Math</span>
+    <span class="pill">Spanish</span>
+    <span class="pill">Science</span>
+    <span class="pill">General Knowledge</span>
+  </div>
+</div>
+
+<!-- ============================================================
+     SCENE 8 — TECHNOLOGY
+     ============================================================ -->
+<div id="scene8" class="scene">
+  <p class="section-label reveal" data-delay="0">Powered By</p>
+  <h2 class="section-title heading-serif reveal" data-delay="200">THE TECHNOLOGY</h2>
+  <div class="tech-grid reveal" data-delay="400">
+    <div class="tech-badge">Gemini 2.5 Flash<span class="tech-sub">Native Audio Streaming</span></div>
+    <div class="tech-badge">Imagen 4<span class="tech-sub">Image Generation</span></div>
+    <div class="tech-badge">React Three Fiber<span class="tech-sub">3D Avatar Rendering</span></div>
+    <div class="tech-badge">Firebase<span class="tech-sub">Auth + Firestore + Cloud Functions</span></div>
+    <div class="tech-badge">Pinecone<span class="tech-sub">Vector Memory (RAG)</span></div>
+    <div class="tech-badge">Tripo3D<span class="tech-sub">Image-to-3D Pipeline</span></div>
+  </div>
+  <img src="/architecture_diagram.png" alt="Architecture" class="arch-diagram reveal" data-delay="800">
+</div>
+
+<!-- ============================================================
+     SCENE 10 — CLOSING
+     ============================================================ -->
+<div id="scene10" class="scene">
+  <div class="logo-container">
+    <img src="/lxxi-logo.png" alt="LXXI">
+  </div>
+  <div class="closing-text" id="closing-typewriter"></div>
+  <div class="url reveal" data-delay="2000">lxxi.com</div>
+</div>
+
+<!-- ============================================================
+     JAVASCRIPT — Timeline Controller
+     ============================================================ -->
+<script>
+  // Scene timing configuration (in milliseconds)
+  const TIMELINE = [
+    { id:'scene1',  duration: 8000  },  // Opening: 0-8s
+    { id:'scene2',  duration: 14000 },  // Problem: 8-22s
+    { id:'scene3',  duration: 16000 },  // Solution: 22-38s
+    { id:'scene4',  duration: 22000 },  // Manifesto: 38-60s  (5 items needs more time)
+    { id:'scene5',  duration: 25000 },  // Forge: 60-85s
+    { id:'scene6',  duration: 20000 },  // Workspace: 85-105s
+    { id:'scene7',  duration: 18000 },  // Learning Lab: 105-123s
+    { id:'scene8',  duration: 18000 },  // Technology: 123-141s
+    { id:'scene10', duration: 15000 },  // Closing: 141-156s  (~2:36 total)
+  ];
+
+  const TOTAL_DURATION = TIMELINE.reduce((sum, s) => sum + s.duration, 0);
+  let currentScene = 0;
+  let elapsedTotal = 0;
+
+  // ---- Typewriter effect ----
+  function typeWriter(elementId, text, speed = 50, callback) {
+    const el = document.getElementById(elementId);
+    if (!el) return;
+    let i = 0;
+    el.classList.add('typewriter-cursor');
+    function type() {
+      if (i < text.length) {
+        el.textContent += text.charAt(i);
+        i++;
+        setTimeout(type, speed);
+      } else {
+        el.classList.remove('typewriter-cursor');
+        if (callback) callback();
+      }
+    }
+    type();
+  }
+
+  // ---- Reveal elements within active scene ----
+  function revealElements(sceneId) {
+    const scene = document.getElementById(sceneId);
+    if (!scene) return;
+    const reveals = scene.querySelectorAll('.reveal');
+    reveals.forEach(el => {
+      const delay = parseInt(el.dataset.delay || '0', 10);
+      setTimeout(() => el.classList.add('show'), delay);
+    });
+  }
+
+  // ---- Transition to a scene ----
+  function goToScene(index) {
+    // Hide all
+    document.querySelectorAll('.scene').forEach(s => {
+      s.classList.remove('active');
+      s.classList.add('fade-out');
+    });
+    // Reset reveals for new scene
+    const nextScene = document.getElementById(TIMELINE[index].id);
+    if (!nextScene) return;
+    nextScene.querySelectorAll('.reveal').forEach(el => el.classList.remove('show'));
+
+    // Small delay for crossfade
+    setTimeout(() => {
+      nextScene.classList.remove('fade-out');
+      nextScene.classList.add('active');
+      revealElements(TIMELINE[index].id);
+
+      // Scene-specific actions
+      if (TIMELINE[index].id === 'scene1') {
+        setTimeout(() => typeWriter('tagline1', 'Voice is for Vibe. Screen is for Substance.', 55), 2000);
+      }
+      if (TIMELINE[index].id === 'scene10') {
+        setTimeout(() => typeWriter('closing-typewriter', 'The Forge Never Closes.', 70), 1500);
+      }
+    }, 400);
+
+    currentScene = index;
+  }
+
+  // ---- Progress bar ----
+  function updateProgress() {
+    const pct = Math.min((elapsedTotal / TOTAL_DURATION) * 100, 100);
+    document.getElementById('progress-bar').style.width = pct + '%';
+  }
+
+  // ---- Particle background ----
+  function initParticles() {
+    const canvas = document.getElementById('particles');
+    const ctx = canvas.getContext('2d');
+    canvas.width = 1920;
+    canvas.height = 1080;
+
+    const particles = [];
+    for (let i = 0; i < 60; i++) {
+      particles.push({
+        x: Math.random() * 1920,
+        y: Math.random() * 1080,
+        r: Math.random() * 1.5 + 0.3,
+        dx: (Math.random() - 0.5) * 0.3,
+        dy: (Math.random() - 0.5) * 0.3,
+        alpha: Math.random() * 0.3 + 0.05
+      });
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, 1920, 1080);
+      particles.forEach(p => {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(212, 175, 55, ${p.alpha})`;
+        ctx.fill();
+        p.x += p.dx;
+        p.y += p.dy;
+        if (p.x < 0) p.x = 1920;
+        if (p.x > 1920) p.x = 0;
+        if (p.y < 0) p.y = 1080;
+        if (p.y > 1080) p.y = 0;
+      });
+      requestAnimationFrame(draw);
+    }
+    draw();
+  }
+
+  // ---- Start the timeline ----
+  function startTimeline() {
+    initParticles();
+    goToScene(0);
+
+    let sceneIndex = 0;
+    let sceneElapsed = 0;
+
+    const interval = setInterval(() => {
+      sceneElapsed += 100;
+      elapsedTotal += 100;
+      updateProgress();
+
+      if (sceneElapsed >= TIMELINE[sceneIndex].duration) {
+        sceneIndex++;
+        sceneElapsed = 0;
+        if (sceneIndex < TIMELINE.length) {
+          goToScene(sceneIndex);
+        } else {
+          clearInterval(interval);
+        }
+      }
+    }, 100);
+  }
+
+  // Auto-start after a brief pause
+  window.addEventListener('load', () => {
+    setTimeout(startTimeline, 500);
+  });
+</script>
+
+</body>
+</html>
