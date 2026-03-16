@@ -48,9 +48,11 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const { prompt, quality, size, referenceImageUrls } = await req.json();
+    const body = await req.json();
+    const { prompt, quality, size, referenceImageUrls } = body;
 
     if (!prompt) {
+      console.error("[IMAGE GEN] 400: Missing prompt. Received body keys:", Object.keys(body), "prompt value:", JSON.stringify(prompt));
       return NextResponse.json({ error: "Missing prompt" }, { status: 400 });
     }
 
