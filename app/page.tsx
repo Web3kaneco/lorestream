@@ -384,7 +384,13 @@ export default function LandingPage() {
                   </button>
                 </div>
                 <button
-                  onClick={() => router.push('/workspace')}
+                  onClick={() => {
+                    if (!auth.currentUser) {
+                      alert("Please log in to try the workspace demo.");
+                      return;
+                    }
+                    router.push('/workspace');
+                  }}
                   className="w-full mt-2.5 py-2.5 text-sm font-semibold rounded-lg transition-all border border-white/15 bg-white/[0.06] text-white/70 hover:bg-white/[0.12] hover:border-white/30 hover:text-white"
                 >
                   Try Workspace Demo →
@@ -423,7 +429,13 @@ export default function LandingPage() {
 
                 <div className="mt-auto pt-4">
                   <button
-                    onClick={() => router.push('/spark')}
+                    onClick={() => {
+                      if (!auth.currentUser) {
+                        alert("Please log in to start learning with Leo.");
+                        return;
+                      }
+                      router.push('/spark');
+                    }}
                     className="w-full py-3.5 font-bold text-sm rounded-lg transition-all text-black"
                     style={{ backgroundColor: '#d4af37', boxShadow: '0 0 25px rgba(212,175,55,0.25)' }}
                   >

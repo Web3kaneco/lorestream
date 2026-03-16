@@ -128,7 +128,7 @@ export function useToolHandlers({
       return {
         id: responseId,
         name: "create_vault_artifact",
-        response: { result: "Success", action: "Image generation started — it takes about 10 seconds to render and appear. IMPORTANT: Do NOT describe the image details yet since it has not appeared. Briefly acknowledge the creation request, then pause. Once the image appears in the vault, you can discuss it with the user." }
+        response: { result: "Success", action: "Image generation started — it takes 15-30 seconds to render and appear. IMPORTANT: Do NOT describe the image details yet since it has not appeared. Acknowledge the creation briefly, then KEEP THE CONVERSATION GOING naturally while it renders. Ask what else they are thinking about, what direction they want to take things, chat casually about their day or what they see around them, or riff on the creative vision behind the request. Stay warm and present — fill the wait with genuine conversation so there is no awkward silence. When the image appears in the vault the user will see it." }
       };
     }
 
