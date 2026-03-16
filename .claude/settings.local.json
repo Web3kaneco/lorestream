@@ -17,7 +17,8 @@
       "Bash(npx skills add remotion-dev/skills --yes)",
       "Bash(npm install)",
       "Bash(mkdir -p out)",
-      "Bash(npx remotion render LXXIPromo out/lxxi-promo.mp4)"
+      "Bash(npx remotion render LXXIPromo out/lxxi-promo.mp4)",
+      "Bash(npx tsc --noEmit --project tsconfig.json)"
     ]
   }
 }
