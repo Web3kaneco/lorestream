@@ -62,6 +62,16 @@ export function useToolHandlers({
       const { prompt, rationale, referenceImageUrls } = functionCall.args;
       console.log(`[AGENT TOOL TRIGGERED] Creating: ${prompt}${referenceImageUrls?.length ? ` (with ${referenceImageUrls.length} references)` : ''}`);
 
+      // Guard: Gemini occasionally sends empty/missing prompt — skip the API call
+      if (!prompt || (typeof prompt === 'string' && !prompt.trim())) {
+        console.warn(`[AGENT TOOL] create_vault_artifact called with empty prompt. Args:`, JSON.stringify(functionCall.args));
+        return {
+          id: responseId,
+          name: "create_vault_artifact",
+          response: { result: "Error", action: "The image prompt was empty. Please describe what you want to create and try again." }
+        };
+      }
+
       setIsGeneratingVaultItem(true);
       appendTranscript('SYSTEM', `Generating image: "${prompt}"${referenceImageUrls?.length ? ` (using ${referenceImageUrls.length} reference images)` : ''}`);
 
@@ -181,6 +191,17 @@ export function useToolHandlers({
     else if (functionCall.name === "create_learning_visual") {
       const { prompt, subject, concept } = functionCall.args;
       console.log(`[TUTOR TOOL] Learning visual: "${concept}" (${subject})`);
+
+      // Guard: skip image generation if prompt is empty
+      if (!prompt || (typeof prompt === 'string' && !prompt.trim())) {
+        console.warn(`[TUTOR TOOL] create_learning_visual called with empty prompt. Args:`, JSON.stringify(functionCall.args));
+        return {
+          id: responseId,
+          name: "create_learning_visual",
+          response: { result: "Error", action: "The visual prompt was empty. Describe the visual you want to show and try again." }
+        };
+      }
+
       appendTranscript('SYSTEM', `Creating visual aid: "${concept}"`);
 
       if (subject === 'math') {
